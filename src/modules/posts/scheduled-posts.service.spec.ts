@@ -1,23 +1,33 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { ScheduledPostsService } from './scheduled-posts.service';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from "@nestjs/common";
+import { ScheduledPostsService } from "./scheduled-posts.service";
 
-function makeScheduledUser(overrides: Partial<{ premium: boolean; premiumPlus: boolean; verifiedStatus: string }> = {}) {
+function makeScheduledUser(
+  overrides: Partial<{
+    premium: boolean;
+    premiumPlus: boolean;
+    verifiedStatus: string;
+  }> = {},
+) {
   return {
     premium: true,
     premiumPlus: false,
-    verifiedStatus: 'verified',
+    verifiedStatus: "verified",
     ...overrides,
   };
 }
 
 function makeHoldingRow(overrides: Partial<Record<string, any>> = {}) {
   return {
-    id: 'sched-1',
+    id: "sched-1",
     createdAt: new Date(),
-    body: 'Hello',
+    body: "Hello",
     isDraft: true,
     scheduledAt: new Date(Date.now() + 10 * 60 * 1000),
-    scheduledVisibility: 'public',
+    scheduledVisibility: "public",
     scheduledCommunityGroupId: null,
     scheduledPollJson: null,
     scheduledRevision: 0,
@@ -25,15 +35,15 @@ function makeHoldingRow(overrides: Partial<Record<string, any>> = {}) {
     scheduledError: null,
     scheduledFailedAt: null,
     deletedAt: null,
-    userId: 'user-1',
+    userId: "user-1",
     user: {
-      id: 'user-1',
-      username: 'peter',
-      name: 'Peter',
+      id: "user-1",
+      username: "peter",
+      name: "Peter",
       premium: true,
       premiumPlus: false,
       isOrganization: false,
-      verifiedStatus: 'verified',
+      verifiedStatus: "verified",
       avatarKey: null,
       avatarUpdatedAt: null,
       bannedAt: null,
@@ -44,7 +54,10 @@ function makeHoldingRow(overrides: Partial<Record<string, any>> = {}) {
   };
 }
 
-function makeService(prismaOverrides: Record<string, any> = {}, mutationOverride?: any) {
+function makeService(
+  prismaOverrides: Record<string, any> = {},
+  mutationOverride?: any,
+) {
   const prisma: any = {
     user: {
       findUnique: jest.fn(async () => makeScheduledUser()),
@@ -58,14 +71,14 @@ function makeService(prismaOverrides: Record<string, any> = {}, mutationOverride
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
     communityGroupMember: {
-      findUnique: jest.fn(async () => ({ status: 'active' })),
+      findUnique: jest.fn(async () => ({ status: "active" })),
     },
     postMedia: {
       deleteMany: jest.fn(async () => ({ count: 0 })),
       createMany: jest.fn(async () => ({ count: 0 })),
     },
     $transaction: jest.fn(async (fn: any) => {
-      if (typeof fn === 'function') {
+      if (typeof fn === "function") {
         const tx: any = {
           post: {
             update: jest.fn(async () => makeHoldingRow()),
@@ -87,8 +100,8 @@ function makeService(prismaOverrides: Record<string, any> = {}, mutationOverride
     createPost: jest.fn(async () => ({
       post: {
         ...makeHoldingRow(),
-        id: 'live-post-1',
-        visibility: 'public',
+        id: "live-post-1",
+        visibility: "public",
         isDraft: false,
         scheduledAt: null,
       },
@@ -100,8 +113,16 @@ function makeService(prismaOverrides: Record<string, any> = {}, mutationOverride
     emitScheduledPostFailed: jest.fn(),
   };
 
-  const appConfig: any = { r2: () => ({ publicBaseUrl: 'https://assets.example.com' }) };
-  const service = new ScheduledPostsService(prisma, mutation, realtime, appConfig);
+  const appConfig: any = {
+    integrationBudget: () => ({ enabled: false }),
+    r2: () => ({ publicBaseUrl: "https://assets.example.com" }),
+  };
+  const service = new ScheduledPostsService(
+    prisma,
+    mutation,
+    realtime,
+    appConfig,
+  );
   return { service, prisma, mutation, realtime };
 }
 
@@ -111,67 +132,145 @@ const VALID_FUTURE = new Date(Date.now() + 10 * 60 * 1000); // +10 min
 const NEAR_FUTURE = new Date(Date.now() + 60 * 1000); // +1 min
 const TOO_FAR = new Date(Date.now() + 61 * 24 * 60 * 60 * 1000); // +61 days
 
-describe('ScheduledPostsService', () => {
-  describe('createScheduled', () => {
-    it('stores the verified publishing audience while keeping the group holding row private', async () => {
+describe("ScheduledPostsService", () => {
+  describe("createScheduled", () => {
+    it("stores the verified publishing audience while keeping the group holding row private", async () => {
       const { service, prisma } = makeService();
-      await service.createScheduled({ userId: 'u1', body: 'Group post', visibility: 'public', communityGroupId: 'g1', scheduledAt: VALID_FUTURE, media: null, poll: null });
-      expect(prisma.post.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ visibility: 'onlyMe', isDraft: true, scheduledVisibility: 'verifiedOnly', scheduledCommunityGroupId: 'g1' }) }));
+      await service.createScheduled({
+        userId: "u1",
+        body: "Group post",
+        visibility: "public",
+        communityGroupId: "g1",
+        scheduledAt: VALID_FUTURE,
+        media: null,
+        poll: null,
+      });
+      expect(prisma.post.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            visibility: "onlyMe",
+            isDraft: true,
+            scheduledVisibility: "verifiedOnly",
+            scheduledCommunityGroupId: "g1",
+          }),
+        }),
+      );
     });
 
-    it.each(['pending', 'removed'])('rejects scheduling with a %s membership', async (status) => {
-      const { service } = makeService({ communityGroupMember: { findUnique: jest.fn(async () => ({ status })) } });
-      await expect(service.createScheduled({ userId: 'u1', body: 'Hello', visibility: 'public', communityGroupId: 'g1', scheduledAt: VALID_FUTURE, media: null, poll: null })).rejects.toThrow('You must be a member');
-    });
+    it.each(["pending", "removed"])(
+      "rejects scheduling with a %s membership",
+      async (status) => {
+        const { service } = makeService({
+          communityGroupMember: {
+            findUnique: jest.fn(async () => ({ status })),
+          },
+        });
+        await expect(
+          service.createScheduled({
+            userId: "u1",
+            body: "Hello",
+            visibility: "public",
+            communityGroupId: "g1",
+            scheduledAt: VALID_FUTURE,
+            media: null,
+            poll: null,
+          }),
+        ).rejects.toThrow("You must be a member");
+      },
+    );
 
-    it('throws if user is not premium', async () => {
+    it("throws if user is not premium", async () => {
       const { service } = makeService({
-        user: { findUnique: jest.fn(async () => makeScheduledUser({ premium: false, premiumPlus: false })) },
+        user: {
+          findUnique: jest.fn(async () =>
+            makeScheduledUser({ premium: false, premiumPlus: false }),
+          ),
+        },
       });
 
       await expect(
-        service.createScheduled({ userId: 'u', body: 'hello', visibility: 'public', scheduledAt: VALID_FUTURE, media: null, poll: null, communityGroupId: null }),
+        service.createScheduled({
+          userId: "u",
+          body: "hello",
+          visibility: "public",
+          scheduledAt: VALID_FUTURE,
+          media: null,
+          poll: null,
+          communityGroupId: null,
+        }),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('accepts scheduledAt less than 5 min in future (cron will publish on next sweep)', async () => {
+    it("accepts scheduledAt less than 5 min in future (cron will publish on next sweep)", async () => {
       const { service } = makeService();
       // Should not throw — the near-future window is allowed server-side.
       await expect(
-        service.createScheduled({ userId: 'u', body: 'hello', visibility: 'public', scheduledAt: NEAR_FUTURE, media: null, poll: null, communityGroupId: null }),
+        service.createScheduled({
+          userId: "u",
+          body: "hello",
+          visibility: "public",
+          scheduledAt: NEAR_FUTURE,
+          media: null,
+          poll: null,
+          communityGroupId: null,
+        }),
       ).resolves.toBeDefined();
     });
 
-    it('throws if scheduledAt is more than 60 days out', async () => {
+    it("throws if scheduledAt is more than 60 days out", async () => {
       const { service } = makeService();
       await expect(
-        service.createScheduled({ userId: 'u', body: 'hello', visibility: 'public', scheduledAt: TOO_FAR, media: null, poll: null, communityGroupId: null }),
+        service.createScheduled({
+          userId: "u",
+          body: "hello",
+          visibility: "public",
+          scheduledAt: TOO_FAR,
+          media: null,
+          poll: null,
+          communityGroupId: null,
+        }),
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('throws if visibility is onlyMe', async () => {
+    it("throws if visibility is onlyMe", async () => {
       const { service } = makeService();
       await expect(
-        service.createScheduled({ userId: 'u', body: 'hello', visibility: 'onlyMe', scheduledAt: VALID_FUTURE, media: null, poll: null, communityGroupId: null }),
+        service.createScheduled({
+          userId: "u",
+          body: "hello",
+          visibility: "onlyMe",
+          scheduledAt: VALID_FUTURE,
+          media: null,
+          poll: null,
+          communityGroupId: null,
+        }),
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('throws if user is not found', async () => {
+    it("throws if user is not found", async () => {
       const { service } = makeService({
         user: { findUnique: jest.fn(async () => null) },
       });
       await expect(
-        service.createScheduled({ userId: 'u', body: 'hello', visibility: 'public', scheduledAt: VALID_FUTURE, media: null, poll: null, communityGroupId: null }),
+        service.createScheduled({
+          userId: "u",
+          body: "hello",
+          visibility: "public",
+          scheduledAt: VALID_FUTURE,
+          media: null,
+          poll: null,
+          communityGroupId: null,
+        }),
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('persists a holding row with scheduledAt and scheduledVisibility', async () => {
+    it("persists a holding row with scheduledAt and scheduledVisibility", async () => {
       const { service, prisma } = makeService();
 
       const result = await service.createScheduled({
-        userId: 'user-1',
-        body: 'good morning everyone',
-        visibility: 'public',
+        userId: "user-1",
+        body: "good morning everyone",
+        visibility: "public",
         scheduledAt: VALID_FUTURE,
         media: null,
         poll: null,
@@ -182,25 +281,25 @@ describe('ScheduledPostsService', () => {
         expect.objectContaining({
           data: expect.objectContaining({
             isDraft: true,
-            visibility: 'onlyMe',
+            visibility: "onlyMe",
             scheduledAt: VALID_FUTURE,
-            scheduledVisibility: 'public',
+            scheduledVisibility: "public",
           }),
         }),
       );
       expect(result.scheduledAt).toBeDefined();
-      expect(result.scheduledVisibility).toBe('public');
+      expect(result.scheduledVisibility).toBe("public");
     });
   });
 
-  describe('listScheduled', () => {
-    it('only queries isDraft=true rows with scheduledAt set', async () => {
+  describe("listScheduled", () => {
+    it("only queries isDraft=true rows with scheduledAt set", async () => {
       const postMock = {
         findMany: jest.fn(async () => [makeHoldingRow()]),
       };
       const { service } = makeService({ post: postMock });
 
-      await service.listScheduled({ userId: 'user-1', cursor: null });
+      await service.listScheduled({ userId: "user-1", cursor: null });
 
       const call = (postMock.findMany as jest.Mock).mock.calls[0]?.[0];
       const andClauses = call?.where?.AND ?? [];
@@ -209,8 +308,8 @@ describe('ScheduledPostsService', () => {
     });
   });
 
-  describe('deleteScheduled', () => {
-    it('throws if the post is not a scheduled row', async () => {
+  describe("deleteScheduled", () => {
+    it("throws if the post is not a scheduled row", async () => {
       const { service } = makeService({
         post: {
           findUnique: jest.fn(async () => ({
@@ -221,38 +320,69 @@ describe('ScheduledPostsService', () => {
           update: jest.fn(async () => ({})),
         },
       });
-      await expect(service.deleteScheduled({ userId: 'user-1', scheduledPostId: 'sched-1' })).rejects.toThrow(ForbiddenException);
+      await expect(
+        service.deleteScheduled({
+          userId: "user-1",
+          scheduledPostId: "sched-1",
+        }),
+      ).rejects.toThrow(ForbiddenException);
     });
 
-    it('soft-deletes the holding row', async () => {
+    it("soft-deletes the holding row", async () => {
       const { service, prisma } = makeService();
-      const result = await service.deleteScheduled({ userId: 'user-1', scheduledPostId: 'sched-1' });
+      const result = await service.deleteScheduled({
+        userId: "user-1",
+        scheduledPostId: "sched-1",
+      });
       expect(result.success).toBe(true);
       expect(prisma.post.update).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'sched-1' }, data: expect.objectContaining({ deletedAt: expect.any(Date) }) }),
+        expect.objectContaining({
+          where: { id: "sched-1" },
+          data: expect.objectContaining({ deletedAt: expect.any(Date) }),
+        }),
       );
     });
   });
 
-  describe('publishDue', () => {
-    it('does not restore a publication already consumed by the transaction', async () => {
-      const duePost = makeHoldingRow({ id: 'sched-due', scheduledAt: new Date(Date.now() - 1000) });
-      const { service, mutation } = makeService({
-        post: {
-          findMany: jest.fn(async () => [duePost]),
-          updateMany: jest.fn(async () => ({ count: 0 })),
-          update: jest.fn(async () => ({})),
-          findUnique: jest.fn(async () => ({ deletedAt: new Date(), scheduledPublishedPostId: 'live-post' })),
+  describe("publishDue", () => {
+    it("does not restore a publication already consumed by the transaction", async () => {
+      const duePost = makeHoldingRow({
+        id: "sched-due",
+        scheduledAt: new Date(Date.now() - 1000),
+      });
+      const { service, mutation } = makeService(
+        {
+          post: {
+            findMany: jest.fn(async () => [duePost]),
+            updateMany: jest.fn(async () => ({ count: 0 })),
+            update: jest.fn(async () => ({})),
+            findUnique: jest.fn(async () => ({
+              deletedAt: new Date(),
+              scheduledPublishedPostId: "live-post",
+            })),
+          },
         },
-      }, { createPost: jest.fn(async () => { throw new Error('Already published'); }) });
+        {
+          createPost: jest.fn(async () => {
+            throw new Error("Already published");
+          }),
+        },
+      );
 
       await service.publishDue(new Date());
 
-      expect(mutation.createPost).toHaveBeenCalledWith(expect.objectContaining({ scheduledSource: { id: 'sched-due', revision: 0 } }));
+      expect(mutation.createPost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scheduledSource: { id: "sched-due", revision: 0 },
+        }),
+      );
     });
 
-    it('calls createPost with stored body, visibility, and media when claim succeeds', async () => {
-      const duePost = makeHoldingRow({ id: 'sched-due', scheduledAt: new Date(Date.now() - 1000) });
+    it("calls createPost with stored body, visibility, and media when claim succeeds", async () => {
+      const duePost = makeHoldingRow({
+        id: "sched-due",
+        scheduledAt: new Date(Date.now() - 1000),
+      });
       const { service, prisma, mutation, realtime } = makeService({
         post: {
           findMany: jest.fn(async () => [duePost]),
@@ -264,14 +394,20 @@ describe('ScheduledPostsService', () => {
       await service.publishDue(new Date());
 
       expect(mutation.createPost).toHaveBeenCalledWith(
-        expect.objectContaining({ body: duePost.body, visibility: 'public' }),
+        expect.objectContaining({ body: duePost.body, visibility: "public" }),
       );
       expect(prisma.post.update).not.toHaveBeenCalled(); // Draft consumption is inside createPost's transaction.
-      expect(realtime.emitScheduledPostPublished).toHaveBeenCalledWith('user-1', expect.objectContaining({ scheduledId: 'sched-due' }));
+      expect(realtime.emitScheduledPostPublished).toHaveBeenCalledWith(
+        "user-1",
+        expect.objectContaining({ scheduledId: "sched-due" }),
+      );
     });
 
-    it('records failure and emits failed event when createPost throws', async () => {
-      const duePost = makeHoldingRow({ id: 'sched-err', scheduledAt: new Date(Date.now() - 1000) });
+    it("records failure and emits failed event when createPost throws", async () => {
+      const duePost = makeHoldingRow({
+        id: "sched-err",
+        scheduledAt: new Date(Date.now() - 1000),
+      });
       const { service, prisma, realtime } = makeService(
         {
           post: {
@@ -280,22 +416,39 @@ describe('ScheduledPostsService', () => {
             update: jest.fn(async () => ({})),
           },
         },
-        { createPost: jest.fn(async () => { throw new Error('publish failed'); }) },
+        {
+          createPost: jest.fn(async () => {
+            throw new Error("publish failed");
+          }),
+        },
       );
 
       await service.publishDue(new Date());
 
       expect(prisma.post.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ id: 'sched-err', deletedAt: null, scheduledPublishedPostId: null }),
-          data: expect.objectContaining({ scheduledError: 'publish failed' }),
+          where: expect.objectContaining({
+            id: "sched-err",
+            deletedAt: null,
+            scheduledPublishedPostId: null,
+          }),
+          data: expect.objectContaining({ scheduledError: "publish failed" }),
         }),
       );
-      expect(realtime.emitScheduledPostFailed).toHaveBeenCalledWith('user-1', expect.objectContaining({ scheduledId: 'sched-err', error: 'publish failed' }));
+      expect(realtime.emitScheduledPostFailed).toHaveBeenCalledWith(
+        "user-1",
+        expect.objectContaining({
+          scheduledId: "sched-err",
+          error: "publish failed",
+        }),
+      );
     });
 
-    it('does not query rows whose scheduledAt is in the future', async () => {
-      const futurePost = makeHoldingRow({ id: 'future', scheduledAt: new Date(Date.now() + 60_000) });
+    it("does not query rows whose scheduledAt is in the future", async () => {
+      const futurePost = makeHoldingRow({
+        id: "future",
+        scheduledAt: new Date(Date.now() + 60_000),
+      });
       const { service, prisma } = makeService({
         post: {
           findMany: jest.fn(async () => []),
@@ -307,16 +460,29 @@ describe('ScheduledPostsService', () => {
 
       const call = (prisma.post.findMany as jest.Mock).mock.calls[0]?.[0];
       const andClauses = call?.where?.AND ?? [];
-      expect(andClauses).toContainEqual(expect.objectContaining({ scheduledAt: expect.objectContaining({ lte: expect.any(Date) }) }));
+      expect(andClauses).toContainEqual(
+        expect.objectContaining({
+          scheduledAt: expect.objectContaining({ lte: expect.any(Date) }),
+        }),
+      );
       // The future post should not have been published.
-      expect(futurePost.id).toBe('future'); // sanity
+      expect(futurePost.id).toBe("future"); // sanity
     });
 
-    it('sets scheduledError and emits failed (once) when author is no longer premium', async () => {
-      const duePost = makeHoldingRow({ id: 'sched-lapsed', scheduledAt: new Date(Date.now() - 1000), scheduledError: null });
+    it("sets scheduledError and emits failed (once) when author is no longer premium", async () => {
+      const duePost = makeHoldingRow({
+        id: "sched-lapsed",
+        scheduledAt: new Date(Date.now() - 1000),
+        scheduledError: null,
+      });
       const { service, prisma, mutation, realtime } = makeService({
         user: {
-          findUnique: jest.fn(async () => ({ premium: false, premiumPlus: false, verifiedStatus: 'verified', bannedAt: null })),
+          findUnique: jest.fn(async () => ({
+            premium: false,
+            premiumPlus: false,
+            verifiedStatus: "verified",
+            bannedAt: null,
+          })),
         },
         post: {
           findMany: jest.fn(async () => [duePost]),
@@ -330,22 +496,30 @@ describe('ScheduledPostsService', () => {
       expect(mutation.createPost).not.toHaveBeenCalled();
       expect(prisma.post.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'sched-lapsed' },
-          data: expect.objectContaining({ scheduledError: expect.stringContaining('premium') }),
+          where: { id: "sched-lapsed" },
+          data: expect.objectContaining({
+            scheduledError: expect.stringContaining("premium"),
+          }),
         }),
       );
       expect(realtime.emitScheduledPostFailed).toHaveBeenCalledTimes(1);
     });
 
-    it('does NOT re-emit failed event when scheduledError is already set (flag-once)', async () => {
+    it("does NOT re-emit failed event when scheduledError is already set (flag-once)", async () => {
       const duePost = makeHoldingRow({
-        id: 'sched-already-failed',
+        id: "sched-already-failed",
         scheduledAt: new Date(Date.now() - 1000),
-        scheduledError: 'Scheduled posts require premium. Renew your subscription to publish.',
+        scheduledError:
+          "Scheduled posts require premium. Renew your subscription to publish.",
       });
       const { service, realtime } = makeService({
         user: {
-          findUnique: jest.fn(async () => ({ premium: false, premiumPlus: false, verifiedStatus: 'verified', bannedAt: null })),
+          findUnique: jest.fn(async () => ({
+            premium: false,
+            premiumPlus: false,
+            verifiedStatus: "verified",
+            bannedAt: null,
+          })),
         },
         post: {
           findMany: jest.fn(async () => [duePost]),
@@ -359,11 +533,20 @@ describe('ScheduledPostsService', () => {
       expect(realtime.emitScheduledPostFailed).not.toHaveBeenCalled();
     });
 
-    it('sets scheduledError when author is banned', async () => {
-      const duePost = makeHoldingRow({ id: 'sched-banned', scheduledAt: new Date(Date.now() - 1000), scheduledError: null });
+    it("sets scheduledError when author is banned", async () => {
+      const duePost = makeHoldingRow({
+        id: "sched-banned",
+        scheduledAt: new Date(Date.now() - 1000),
+        scheduledError: null,
+      });
       const { service, mutation, realtime } = makeService({
         user: {
-          findUnique: jest.fn(async () => ({ premium: true, premiumPlus: false, verifiedStatus: 'verified', bannedAt: new Date() })),
+          findUnique: jest.fn(async () => ({
+            premium: true,
+            premiumPlus: false,
+            verifiedStatus: "verified",
+            bannedAt: new Date(),
+          })),
         },
         post: {
           findMany: jest.fn(async () => [duePost]),
@@ -378,11 +561,19 @@ describe('ScheduledPostsService', () => {
       expect(realtime.emitScheduledPostFailed).toHaveBeenCalledTimes(1);
     });
 
-    it('per-user fairness: second user publishes even when first user has many due rows', async () => {
+    it("per-user fairness: second user publishes even when first user has many due rows", async () => {
       const user1Posts = Array.from({ length: 15 }, (_, i) =>
-        makeHoldingRow({ id: `u1-${i}`, userId: 'user-1', scheduledAt: new Date(Date.now() - 1000) }),
+        makeHoldingRow({
+          id: `u1-${i}`,
+          userId: "user-1",
+          scheduledAt: new Date(Date.now() - 1000),
+        }),
       );
-      const user2Post = makeHoldingRow({ id: 'u2-0', userId: 'user-2', scheduledAt: new Date(Date.now() - 500) });
+      const user2Post = makeHoldingRow({
+        id: "u2-0",
+        userId: "user-2",
+        scheduledAt: new Date(Date.now() - 500),
+      });
       const allPosts = [...user1Posts, user2Post];
 
       const { service, mutation } = makeService({
@@ -400,7 +591,10 @@ describe('ScheduledPostsService', () => {
 
       // user-2's post must have been attempted (createPost called with userId user-2).
       const calls = (mutation.createPost as jest.Mock).mock.calls;
-      const user2Published = calls.some((call: any[]) => call[0]?.userId === 'user-2' || call[0]?.userId === undefined);
+      const user2Published = calls.some(
+        (call: any[]) =>
+          call[0]?.userId === "user-2" || call[0]?.userId === undefined,
+      );
       // createPost is called with the body, not userId directly; verify via update calls
       // The simplest invariant: user-2's post was processed, meaning createPost was called
       // at least 11 times (10 for user-1 cap + 1 for user-2).
@@ -409,8 +603,8 @@ describe('ScheduledPostsService', () => {
     });
   });
 
-  describe('createScheduled queued cap', () => {
-    it('throws BadRequestException when user already has 25 queued posts', async () => {
+  describe("createScheduled queued cap", () => {
+    it("throws BadRequestException when user already has 25 queued posts", async () => {
       const { service } = makeService({
         post: {
           count: jest.fn(async () => 25),
@@ -419,11 +613,19 @@ describe('ScheduledPostsService', () => {
       });
 
       await expect(
-        service.createScheduled({ userId: 'u', body: 'hello', visibility: 'public', scheduledAt: VALID_FUTURE, media: null, poll: null, communityGroupId: null }),
+        service.createScheduled({
+          userId: "u",
+          body: "hello",
+          visibility: "public",
+          scheduledAt: VALID_FUTURE,
+          media: null,
+          poll: null,
+          communityGroupId: null,
+        }),
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('allows creating when user has 24 queued posts', async () => {
+    it("allows creating when user has 24 queued posts", async () => {
       const { service } = makeService({
         post: {
           count: jest.fn(async () => 24),
@@ -432,36 +634,100 @@ describe('ScheduledPostsService', () => {
       });
 
       await expect(
-        service.createScheduled({ userId: 'u', body: 'hello', visibility: 'public', scheduledAt: VALID_FUTURE, media: null, poll: null, communityGroupId: null }),
+        service.createScheduled({
+          userId: "u",
+          body: "hello",
+          visibility: "public",
+          scheduledAt: VALID_FUTURE,
+          media: null,
+          poll: null,
+          communityGroupId: null,
+        }),
       ).resolves.toBeDefined();
     });
   });
 });
 
-describe('scheduled X eligibility', () => {
+describe("scheduled X eligibility", () => {
   it.each([
-    { body: 'see https://example.com', crosspost: { x: 'native' as const }, poll: null },
-    { body: 'vote', crosspost: { x: 'native' as const }, poll: { options: [{ text: 'A' }, { text: 'B' }], durationHours: 24 } },
-    { body: 'hello', crosspost: { x: 'link' as const }, poll: null },
-  ])('rejects unsupported scheduled X selections before writing', async input => {
+    {
+      body: "see https://example.com",
+      crosspost: { x: "native" as const },
+      poll: null,
+    },
+    {
+      body: "vote",
+      crosspost: { x: "native" as const },
+      poll: { options: [{ text: "A" }, { text: "B" }], durationHours: 24 },
+    },
+    { body: "hello", crosspost: { x: "link" as const }, poll: null },
+  ])(
+    "rejects unsupported scheduled X selections before writing",
+    async (input) => {
+      const { service, prisma } = makeService();
+      await expect(
+        service.createScheduled({
+          userId: "user-1",
+          visibility: "public",
+          scheduledAt: VALID_FUTURE,
+          communityGroupId: null,
+          media: null,
+          ...input,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.post.create).not.toHaveBeenCalled();
+    },
+  );
+  it("stores valid X and Pickax choices", async () => {
     const { service, prisma } = makeService();
-    await expect(service.createScheduled({ userId: 'user-1', visibility: 'public', scheduledAt: VALID_FUTURE, communityGroupId: null, media: null, ...input })).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.post.create).not.toHaveBeenCalled();
+    const crosspost = { x: "native" as const, pickax: "link" as const };
+    await service.createScheduled({
+      userId: "user-1",
+      body: "hello",
+      visibility: "public",
+      scheduledAt: VALID_FUTURE,
+      communityGroupId: null,
+      media: null,
+      poll: null,
+      crosspost,
+    });
+    expect(prisma.post.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ crosspostChoices: crosspost }),
+      }),
+    );
   });
-  it('stores valid X and Pickax choices', async () => {
-    const { service, prisma } = makeService();
-    const crosspost = { x: 'native' as const, pickax: 'link' as const };
-    await service.createScheduled({ userId: 'user-1', body: 'hello', visibility: 'public', scheduledAt: VALID_FUTURE, communityGroupId: null, media: null, poll: null, crosspost });
-    expect(prisma.post.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ crosspostChoices: crosspost }) }));
-  });
-  it('rechecks saved X intent when an edit adds a link', async () => {
-    const { service, prisma } = makeService({ post: { findUnique: jest.fn(async () => makeHoldingRow({ crosspostChoices: { x: 'native', pickax: 'link' } })) } });
-    await expect(service.updateScheduled({ userId: 'user-1', scheduledPostId: 'sched-1', body: 'see example.com' })).rejects.toThrow('Remove any links');
+  it("rechecks saved X intent when an edit adds a link", async () => {
+    const { service, prisma } = makeService({
+      post: {
+        findUnique: jest.fn(async () =>
+          makeHoldingRow({ crosspostChoices: { x: "native", pickax: "link" } }),
+        ),
+      },
+    });
+    await expect(
+      service.updateScheduled({
+        userId: "user-1",
+        scheduledPostId: "sched-1",
+        body: "see example.com",
+      }),
+    ).rejects.toThrow("Remove any links");
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
-  it('allows a link edit after X is turned off and keeps Pickax', async () => {
-    const { service, prisma } = makeService({ post: { findUnique: jest.fn(async () => makeHoldingRow({ crosspostChoices: { x: 'native', pickax: 'link' } })) } });
-    await service.updateScheduled({ userId: 'user-1', scheduledPostId: 'sched-1', body: 'see example.com', crosspost: { pickax: 'link' } });
+  it("allows a link edit after X is turned off and keeps Pickax", async () => {
+    const { service, prisma } = makeService({
+      post: {
+        findUnique: jest.fn(async () =>
+          makeHoldingRow({ crosspostChoices: { x: "native", pickax: "link" } }),
+        ),
+      },
+    });
+    await service.updateScheduled({
+      userId: "user-1",
+      scheduledPostId: "sched-1",
+      body: "see example.com",
+      crosspost: { pickax: "link" },
+    });
     expect(prisma.$transaction).toHaveBeenCalled();
   });
 });

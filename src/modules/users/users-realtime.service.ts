@@ -1,17 +1,30 @@
-import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { AppConfigService } from '../app/app-config.service';
-import { publicAssetUrl } from '../../common/assets/public-asset-url';
-import type { PublicProfileDto } from '../../common/dto';
-import { PublicProfileCacheService } from './public-profile-cache.service';
+import { toAvatarVideoDto } from "../../common/dto/avatar-video.dto";
+import { Injectable, Logger } from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { AppConfigService } from "../app/app-config.service";
+import { publicAssetUrl } from "../../common/assets/public-asset-url";
+import type { PublicProfileDto } from "../../common/dto";
+import { PublicProfileCacheService } from "./public-profile-cache.service";
 
 function formatBirthdayMonthDay(birthdate: Date): string {
   // Use UTC to avoid timezone surprises.
   const month = birthdate.getUTCMonth(); // 0-11
   const day = birthdate.getUTCDate(); // 1-31
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const mm = months[month] ?? 'Jan';
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const mm = months[month] ?? "Jan";
   return `${mm} ${day}`;
 }
 
@@ -19,18 +32,31 @@ function formatBirthdayFull(birthdate: Date): string {
   const month = birthdate.getUTCMonth(); // 0-11
   const day = birthdate.getUTCDate(); // 1-31
   const year = birthdate.getUTCFullYear();
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const mm = months[month] ?? 'Jan';
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const mm = months[month] ?? "Jan";
   return `${mm} ${day}, ${year}`;
 }
 
 function formatBirthdayDisplay(
   birthdate: Date | null,
-  visibility: 'none' | 'monthDay' | 'full' | null | undefined,
+  visibility: "none" | "monthDay" | "full" | null | undefined,
 ): string | null {
   if (!birthdate) return null;
-  if (visibility === 'none') return null;
-  if (visibility === 'full') return formatBirthdayFull(birthdate);
+  if (visibility === "none") return null;
+  if (visibility === "full") return formatBirthdayFull(birthdate);
   return formatBirthdayMonthDay(birthdate);
 }
 
@@ -41,11 +67,16 @@ export class UsersRealtimeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
-    private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
+    private readonly publicProfileCache: PublicProfileCacheService<{
+      id: string;
+      username: string | null;
+    }>,
   ) {}
 
-  async getPublicProfileDtoByUserId(userId: string): Promise<PublicProfileDto | null> {
-    const id = (userId ?? '').trim();
+  async getPublicProfileDtoByUserId(
+    userId: string,
+  ): Promise<PublicProfileDto | null> {
+    const id = (userId ?? "").trim();
     if (!id) return null;
 
     const user = await this.prisma.user.findUnique({
@@ -60,6 +91,9 @@ export class UsersRealtimeService {
         website: true,
         xUsername: true,
         pickaxUsername: true,
+        rumbleUrl: true,
+        linkedinUrl: true,
+        youtubeUrl: true,
         locationDisplay: true,
         locationZip: true,
         locationCity: true,
@@ -72,7 +106,9 @@ export class UsersRealtimeService {
         premiumPlus: true,
         isOrganization: true,
         verifiedStatus: true,
-        avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
+        avatarKey: true,
+        avatarVideoKey: true,
+        avatarVideoDurationMs: true,
         avatarUpdatedAt: true,
         bannerKey: true,
         bannerUpdatedAt: true,
@@ -92,10 +128,16 @@ export class UsersRealtimeService {
         where: { id: pinnedPostId, userId: user.id, deletedAt: null },
         select: { visibility: true },
       });
-      if (!pinned || pinned.visibility === 'onlyMe') {
+      if (!pinned || pinned.visibility === "onlyMe") {
         try {
-          await this.prisma.user.update({ where: { id: user.id }, data: { pinnedPostId: null } });
-          await this.publicProfileCache.invalidateForUser({ id: user.id, username: user.username ?? null });
+          await this.prisma.user.update({
+            where: { id: user.id },
+            data: { pinnedPostId: null },
+          });
+          await this.publicProfileCache.invalidateForUser({
+            id: user.id,
+            username: user.username ?? null,
+          });
         } catch {
           // Best-effort
         }
@@ -114,26 +156,49 @@ export class UsersRealtimeService {
       website: user.website ?? null,
       xUsername: user.xUsername ?? null,
       pickaxUsername: user.pickaxUsername ?? null,
+      rumbleUrl: user.rumbleUrl ?? null,
+      linkedinUrl: user.linkedinUrl ?? null,
+      youtubeUrl: user.youtubeUrl ?? null,
       locationDisplay: user.locationDisplay ?? null,
       locationZip: user.locationZip ?? null,
       locationCity: user.locationCity ?? null,
       locationCounty: user.locationCounty ?? null,
       locationState: user.locationState ?? null,
       locationCountry: user.locationCountry ?? null,
-      birthdayDisplay: formatBirthdayDisplay(user.birthdate, (user as any).birthdayVisibility ?? 'monthDay'),
-      birthdayMonthDay: user.birthdate ? formatBirthdayMonthDay(user.birthdate) : null,
+      birthdayDisplay: formatBirthdayDisplay(
+        user.birthdate,
+        (user as any).birthdayVisibility ?? "monthDay",
+      ),
+      birthdayMonthDay: user.birthdate
+        ? formatBirthdayMonthDay(user.birthdate)
+        : null,
       premium: user.premium,
       premiumPlus: user.premiumPlus,
       isOrganization: Boolean(user.isOrganization),
       verifiedStatus: user.verifiedStatus,
-      avatarUrl: publicAssetUrl({ publicBaseUrl, key: user.avatarKey ?? null, updatedAt: user.avatarUpdatedAt ?? null }), avatarVideo: toAvatarVideoDto(user, publicBaseUrl),
-      bannerUrl: publicAssetUrl({ publicBaseUrl, key: user.bannerKey ?? null, updatedAt: user.bannerUpdatedAt ?? null }),
+      avatarUrl: publicAssetUrl({
+        publicBaseUrl,
+        key: user.avatarKey ?? null,
+        updatedAt: user.avatarUpdatedAt ?? null,
+      }),
+      avatarVideo: toAvatarVideoDto(user, publicBaseUrl),
+      bannerUrl: publicAssetUrl({
+        publicBaseUrl,
+        key: user.bannerKey ?? null,
+        updatedAt: user.bannerUpdatedAt ?? null,
+      }),
       pinnedPostId,
       // Privacy: last-online timestamps are only for verified viewers via HTTP endpoints.
       // Realtime fanout targets can include unverified users, so we redact here.
       lastOnlineAt: null,
-      checkinStreakDays: Math.max(0, Math.floor(Number(user.checkinStreakDays) || 0)),
-      longestStreakDays: Math.max(0, Math.floor(Number(user.longestStreakDays) || 0)),
+      checkinStreakDays: Math.max(
+        0,
+        Math.floor(Number(user.checkinStreakDays) || 0),
+      ),
+      longestStreakDays: Math.max(
+        0,
+        Math.floor(Number(user.longestStreakDays) || 0),
+      ),
       ...(user.isBot ? { isBot: true } : {}),
     };
   }
@@ -142,8 +207,11 @@ export class UsersRealtimeService {
    * Related users for realtime public-profile fanout.
    * Current definition: followers + following (two-way graph neighborhood).
    */
-  async listRelatedUserIds(userId: string, opts?: { max?: number }): Promise<string[]> {
-    const id = (userId ?? '').trim();
+  async listRelatedUserIds(
+    userId: string,
+    opts?: { max?: number },
+  ): Promise<string[]> {
+    const id = (userId ?? "").trim();
     if (!id) return [];
     const max = Math.max(1, Math.min(10_000, Math.floor(opts?.max ?? 2000)));
 
@@ -167,10 +235,11 @@ export class UsersRealtimeService {
 
     const out = [...ids];
     if (out.length > max) {
-      this.logger.warn(`[users:selfUpdated] related fanout capped userId=${id} related=${out.length} max=${max}`);
+      this.logger.warn(
+        `[users:selfUpdated] related fanout capped userId=${id} related=${out.length} max=${max}`,
+      );
       return out.slice(0, max);
     }
     return out;
   }
 }
-

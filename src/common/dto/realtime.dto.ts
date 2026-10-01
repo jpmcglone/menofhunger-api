@@ -1,12 +1,19 @@
-import type { AvatarVideoDto } from './avatar-video.dto';
-import type { VerifiedStatus } from '@prisma/client';
-import type { MessageDto } from '../../modules/messages/message.dto';
-import type { NotificationDto } from '../../modules/notifications/notification.dto';
-import type { UserDto, UserListDto, UserNotificationPreference } from './user.dto';
-import type { ArticleCommentDto, ArticleReactionSummaryDto } from './article.dto';
-import type { PostDto, PostPollDto } from './post.dto';
-import type { UserStatusDto } from './presence.dto';
-import type { ScheduledPostDto } from './scheduled-post.dto';
+import type { AvatarVideoDto } from "./avatar-video.dto";
+import type { VerifiedStatus } from "@prisma/client";
+import type { MessageDto } from "../../modules/messages/message.dto";
+import type { NotificationDto } from "../../modules/notifications/notification.dto";
+import type {
+  UserDto,
+  UserListDto,
+  UserNotificationPreference,
+} from "./user.dto";
+import type {
+  ArticleCommentDto,
+  ArticleReactionSummaryDto,
+} from "./article.dto";
+import type { PostDto, PostPollDto } from "./post.dto";
+import type { UserStatusDto } from "./presence.dto";
+import type { ScheduledPostDto } from "./scheduled-post.dto";
 
 /**
  * Websocket (Socket.IO) payload DTOs.
@@ -41,7 +48,7 @@ export type NotificationsNavUnreadPayloadDto = {
 
 /** Drop lock-screen APNs the user already saw in the matching in-app section. */
 export type NotificationsLockScreenClearPayloadDto = {
-  section: 'inbox' | 'groups';
+  section: "inbox" | "groups";
 };
 
 /** Cross-identity switcher badge. Emitted to the operator cluster when any identity's unread changes. */
@@ -68,7 +75,7 @@ export type FollowsChangedPayloadDto = {
   viewerNotificationPreference?: UserNotificationPreference;
 };
 
-export type PostInteractionKind = 'boost' | 'bookmark' | 'repost';
+export type PostInteractionKind = "boost" | "bookmark" | "repost";
 
 /** Post interaction updates (currently emitted to post author + actor). */
 export type PostsInteractionPayloadDto = {
@@ -81,8 +88,18 @@ export type PostsInteractionPayloadDto = {
   repostCount?: number;
 };
 
-export type AdminUpdateKind = 'reports' | 'verification' | 'feedback' | 'assistant';
-export type AdminUpdateAction = 'created' | 'updated' | 'deleted' | 'resolved' | 'reviewed' | 'other';
+export type AdminUpdateKind =
+  | "reports"
+  | "verification"
+  | "feedback"
+  | "assistant";
+export type AdminUpdateAction =
+  | "created"
+  | "updated"
+  | "deleted"
+  | "resolved"
+  | "reviewed"
+  | "other";
 
 /** Admin screen change hint for cross-tab sync (emitted to the acting admin's sockets). */
 export type AdminUpdatedPayloadDto = {
@@ -101,6 +118,9 @@ export type PublicProfileDto = {
   website: string | null;
   xUsername: string | null;
   pickaxUsername: string | null;
+  rumbleUrl: string | null;
+  linkedinUrl: string | null;
+  youtubeUrl: string | null;
   locationDisplay: string | null;
   locationZip: string | null;
   locationCity: string | null;
@@ -115,7 +135,8 @@ export type PublicProfileDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: VerifiedStatus;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   pinnedPostId: string | null;
   lastOnlineAt: string | null;
@@ -198,13 +219,15 @@ export type PresenceOfflinePayloadDto = {
 };
 
 export type PresenceOnlineFeedSnapshotPayloadDto = {
-  users: Array<UserListDto & {
-    lastConnectAt?: number | null;
-    idle?: boolean;
-    status?: UserStatusDto | null;
-    platforms?: string[];
-    inCall?: boolean;
-  }>;
+  users: Array<
+    UserListDto & {
+      lastConnectAt?: number | null;
+      idle?: boolean;
+      status?: UserStatusDto | null;
+      platforms?: string[];
+      inCall?: boolean;
+    }
+  >;
   totalOnline?: number;
   /** Unique logged-out visitors with a live socket. */
   anonymousOnline?: number;
@@ -240,72 +263,72 @@ export type PresencePlatformsChangedPayloadDto = {
 };
 
 export const WsEventNames = {
-  scheduledPostPublished: 'scheduled:published',
-  scheduledPostFailed: 'scheduled:failed',
-  usersMeUpdated: 'users:meUpdated',
-  usersSelfUpdated: 'users:selfUpdated',
-  usersSpaceChanged: 'users:spaceChanged',
-  presenceStatusUpdated: 'presence:status-updated',
-  presenceStatusCleared: 'presence:status-cleared',
-  presencePlatformsChanged: 'presence:platforms-changed',
-  presenceAnonymousCount: 'presence:anonymous-count',
-  presenceOnlineCount: 'presence:online-count',
-  membersMapChanged: 'members-map:changed',
-  presenceFollowedOnline: 'presence:followed-online',
-  postsSubscribe: 'posts:subscribe',
-  postsUnsubscribe: 'posts:unsubscribe',
-  postsSubscribed: 'posts:subscribed',
-  postsLiveUpdated: 'posts:liveUpdated',
-  postsCommentAdded: 'posts:commentAdded',
-  postsCommentDeleted: 'posts:commentDeleted',
-  postsTyping: 'posts:typing',
+  scheduledPostPublished: "scheduled:published",
+  scheduledPostFailed: "scheduled:failed",
+  usersMeUpdated: "users:meUpdated",
+  usersSelfUpdated: "users:selfUpdated",
+  usersSpaceChanged: "users:spaceChanged",
+  presenceStatusUpdated: "presence:status-updated",
+  presenceStatusCleared: "presence:status-cleared",
+  presencePlatformsChanged: "presence:platforms-changed",
+  presenceAnonymousCount: "presence:anonymous-count",
+  presenceOnlineCount: "presence:online-count",
+  membersMapChanged: "members-map:changed",
+  presenceFollowedOnline: "presence:followed-online",
+  postsSubscribe: "posts:subscribe",
+  postsUnsubscribe: "posts:unsubscribe",
+  postsSubscribed: "posts:subscribed",
+  postsLiveUpdated: "posts:liveUpdated",
+  postsCommentAdded: "posts:commentAdded",
+  postsCommentDeleted: "posts:commentDeleted",
+  postsTyping: "posts:typing",
   /** New top-level post from someone the viewer follows; pushed to follower user rooms. */
-  feedNewPost: 'feed:newPost',
+  feedNewPost: "feed:newPost",
   /** Room subscription handshake for community-group feeds. */
-  groupsSubscribe: 'groups:subscribe',
-  groupsUnsubscribe: 'groups:unsubscribe',
-  groupsSubscribed: 'groups:subscribed',
+  groupsSubscribe: "groups:subscribe",
+  groupsUnsubscribe: "groups:unsubscribe",
+  groupsSubscribed: "groups:subscribed",
   /** New top-level post (or repost) in a community group; pushed to the `group:{id}` room. */
-  groupsNewPost: 'groups:newPost',
+  groupsNewPost: "groups:newPost",
   /** @marv membership changed (added/removed) in a group; pushed to the `group:{id}` room. */
-  groupsMarvChanged: 'groups:marv-changed',
-  articlesSubscribe: 'articles:subscribe',
-  articlesUnsubscribe: 'articles:unsubscribe',
-  articlesSubscribed: 'articles:subscribed',
-  articlesLiveUpdated: 'articles:liveUpdated',
-  articlesCommentAdded: 'articles:commentAdded',
-  articlesCommentDeleted: 'articles:commentDeleted',
-  articlesCommentUpdated: 'articles:commentUpdated',
-  articlesCommentReactionChanged: 'articles:commentReactionChanged',
+  groupsMarvChanged: "groups:marv-changed",
+  articlesSubscribe: "articles:subscribe",
+  articlesUnsubscribe: "articles:unsubscribe",
+  articlesSubscribed: "articles:subscribed",
+  articlesLiveUpdated: "articles:liveUpdated",
+  articlesCommentAdded: "articles:commentAdded",
+  articlesCommentDeleted: "articles:commentDeleted",
+  articlesCommentUpdated: "articles:commentUpdated",
+  articlesCommentReactionChanged: "articles:commentReactionChanged",
   /** Board list rooms (tier-scoped; joined on subscribe according to the viewer's tier). */
-  boardSubscribe: 'board:subscribe',
-  boardUnsubscribe: 'board:unsubscribe',
+  boardSubscribe: "board:subscribe",
+  boardUnsubscribe: "board:unsubscribe",
   /** New Board thread; carries identity + scope only so clients refetch through HTTP access rules. */
-  boardNewThread: 'board:new-thread',
+  boardNewThread: "board:new-thread",
   /** Server → user room: unread Board / Articles notification counts for the nav dots. */
-  notificationsNavUnread: 'notifications:navUnreadChanged',
+  notificationsNavUnread: "notifications:navUnreadChanged",
   /** DM calling: client → server (acked). */
-  callsStart: 'calls:start',
-  callsSfu: 'calls:sfu',
-  callsJoin: 'calls:join',
-  callsLeave: 'calls:leave',
-  callsDecline: 'calls:decline',
+  callsStart: "calls:start",
+  callsSfu: "calls:sfu",
+  callsJoin: "calls:join",
+  callsLeave: "calls:leave",
+  callsDecline: "calls:decline",
   /** Client → server (acked): current state of one call, to resync a ring after a reconnect. */
-  callsStatus: 'calls:status',
-  callsState: 'calls:state',
+  callsStatus: "calls:status",
+  callsState: "calls:state",
   /** DM calling: server → client. */
-  callsIncoming: 'calls:incoming',
-  callsUpdated: 'calls:updated',
-  callsSeatTaken: 'calls:seat-taken',
-  presenceCallChanged: 'presence:call-changed',
+  callsIncoming: "calls:incoming",
+  callsUpdated: "calls:updated",
+  callsSeatTaken: "calls:seat-taken",
+  presenceCallChanged: "presence:call-changed",
   /** SDP / ICE relay, both directions. */
-  rtcSignal: 'rtc:signal',
+  rtcSignal: "rtc:signal",
 } as const;
 
 /** `board:new-thread`: identity and scope only; the list refetches to apply viewer access rules. */
 export type BoardNewThreadPayloadDto = {
   threadId: string;
-  visibility: 'public' | 'verifiedOnly' | 'premiumOnly';
+  visibility: "public" | "verifiedOnly" | "premiumOnly";
   tags: string[];
 };
 
@@ -478,7 +501,7 @@ export type PostsTypingPayloadDto = {
     isOrganization: boolean;
   };
   typing: boolean;
-  status?: 'thinking' | 'replying';
+  status?: "thinking" | "replying";
   /**
    * Board threads: typing is sent to the thread root room, and this names the comment being
    * answered (absent for a top-level comment) so clients can show it under that comment.
@@ -526,14 +549,15 @@ export type CheckinAnsweredTodayPayloadDto = {
     id: string;
     username: string | null;
     displayName: string | null;
-    avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+    avatarUrl: string | null;
+    avatarVideo?: AvatarVideoDto | null;
     isFollowed?: boolean;
   };
 };
 
 /** Referral recruit updated (emitted to the recruiter when a recruit reaches a milestone). */
 export type ReferralRecruitUpdatedPayloadDto = {
-  recruit: import('./referral.dto').RecruitDto;
+  recruit: import("./referral.dto").RecruitDto;
 };
 
 /**
@@ -558,4 +582,3 @@ export type ScheduledPostFailedPayloadDto = {
 
 // Re-export for convenience.
 export type { ScheduledPostDto };
-

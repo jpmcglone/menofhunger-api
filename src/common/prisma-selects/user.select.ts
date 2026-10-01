@@ -9,7 +9,9 @@ export const ORG_AFFILIATION_SELECT = {
   id: true,
   username: true,
   name: true,
-  avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
+  avatarKey: true,
+  avatarVideoKey: true,
+  avatarVideoDurationMs: true,
   avatarUpdatedAt: true,
 } as const;
 
@@ -22,7 +24,9 @@ export const USER_LIST_SELECT = {
   isOrganization: true,
   accountKind: true,
   verifiedStatus: true,
-  avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
+  avatarKey: true,
+  avatarVideoKey: true,
+  avatarVideoDurationMs: true,
   avatarUpdatedAt: true,
   bannedAt: true,
   isBot: true,
@@ -30,7 +34,7 @@ export const USER_LIST_SELECT = {
     select: {
       org: { select: ORG_AFFILIATION_SELECT },
     },
-    orderBy: { createdAt: 'asc' as const },
+    orderBy: { createdAt: "asc" as const },
   },
 } as const;
 
@@ -62,6 +66,9 @@ export const USER_DTO_SELECT = {
   website: true,
   xUsername: true,
   pickaxUsername: true,
+  rumbleUrl: true,
+  linkedinUrl: true,
+  youtubeUrl: true,
   locationInput: true,
   locationDisplay: true,
   locationZip: true,
@@ -88,7 +95,9 @@ export const USER_DTO_SELECT = {
   unverifiedAt: true,
   followVisibility: true,
   birthdayVisibility: true,
-  avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
+  avatarKey: true,
+  avatarVideoKey: true,
+  avatarVideoDurationMs: true,
   avatarUpdatedAt: true,
   bannerKey: true,
   bannerUpdatedAt: true,
@@ -117,4 +126,3 @@ export const VERIFICATION_ADMIN_USER_SELECT = {
   verifiedAt: true,
   unverifiedAt: true,
 } as const;
-

@@ -25,3 +25,5 @@ node_modules/.bin/prisma db execute --url "$DATABASE_URL" --file "$baseline_sql"
 node_modules/.bin/prisma migrate deploy
 node_modules/.bin/prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
 node -r ts-node/register/transpile-only test/partner/database.ts
+
+node -r ts-node/register/transpile-only test/integrations-budget.database.ts

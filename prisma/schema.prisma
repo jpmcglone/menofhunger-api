@@ -362,6 +362,9 @@ model User {
    * Verified Pickax handle. Written only by the Pickax connection service; never user-editable.
    */
   pickaxUsername               String?
+  rumbleUrl                    String?
+  linkedinUrl                  String?
+  youtubeUrl                   String?
   /**
    * Raw user-entered location query (zip/city/state text).
    */
@@ -3408,6 +3411,9 @@ model XConnection {
  * `costMicros` is reserved when the cross-post is requested and refunded on failure.
  */
 model XCrosspost {
+  deliveryPlan Json?
+  remoteIds String[] @default([])
+
   id          String              @id @default(cuid())
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
@@ -3415,6 +3421,8 @@ model XCrosspost {
   kind        PickaxCrosspostKind
   localId     String
   mode        CrosspostMode
+  draftId     String?
+  draftSourceHash String?
   remoteId    String?
   costMicros  Int                 @default(0)
   refundedAt  DateTime?
@@ -4067,4 +4075,92 @@ model XUsageReservation {
   createdAt DateTime @default(now())
   @@index([userId, month, status])
   @@index([externalAccountId, month, status])
+}
+
+// Shared cost history survives disconnects and account deletion. No credentials
+// or provider response bodies belong in this ledger.
+model IntegrationUsageReservation {
+  id                String   @id
+  userId            String?
+  provider          String
+  externalAccountId String?
+  action            String
+  bucket            String
+  month             DateTime
+  priceVersion      String
+  reservedMicros    Int
+  chargedMicros     Int?
+  publicationCount  Int      @default(0)
+  status            String   @default("reserved")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @default(now()) @updatedAt
+
+  @@index([userId, month, bucket, status])
+  @@index([provider, externalAccountId, month, status], map: "IntegrationUsageReservation_provider_externalAccountId_month_id")
+  @@index([month, bucket, status])
+  @@index([provider, action, status])
+  @@index([status, createdAt])
+}
+
+/** Append-only evidence for manual reconciliation; never contains access tokens. */
+model IntegrationReconciliation {
+  id String @id @default(cuid())
+  createdAt DateTime @default(now())
+  operationId String
+  adminUserId String
+  previousStatus String
+  status String
+  previousChargedMicros Int?
+  chargedMicros Int
+  evidence String
+
+  @@index([operationId, createdAt])
+}
+
+/// Normalized public data only; private DM/relationship context is never persisted.
+model IntegrationPublicSnapshot {
+  key       String   @id
+  kind      String
+  identity  String
+  handle    String?
+  payload   Json
+  fetchedAt DateTime
+  expiresAt DateTime
+
+  @@index([kind, handle, expiresAt])
+  @@index([expiresAt])
+}
+
+/// Runtime controls can only lower configured ceilings. All edits retain an audit record.
+model IntegrationSpendControl {
+  id                   String @id @default("global")
+  revision             Int @default(0)
+  paused               Boolean @default(false)
+  companyMonthlyMicros Int?
+  companyDailyMicros   Int?
+  xMonthlyMicros       Int?
+  reserveMonthlyMicros Int?
+  updatedAt            DateTime @default(now()) @updatedAt
+}
+
+model IntegrationControlAudit {
+  id          String @id @default(cuid())
+  adminUserId String
+  revision    Int
+  before      Json
+  after       Json
+  reason      String
+  createdAt   DateTime @default(now())
+  @@index([createdAt])
+}
+
+/// A condition reopens only after resolving; repeated checks do not page repeatedly.
+model IntegrationOperationalAlert {
+  key        String @id
+  severity   String
+  message    String
+  openedAt   DateTime @default(now())
+  observedAt DateTime @default(now())
+  resolvedAt DateTime?
+  @@index([resolvedAt, openedAt])
 }

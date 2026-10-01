@@ -1,14 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import {
   MARV_DEFAULT_ASTRA_MODEL,
   MARV_DEFAULT_FAST_MODEL,
   MARV_DEFAULT_REGULAR_MODEL,
   MARV_DEFAULT_SMART_MODEL,
-} from '../marvin/marvin-models';
-import type { Env } from './env';
+} from "../marvin/marvin-models";
+import type { Env } from "./env";
 
-export type NodeEnv = 'development' | 'test' | 'production';
+export type NodeEnv = "development" | "test" | "production";
 
 /**
  * Adds a display name to a bare email address if one isn't already present.
@@ -16,7 +16,7 @@ export type NodeEnv = 'development' | 'test' | 'production';
  * Already-formatted strings like "Men of Hunger <...>" are left unchanged.
  */
 function withDisplayName(email: string, name: string): string {
-  if (!email || email.includes('<')) return email;
+  if (!email || email.includes("<")) return email;
   return `${name} <${email}>`;
 }
 
@@ -65,15 +65,15 @@ export type AppleIapConfig = {
   /** PEM-formatted .p8 private key (literal "\n" already expanded). */
   privateKey: string;
   /** Maps App Store productId → internal tier ('premium' | 'premiumPlus'). */
-  productTierMap: Record<string, 'premium' | 'premiumPlus'>;
+  productTierMap: Record<string, "premium" | "premiumPlus">;
   /** Which App Store environment to verify signed data against. */
-  environment: 'sandbox' | 'production';
+  environment: "sandbox" | "production";
   /** Numeric App Store app ID. Required by Apple's verifier in production; null in sandbox. */
   appAppleId: number | null;
 };
 
 export type EmailConfig = {
-  provider: 'resend';
+  provider: "resend";
   apiKey: string;
   fromEmail: {
     default: string;
@@ -151,21 +151,107 @@ export type MarvLimitsConfig = {
 
 @Injectable()
 export class AppConfigService {
+  xPublishing() {
+    const ids = (key: string) =>
+      (this.config.get<string>(key) ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    return {
+      enabled: this.config.get<string>("X_ADVANCED_ENABLED") === "true",
+      accountIds: ids("X_ADVANCED_ACCOUNT_IDS"),
+      quoteAccountIds: ids("X_QUOTE_ENTERPRISE_ACCOUNT_IDS"),
+      longAccountIds: ids("X_LONG_TEXT_ACCOUNT_IDS"),
+      editAccountIds: ids("X_EDIT_ACCOUNT_IDS"),
+      postMaxMicros: this.config.get<number>("X_ADVANCED_POST_MAX_MICROS"),
+      mediaMaxMicros: this.config.get<number>("X_ADVANCED_MEDIA_MAX_MICROS"),
+      priceVersion: this.config.get<string>("X_ADVANCED_PRICE_VERSION") ?? "",
+    };
+  }
+
+  xArticle() {
+    return {
+      enabled: this.config.get<string>("X_ARTICLE_ENABLED") === "true",
+      accountIds: (this.config.get<string>("X_ARTICLE_ACCOUNT_IDS") ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean),
+      maximumMicros: this.config.get<number>("X_ARTICLE_MAX_MICROS"),
+      priceVersion: this.config.get<string>("X_ARTICLE_PRICE_VERSION"),
+      bucket:
+        this.config.get<"regular" | "expensive">("X_ARTICLE_BUCKET") ??
+        "regular",
+    };
+  }
+
+  xNews() {
+    return {
+      enabled: this.config.get<string>("X_NEWS_ENABLED") === "true",
+      pilotStart: this.config.get<string>("X_NEWS_PILOT_START"),
+      accountUserId: this.config.get<string>("X_NEWS_ACCOUNT_USER_ID"),
+      query: this.config.get<string>("X_NEWS_QUERY"),
+      requestMaxMicros: this.config.get<number>("X_NEWS_REQUEST_MAX_MICROS"),
+      priceVersion: this.config.get<string>("X_NEWS_PRICE_VERSION"),
+    };
+  }
+
+  integrationBudget(
+    bucket: "regular" | "expensive" | "reserve" | "acquisition" = "regular",
+  ) {
+    return {
+      enabled: this.config.get<string>("INTEGRATION_BUDGET_ENABLED") === "true",
+      companyMonthlyMicros: Number(
+        this.config.get("INTEGRATION_COMPANY_MONTHLY_MICROS") ?? 0,
+      ),
+      companyDailyMicros: Number(
+        this.config.get("INTEGRATION_COMPANY_DAILY_MICROS") ?? 0,
+      ),
+      removalHeadroomMicros: Number(
+        this.config.get("INTEGRATION_REMOVAL_HEADROOM_MICROS") ?? 0,
+      ),
+      providerMonthlyMicros: Number(
+        this.config.get("INTEGRATION_X_MONTHLY_MICROS") ?? 0,
+      ),
+      sharedMonthlyMicros: Number(
+        this.config.get(
+          bucket === "acquisition"
+            ? "INTEGRATION_ACQUISITION_MICROS"
+            : "INTEGRATION_FUNDED_RESERVE_MICROS",
+        ) ?? 0,
+      ),
+      priceVersion:
+        this.config.get<string>("INTEGRATION_X_PRICE_VERSION") ?? "",
+      profileContextEnabled:
+        this.config.get<string>("X_PROFILE_CONTEXT_ENABLED") === "true",
+      profilePreviewEnabled:
+        this.config.get<string>("X_PROFILE_PREVIEW_ENABLED") === "true",
+      imageUploadMaxMicros: this.config.get<number>(
+        "X_IMAGE_UPLOAD_MAX_MICROS",
+      ),
+    };
+  }
+
   partner() {
     return {
-      enabled: this.config.get<string>('PARTNER_API_ENABLED') === 'true',
-      webhooks: this.config.get<string>('PARTNER_WEBHOOKS_ENABLED') === 'true',
-      outboundPaused: this.config.get<string>('OUTBOUND_DELIVERY_PAUSED') === 'true',
-      jwks: this.config.get<string>('PARTNER_OIDC_JWKS') || '',
-      encryptionKey: this.config.get<string>('PARTNER_ENCRYPTION_KEY') || '',
+      enabled: this.config.get<string>("PARTNER_API_ENABLED") === "true",
+      webhooks: this.config.get<string>("PARTNER_WEBHOOKS_ENABLED") === "true",
+      outboundPaused:
+        this.config.get<string>("OUTBOUND_DELIVERY_PAUSED") === "true",
+      jwks: this.config.get<string>("PARTNER_OIDC_JWKS") || "",
+      encryptionKey: this.config.get<string>("PARTNER_ENCRYPTION_KEY") || "",
       issuer: `${new URL(this.browserHandoffBaseUrl()).origin}/oauth`,
-      pickaxPartnerClientId: this.config.get<string>('PICKAX_PARTNER_CLIENT_ID') || '',
-      pickaxOAuthIssuer: this.config.get<string>('PICKAX_OAUTH_ISSUER') || '',
-      pickaxOAuthClientId: this.config.get<string>('PICKAX_OAUTH_CLIENT_ID') || '',
-      pickaxOAuthClientSecret: this.config.get<string>('PICKAX_OAUTH_CLIENT_SECRET') || '',
-      pickaxOAuth: this.config.get<string>('PICKAX_OAUTH_ENABLED') === 'true',
-      pickaxDelete: this.config.get<string>('PICKAX_REMOTE_DELETE_ENABLED') === 'true',
-      xCountAllowance: this.config.get<string>('X_COUNT_ALLOWANCE_ENABLED') === 'true',
+      pickaxPartnerClientId:
+        this.config.get<string>("PICKAX_PARTNER_CLIENT_ID") || "",
+      pickaxOAuthIssuer: this.config.get<string>("PICKAX_OAUTH_ISSUER") || "",
+      pickaxOAuthClientId:
+        this.config.get<string>("PICKAX_OAUTH_CLIENT_ID") || "",
+      pickaxOAuthClientSecret:
+        this.config.get<string>("PICKAX_OAUTH_CLIENT_SECRET") || "",
+      pickaxOAuth: this.config.get<string>("PICKAX_OAUTH_ENABLED") === "true",
+      pickaxDelete:
+        this.config.get<string>("PICKAX_REMOTE_DELETE_ENABLED") === "true",
+      xCountAllowance:
+        this.config.get<string>("X_COUNT_ALLOWANCE_ENABLED") === "true",
     };
   }
 
@@ -178,41 +264,45 @@ export class AppConfigService {
     if (raw == null) return fallback;
     const v = String(raw).trim().toLowerCase();
     if (!v) return fallback;
-    if (['1', 'true', 'yes', 'on'].includes(v)) return true;
-    if (['0', 'false', 'no', 'off'].includes(v)) return false;
+    if (["1", "true", "yes", "on"].includes(v)) return true;
+    if (["0", "false", "no", "off"].includes(v)) return false;
     return fallback;
   }
 
   nodeEnv(): NodeEnv {
-    return (this.config.get<string>('NODE_ENV') ?? 'development') as NodeEnv;
+    return (this.config.get<string>("NODE_ENV") ?? "development") as NodeEnv;
   }
 
   isProd(): boolean {
-    return this.nodeEnv() === 'production';
+    return this.nodeEnv() === "production";
   }
 
   redisUrl(): string {
-    return (this.config.get<string>('REDIS_URL') ?? 'redis://localhost:6379').trim() || 'redis://localhost:6379';
+    return (
+      (
+        this.config.get<string>("REDIS_URL") ?? "redis://localhost:6379"
+      ).trim() || "redis://localhost:6379"
+    );
   }
 
   databaseUrlIsSet(): boolean {
-    return Boolean(this.config.get<string>('DATABASE_URL')?.trim());
+    return Boolean(this.config.get<string>("DATABASE_URL")?.trim());
   }
 
   databaseUrl(): string {
-    return this.config.get<string>('DATABASE_URL')?.trim() ?? '';
+    return this.config.get<string>("DATABASE_URL")?.trim() ?? "";
   }
 
   runHttp(): boolean {
-    return this.readBool('RUN_HTTP', true);
+    return this.readBool("RUN_HTTP", true);
   }
 
   runSchedulers(): boolean {
-    return this.readBool('RUN_SCHEDULERS', true);
+    return this.readBool("RUN_SCHEDULERS", true);
   }
 
   runJobConsumers(): boolean {
-    return this.readBool('RUN_JOB_CONSUMERS', true);
+    return this.readBool("RUN_JOB_CONSUMERS", true);
   }
 
   /**
@@ -222,47 +312,49 @@ export class AppConfigService {
    * is the point — but it is capped because every in-flight job also holds Prisma connections.
    */
   sideEffectsQueueConcurrency(): number {
-    const raw = this.config.get<string>('SIDE_EFFECTS_QUEUE_CONCURRENCY') ?? '12';
+    const raw =
+      this.config.get<string>("SIDE_EFFECTS_QUEUE_CONCURRENCY") ?? "12";
     const n = Number(raw);
     if (!Number.isFinite(n)) return 12;
     return Math.min(64, Math.max(1, Math.floor(n)));
   }
 
   port(): number {
-    const raw = this.config.get<string>('PORT') ?? '3001';
+    const raw = this.config.get<string>("PORT") ?? "3001";
     const n = Number(raw);
     return Number.isFinite(n) ? n : 3001;
   }
 
   /** Number of connection retries on startup (default 20). */
   prismaConnectRetries(): number {
-    const raw = this.config.get<string>('PRISMA_CONNECT_RETRIES') ?? '20';
+    const raw = this.config.get<string>("PRISMA_CONNECT_RETRIES") ?? "20";
     const n = Number(raw);
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : 20;
   }
 
   /** Delay in ms between connection retries (default 500). */
   prismaConnectRetryDelayMs(): number {
-    const raw = this.config.get<string>('PRISMA_CONNECT_RETRY_DELAY_MS') ?? '500';
+    const raw =
+      this.config.get<string>("PRISMA_CONNECT_RETRY_DELAY_MS") ?? "500";
     const n = Number(raw);
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : 500;
   }
 
   /** Enable Prisma slow query logging (default: on in dev/test, off in prod). */
   prismaLogSlowQueries(): boolean {
-    const fallback = this.nodeEnv() !== 'production';
-    return this.readBool('PRISMA_LOG_SLOW_QUERIES', fallback);
+    const fallback = this.nodeEnv() !== "production";
+    return this.readBool("PRISMA_LOG_SLOW_QUERIES", fallback);
   }
 
   /** Slow query threshold in ms (default 200). */
   prismaSlowQueryMs(): number {
-    return this.readPositiveInt('PRISMA_SLOW_QUERY_MS', 200);
+    return this.readPositiveInt("PRISMA_SLOW_QUERY_MS", 200);
   }
 
   allowedOrigins(): string[] {
-    const raw = this.config.get<string>('ALLOWED_ORIGINS') ?? '';
+    const raw = this.config.get<string>("ALLOWED_ORIGINS") ?? "";
     return raw
-      .split(',')
+      .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
   }
@@ -273,39 +365,45 @@ export class AppConfigService {
 
   logCorsBlocked(origin: string) {
     this.logger.warn(
-      `CORS blocked origin: ${origin}. Allowed origins: ${this.allowedOrigins().join(', ') || '(none)'}`,
+      `CORS blocked origin: ${origin}. Allowed origins: ${this.allowedOrigins().join(", ") || "(none)"}`,
     );
   }
 
   otpHmacSecret(): string {
     // env schema provides defaults for non-prod
-    return this.config.get<string>('OTP_HMAC_SECRET') ?? 'dev-otp-secret-change-me';
+    return (
+      this.config.get<string>("OTP_HMAC_SECRET") ?? "dev-otp-secret-change-me"
+    );
   }
 
   sessionHmacSecret(): string {
     // env schema provides defaults for non-prod
-    return this.config.get<string>('SESSION_HMAC_SECRET') ?? 'dev-session-secret-change-me';
+    return (
+      this.config.get<string>("SESSION_HMAC_SECRET") ??
+      "dev-session-secret-change-me"
+    );
   }
 
   mcpMemberDailyCalls(): number {
-    return this.readPositiveInt('MCP_MEMBER_DAILY_CALLS', 200);
+    return this.readPositiveInt("MCP_MEMBER_DAILY_CALLS", 200);
   }
 
   cookieDomain(): string | undefined {
-    const v = this.config.get<string>('COOKIE_DOMAIN');
+    const v = this.config.get<string>("COOKIE_DOMAIN");
     return v?.trim() ? v.trim() : undefined;
   }
 
   browserHandoffBaseUrl(): string {
-    const configured = this.config.get<string>('BROWSER_HANDOFF_BASE_URL')?.trim() ?? '';
-    if (configured) return configured.replace(/\/+$/, '');
+    const configured =
+      this.config.get<string>("BROWSER_HANDOFF_BASE_URL")?.trim() ?? "";
+    if (configured) return configured.replace(/\/+$/, "");
     return `http://localhost:${this.port()}/v1`;
   }
 
   disableTwilioInDev(): boolean {
-    const raw = this.config.get<string>('DISABLE_TWILIO_IN_DEV') ?? '';
+    const raw = this.config.get<string>("DISABLE_TWILIO_IN_DEV") ?? "";
     const v = raw.trim().toLowerCase();
-    return ['1', 'true', 'yes', 'on'].includes(v);
+    return ["1", "true", "yes", "on"].includes(v);
   }
 
   /**
@@ -314,16 +412,19 @@ export class AppConfigService {
    * number is only matched when the credentials are explicitly configured.
    */
   appReviewCredentials(): { phone: string; code: string } | null {
-    const phone = this.config.get<string>('APP_REVIEW_PHONE')?.trim() ?? '';
-    const code = this.config.get<string>('APP_REVIEW_CODE')?.trim() ?? '';
+    const phone = this.config.get<string>("APP_REVIEW_PHONE")?.trim() ?? "";
+    const code = this.config.get<string>("APP_REVIEW_CODE")?.trim() ?? "";
     if (!phone || !code) return null;
     return { phone, code };
   }
 
   twilioVerify(): TwilioVerifyConfig | null {
-    const accountSid = this.config.get<string>('TWILIO_ACCOUNT_SID')?.trim() ?? '';
-    const authToken = this.config.get<string>('TWILIO_AUTH_TOKEN')?.trim() ?? '';
-    const verifyServiceSid = this.config.get<string>('TWILIO_VERIFY_SERVICE_SID')?.trim() ?? '';
+    const accountSid =
+      this.config.get<string>("TWILIO_ACCOUNT_SID")?.trim() ?? "";
+    const authToken =
+      this.config.get<string>("TWILIO_AUTH_TOKEN")?.trim() ?? "";
+    const verifyServiceSid =
+      this.config.get<string>("TWILIO_VERIFY_SERVICE_SID")?.trim() ?? "";
 
     if (!accountSid || !authToken || !verifyServiceSid) return null;
     return { accountSid, authToken, verifyServiceSid };
@@ -333,18 +434,22 @@ export class AppConfigService {
    * Cloudflare Realtime TURN key. Used to mint short-lived ICE credentials on start/join.
    * The key itself is never sent to clients.
    */
-  callsSfuEnabled(): boolean { return this.config.get<string>('CALLS_SFU_ENABLED') === 'true'; }
+  callsSfuEnabled(): boolean {
+    return this.config.get<string>("CALLS_SFU_ENABLED") === "true";
+  }
 
   cloudflareSfu(): { appId: string; secret: string } | null {
-    const appId = this.config.get<string>('CLOUDFLARE_SFU_APP_ID')?.trim() ?? '';
-    const secret = this.config.get<string>('CLOUDFLARE_SFU_APP_SECRET')?.trim() ?? '';
+    const appId =
+      this.config.get<string>("CLOUDFLARE_SFU_APP_ID")?.trim() ?? "";
+    const secret =
+      this.config.get<string>("CLOUDFLARE_SFU_APP_SECRET")?.trim() ?? "";
     if (!appId || !secret) return null;
     return { appId, secret };
   }
 
   cloudflareTurn(): { keyId: string; apiToken: string } | null {
-    const keyId = this.config.get<string>('CF_TURN_KEY_ID')?.trim() ?? '';
-    const apiToken = this.config.get<string>('CF_TURN_API_TOKEN')?.trim() ?? '';
+    const keyId = this.config.get<string>("CF_TURN_KEY_ID")?.trim() ?? "";
+    const apiToken = this.config.get<string>("CF_TURN_API_TOKEN")?.trim() ?? "";
     if (!keyId || !apiToken) return null;
     return { keyId, apiToken };
   }
@@ -354,19 +459,33 @@ export class AppConfigService {
    * present (Google's public servers unless `RTC_STUN_URLS` overrides). Static TURN is
    * appended only when all three `RTC_TURN_*` vars are set.
    */
-  rtcIceServers(): Array<{ urls: string[]; username?: string; credential?: string }> {
+  rtcIceServers(): Array<{
+    urls: string[];
+    username?: string;
+    credential?: string;
+  }> {
     const split = (raw: string | undefined): string[] =>
-      (raw ?? '')
-        .split(',')
+      (raw ?? "")
+        .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
-    const stun = split(this.config.get<string>('RTC_STUN_URLS'));
-    const servers: Array<{ urls: string[]; username?: string; credential?: string }> = [
-      { urls: stun.length > 0 ? stun : ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+    const stun = split(this.config.get<string>("RTC_STUN_URLS"));
+    const servers: Array<{
+      urls: string[];
+      username?: string;
+      credential?: string;
+    }> = [
+      {
+        urls:
+          stun.length > 0
+            ? stun
+            : ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"],
+      },
     ];
-    const turnUrls = split(this.config.get<string>('RTC_TURN_URLS'));
-    const username = this.config.get<string>('RTC_TURN_USERNAME')?.trim() ?? '';
-    const credential = this.config.get<string>('RTC_TURN_CREDENTIAL')?.trim() ?? '';
+    const turnUrls = split(this.config.get<string>("RTC_TURN_URLS"));
+    const username = this.config.get<string>("RTC_TURN_USERNAME")?.trim() ?? "";
+    const credential =
+      this.config.get<string>("RTC_TURN_CREDENTIAL")?.trim() ?? "";
     if (turnUrls.length > 0 && username && credential) {
       servers.push({ urls: turnUrls, username, credential });
     }
@@ -374,11 +493,14 @@ export class AppConfigService {
   }
 
   r2(): R2Config | null {
-    const accountId = this.config.get<string>('R2_ACCOUNT_ID')?.trim() ?? '';
-    const accessKeyId = this.config.get<string>('R2_ACCESS_KEY_ID')?.trim() ?? '';
-    const secretAccessKey = this.config.get<string>('R2_SECRET_ACCESS_KEY')?.trim() ?? '';
-    const bucket = this.config.get<string>('R2_BUCKET')?.trim() ?? '';
-    const publicBaseUrl = this.config.get<string>('R2_PUBLIC_BASE_URL')?.trim() ?? '';
+    const accountId = this.config.get<string>("R2_ACCOUNT_ID")?.trim() ?? "";
+    const accessKeyId =
+      this.config.get<string>("R2_ACCESS_KEY_ID")?.trim() ?? "";
+    const secretAccessKey =
+      this.config.get<string>("R2_SECRET_ACCESS_KEY")?.trim() ?? "";
+    const bucket = this.config.get<string>("R2_BUCKET")?.trim() ?? "";
+    const publicBaseUrl =
+      this.config.get<string>("R2_PUBLIC_BASE_URL")?.trim() ?? "";
 
     // Uploads only require S3-compatible credentials + bucket. Public base URL is optional.
     if (!accountId || !accessKeyId || !secretAccessKey || !bucket) return null;
@@ -390,156 +512,176 @@ export class AppConfigService {
     //   https://pub-<random>.r2.dev
     // So if R2_PUBLIC_BASE_URL isn't provided, we cannot safely guess a working URL.
     if (!cfg.publicBaseUrl) {
-      this.logger.warn('R2_PUBLIC_BASE_URL is not set; public asset URLs will be null.');
+      this.logger.warn(
+        "R2_PUBLIC_BASE_URL is not set; public asset URLs will be null.",
+      );
     }
     return cfg;
   }
 
   giphyApiKey(): string | null {
-    const v = this.config.get<string>('GIPHY_API_KEY')?.trim() ?? '';
+    const v = this.config.get<string>("GIPHY_API_KEY")?.trim() ?? "";
     return v ? v : null;
   }
 
   strava(): StravaConfig | null {
-    const clientId = this.config.get<string>('STRAVA_CLIENT_ID')?.trim() ?? '';
-    const clientSecret = this.config.get<string>('STRAVA_CLIENT_SECRET')?.trim() ?? '';
-    const webhookVerifyToken = this.config.get<string>('STRAVA_WEBHOOK_VERIFY_TOKEN')?.trim() ?? '';
+    const clientId = this.config.get<string>("STRAVA_CLIENT_ID")?.trim() ?? "";
+    const clientSecret =
+      this.config.get<string>("STRAVA_CLIENT_SECRET")?.trim() ?? "";
+    const webhookVerifyToken =
+      this.config.get<string>("STRAVA_WEBHOOK_VERIFY_TOKEN")?.trim() ?? "";
     if (!clientId || !clientSecret) return null;
-    return { clientId, clientSecret, webhookVerifyToken: webhookVerifyToken || 'moh-strava-verify' };
+    return {
+      clientId,
+      clientSecret,
+      webhookVerifyToken: webhookVerifyToken || "moh-strava-verify",
+    };
   }
 
   /** Key material for encrypting members' Pickax credentials; null disables the integration. */
   pickaxSecretEncryptionKey(): string | null {
-    const v = this.config.get<string>('PICKAX_SECRET_ENCRYPTION_KEY')?.trim() ?? '';
+    const v =
+      this.config.get<string>("PICKAX_SECRET_ENCRYPTION_KEY")?.trim() ?? "";
     return v.length >= 32 ? v : null;
   }
 
   /** X OAuth app. Null disables the integration. */
   x(): XConfig | null {
-    const clientId = this.config.get<string>('X_CLIENT_ID')?.trim() ?? '';
-    const clientSecret = this.config.get<string>('X_CLIENT_SECRET')?.trim() ?? '';
-    const encryptionKey = this.config.get<string>('X_TOKEN_ENCRYPTION_KEY')?.trim() ?? '';
+    const clientId = this.config.get<string>("X_CLIENT_ID")?.trim() ?? "";
+    const clientSecret =
+      this.config.get<string>("X_CLIENT_SECRET")?.trim() ?? "";
+    const encryptionKey =
+      this.config.get<string>("X_TOKEN_ENCRYPTION_KEY")?.trim() ?? "";
     if (!clientId || !clientSecret || encryptionKey.length < 32) return null;
-    const rawBudget = this.config.get<string | number>('X_MONTHLY_BUDGET_CENTS');
-    const parsed = typeof rawBudget === 'number' ? rawBudget : Number(rawBudget);
-    const monthlyBudgetCents = Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 300;
+    const rawBudget = this.config.get<string | number>(
+      "X_MONTHLY_BUDGET_CENTS",
+    );
+    const parsed =
+      typeof rawBudget === "number" ? rawBudget : Number(rawBudget);
+    const monthlyBudgetCents =
+      Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 300;
     return { clientId, clientSecret, encryptionKey, monthlyBudgetCents };
   }
 
   /** bible.helloao.org translation ID. Defaults to BSB (public domain, modern English). */
   scriptureTranslation(): string {
-    const v = this.config.get<string>('SCRIPTURE_TRANSLATION')?.trim() ?? '';
-    return v || 'BSB';
+    const v = this.config.get<string>("SCRIPTURE_TRANSLATION")?.trim() ?? "";
+    return v || "BSB";
   }
 
   rateLimitTtlSeconds(): number {
-    const raw = this.config.get<string>('RATE_LIMIT_TTL_SECONDS') ?? '';
+    const raw = this.config.get<string>("RATE_LIMIT_TTL_SECONDS") ?? "";
     const n = Number(raw);
     return Number.isFinite(n) && n > 0 ? n : 60;
   }
 
   rateLimitLimit(): number {
-    const raw = this.config.get<string>('RATE_LIMIT_LIMIT') ?? '';
+    const raw = this.config.get<string>("RATE_LIMIT_LIMIT") ?? "";
     const n = Number(raw);
     // Pretty generous default.
     return Number.isFinite(n) && n > 0 ? n : 600;
   }
 
   private readPositiveInt(key: string, fallback: number) {
-    const raw = this.config.get<string>(key) ?? '';
+    const raw = this.config.get<string>(key) ?? "";
     const n = Number(raw);
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
   }
 
   rateLimitAuthStartTtlSeconds(): number {
-    return this.readPositiveInt('RATE_LIMIT_AUTH_START_TTL_SECONDS', 60);
+    return this.readPositiveInt("RATE_LIMIT_AUTH_START_TTL_SECONDS", 60);
   }
   rateLimitAuthStartLimit(): number {
-    return this.readPositiveInt('RATE_LIMIT_AUTH_START_LIMIT', 8);
+    return this.readPositiveInt("RATE_LIMIT_AUTH_START_LIMIT", 8);
   }
 
   rateLimitAuthVerifyTtlSeconds(): number {
-    return this.readPositiveInt('RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS', 60);
+    return this.readPositiveInt("RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS", 60);
   }
   rateLimitAuthVerifyLimit(): number {
-    return this.readPositiveInt('RATE_LIMIT_AUTH_VERIFY_LIMIT', 20);
+    return this.readPositiveInt("RATE_LIMIT_AUTH_VERIFY_LIMIT", 20);
   }
 
   rateLimitPostCreateTtlSeconds(): number {
-    return this.readPositiveInt('RATE_LIMIT_POST_CREATE_TTL_SECONDS', 60);
+    return this.readPositiveInt("RATE_LIMIT_POST_CREATE_TTL_SECONDS", 60);
   }
   rateLimitPostCreateLimit(): number {
-    return this.readPositiveInt('RATE_LIMIT_POST_CREATE_LIMIT', 30);
+    return this.readPositiveInt("RATE_LIMIT_POST_CREATE_LIMIT", 30);
   }
 
   rateLimitInteractTtlSeconds(): number {
-    return this.readPositiveInt('RATE_LIMIT_INTERACT_TTL_SECONDS', 60);
+    return this.readPositiveInt("RATE_LIMIT_INTERACT_TTL_SECONDS", 60);
   }
   rateLimitInteractLimit(): number {
-    return this.readPositiveInt('RATE_LIMIT_INTERACT_LIMIT', 180);
+    return this.readPositiveInt("RATE_LIMIT_INTERACT_LIMIT", 180);
   }
 
   rateLimitUploadTtlSeconds(): number {
-    return this.readPositiveInt('RATE_LIMIT_UPLOAD_TTL_SECONDS', 60);
+    return this.readPositiveInt("RATE_LIMIT_UPLOAD_TTL_SECONDS", 60);
   }
   rateLimitUploadLimit(): number {
-    return this.readPositiveInt('RATE_LIMIT_UPLOAD_LIMIT', 60);
+    return this.readPositiveInt("RATE_LIMIT_UPLOAD_LIMIT", 60);
   }
 
   trustProxy(): boolean {
-    const raw = this.config.get<string>('TRUST_PROXY') ?? '';
+    const raw = this.config.get<string>("TRUST_PROXY") ?? "";
     const v = raw.trim().toLowerCase();
-    return ['1', 'true', 'yes', 'on'].includes(v);
+    return ["1", "true", "yes", "on"].includes(v);
   }
 
   bodyJsonLimit(): string {
-    return (this.config.get<string>('BODY_JSON_LIMIT') ?? '1mb').trim() || '1mb';
+    return (
+      (this.config.get<string>("BODY_JSON_LIMIT") ?? "1mb").trim() || "1mb"
+    );
   }
 
   bodyUrlEncodedLimit(): string {
-    return (this.config.get<string>('BODY_URLENCODED_LIMIT') ?? '25kb').trim() || '25kb';
+    return (
+      (this.config.get<string>("BODY_URLENCODED_LIMIT") ?? "25kb").trim() ||
+      "25kb"
+    );
   }
 
   requireCsrfOriginInProd(): boolean {
-    const raw = this.config.get<string>('REQUIRE_CSRF_ORIGIN_IN_PROD') ?? '';
+    const raw = this.config.get<string>("REQUIRE_CSRF_ORIGIN_IN_PROD") ?? "";
     const v = raw.trim().toLowerCase();
     // default true
     if (!v) return true;
-    return ['1', 'true', 'yes', 'on'].includes(v);
+    return ["1", "true", "yes", "on"].includes(v);
   }
 
   logRequests(): boolean {
     // Only meaningful in non-prod; still allow explicit opt-in elsewhere if needed.
-    const raw = this.config.get<string>('LOG_REQUESTS') ?? '';
+    const raw = this.config.get<string>("LOG_REQUESTS") ?? "";
     const v = raw.trim().toLowerCase();
-    return ['1', 'true', 'yes', 'on'].includes(v);
+    return ["1", "true", "yes", "on"].includes(v);
   }
 
   logStartupInfo(): boolean {
-    const raw = this.config.get<string>('LOG_STARTUP_INFO') ?? '';
+    const raw = this.config.get<string>("LOG_STARTUP_INFO") ?? "";
     const v = raw.trim().toLowerCase();
-    return ['1', 'true', 'yes', 'on'].includes(v);
+    return ["1", "true", "yes", "on"].includes(v);
   }
 
   /** Minutes with no activity ping before marking user idle (show clock). */
   presenceIdleAfterMinutes(): number {
-    return this.readPositiveInt('PRESENCE_IDLE_AFTER_MINUTES', 3);
+    return this.readPositiveInt("PRESENCE_IDLE_AFTER_MINUTES", 3);
   }
 
   /** If user stays idle this many minutes, disconnect them (socket closed, considered offline). */
   presenceIdleDisconnectMinutes(): number {
-    return this.readPositiveInt('PRESENCE_IDLE_DISCONNECT_MINUTES', 15);
+    return this.readPositiveInt("PRESENCE_IDLE_DISCONNECT_MINUTES", 15);
   }
 
   /** Web Push VAPID public key (for browser push subscriptions). Generate: npx web-push generate-vapid-keys */
   vapidPublicKey(): string | null {
-    const v = this.config.get<string>('VAPID_PUBLIC_KEY')?.trim() ?? '';
+    const v = this.config.get<string>("VAPID_PUBLIC_KEY")?.trim() ?? "";
     return v ? v : null;
   }
 
   /** Web Push VAPID private key. Required to send push; if unset, subscriptions are stored but no push is sent. */
   vapidPrivateKey(): string | null {
-    const v = this.config.get<string>('VAPID_PRIVATE_KEY')?.trim() ?? '';
+    const v = this.config.get<string>("VAPID_PRIVATE_KEY")?.trim() ?? "";
     return v ? v : null;
   }
 
@@ -554,12 +696,17 @@ export class AppConfigService {
    * (common in env-var storage) — they are normalized to real newlines here.
    * If any value is missing, APNs is disabled and device tokens are stored but unused.
    */
-  apns(): { keyId: string; teamId: string; privateKey: string; bundleId: string } | null {
-    const keyId = this.config.get<string>('APNS_KEY_ID')?.trim() ?? '';
-    const teamId = this.config.get<string>('APNS_TEAM_ID')?.trim() ?? '';
-    const rawKey = this.config.get<string>('APNS_PRIVATE_KEY') ?? '';
-    const privateKey = rawKey.replace(/\\n/g, '\n').trim();
-    const bundleId = this.config.get<string>('APNS_BUNDLE_ID')?.trim() ?? '';
+  apns(): {
+    keyId: string;
+    teamId: string;
+    privateKey: string;
+    bundleId: string;
+  } | null {
+    const keyId = this.config.get<string>("APNS_KEY_ID")?.trim() ?? "";
+    const teamId = this.config.get<string>("APNS_TEAM_ID")?.trim() ?? "";
+    const rawKey = this.config.get<string>("APNS_PRIVATE_KEY") ?? "";
+    const privateKey = rawKey.replace(/\\n/g, "\n").trim();
+    const bundleId = this.config.get<string>("APNS_BUNDLE_ID")?.trim() ?? "";
     if (!keyId || !teamId || !privateKey || !bundleId) return null;
     return { keyId, teamId, privateKey, bundleId };
   }
@@ -571,7 +718,7 @@ export class AppConfigService {
 
   /** Base URL for push notification click-through (canonical frontend). If unset, first ALLOWED_ORIGINS entry is used. */
   pushFrontendBaseUrl(): string | null {
-    const v = this.config.get<string>('PUSH_FRONTEND_BASE_URL')?.trim() ?? '';
+    const v = this.config.get<string>("PUSH_FRONTEND_BASE_URL")?.trim() ?? "";
     return v ? v : null;
   }
 
@@ -588,55 +735,97 @@ export class AppConfigService {
    * Returns null when any required value is missing (IAP endpoints will reject gracefully).
    */
   appleIap(): AppleIapConfig | null {
-    const bundleId = this.config.get<string>('APPLE_IAP_BUNDLE_ID')?.trim() ?? '';
-    const issuerId = this.config.get<string>('APPLE_IAP_ISSUER_ID')?.trim() ?? '';
-    const keyId = this.config.get<string>('APPLE_IAP_KEY_ID')?.trim() ?? '';
-    const rawKey = this.config.get<string>('APPLE_IAP_PRIVATE_KEY') ?? '';
-    const privateKey = rawKey.replace(/\\n/g, '\n').trim();
-    const productTierMapRaw = this.config.get<string>('APPLE_IAP_PRODUCT_TIER_MAP')?.trim() ?? '';
+    const bundleId =
+      this.config.get<string>("APPLE_IAP_BUNDLE_ID")?.trim() ?? "";
+    const issuerId =
+      this.config.get<string>("APPLE_IAP_ISSUER_ID")?.trim() ?? "";
+    const keyId = this.config.get<string>("APPLE_IAP_KEY_ID")?.trim() ?? "";
+    const rawKey = this.config.get<string>("APPLE_IAP_PRIVATE_KEY") ?? "";
+    const privateKey = rawKey.replace(/\\n/g, "\n").trim();
+    const productTierMapRaw =
+      this.config.get<string>("APPLE_IAP_PRODUCT_TIER_MAP")?.trim() ?? "";
 
     if (!bundleId || !issuerId || !keyId || !privateKey) return null;
 
-    let productTierMap: Record<string, 'premium' | 'premiumPlus'> = {};
+    let productTierMap: Record<string, "premium" | "premiumPlus"> = {};
     if (productTierMapRaw) {
       try {
         productTierMap = JSON.parse(productTierMapRaw);
       } catch {
-        this.logger.warn('APPLE_IAP_PRODUCT_TIER_MAP is not valid JSON; defaulting to empty map.');
+        this.logger.warn(
+          "APPLE_IAP_PRODUCT_TIER_MAP is not valid JSON; defaulting to empty map.",
+        );
       }
     }
 
     const environment =
-      this.config.get<string>('APPLE_IAP_ENVIRONMENT')?.trim() === 'production' ? 'production' : 'sandbox';
-    const appAppleIdRaw = this.config.get<string>('APPLE_IAP_APP_APPLE_ID')?.trim() ?? '';
-    const appAppleId = appAppleIdRaw && /^\d+$/.test(appAppleIdRaw) ? Number(appAppleIdRaw) : null;
+      this.config.get<string>("APPLE_IAP_ENVIRONMENT")?.trim() === "production"
+        ? "production"
+        : "sandbox";
+    const appAppleIdRaw =
+      this.config.get<string>("APPLE_IAP_APP_APPLE_ID")?.trim() ?? "";
+    const appAppleId =
+      appAppleIdRaw && /^\d+$/.test(appAppleIdRaw)
+        ? Number(appAppleIdRaw)
+        : null;
 
-    if (environment === 'production' && appAppleId === null) {
+    if (environment === "production" && appAppleId === null) {
       this.logger.warn(
-        'APPLE_IAP_ENVIRONMENT=production but APPLE_IAP_APP_APPLE_ID is missing; Apple signed-data verification will fail.',
+        "APPLE_IAP_ENVIRONMENT=production but APPLE_IAP_APP_APPLE_ID is missing; Apple signed-data verification will fail.",
       );
     }
 
-    return { bundleId, issuerId, keyId, privateKey, productTierMap, environment, appAppleId };
+    return {
+      bundleId,
+      issuerId,
+      keyId,
+      privateKey,
+      productTierMap,
+      environment,
+      appAppleId,
+    };
   }
 
   stripe(): StripeConfig | null {
-    const secretKey = this.config.get<string>('STRIPE_SECRET_KEY')?.trim() ?? '';
-    const webhookSecret = this.config.get<string>('STRIPE_WEBHOOK_SECRET')?.trim() ?? '';
-    const pricePremiumMonthly = this.config.get<string>('STRIPE_PRICE_PREMIUM_MONTHLY')?.trim() ?? '';
-    const pricePremiumPlusMonthly = this.config.get<string>('STRIPE_PRICE_PREMIUM_PLUS_MONTHLY')?.trim() ?? '';
-    const frontendBaseUrl = this.frontendBaseUrl()?.trim() ?? '';
+    const secretKey =
+      this.config.get<string>("STRIPE_SECRET_KEY")?.trim() ?? "";
+    const webhookSecret =
+      this.config.get<string>("STRIPE_WEBHOOK_SECRET")?.trim() ?? "";
+    const pricePremiumMonthly =
+      this.config.get<string>("STRIPE_PRICE_PREMIUM_MONTHLY")?.trim() ?? "";
+    const pricePremiumPlusMonthly =
+      this.config.get<string>("STRIPE_PRICE_PREMIUM_PLUS_MONTHLY")?.trim() ??
+      "";
+    const frontendBaseUrl = this.frontendBaseUrl()?.trim() ?? "";
 
-    if (!secretKey || !webhookSecret || !pricePremiumMonthly || !pricePremiumPlusMonthly || !frontendBaseUrl) return null;
-    return { secretKey, webhookSecret, pricePremiumMonthly, pricePremiumPlusMonthly, frontendBaseUrl };
+    if (
+      !secretKey ||
+      !webhookSecret ||
+      !pricePremiumMonthly ||
+      !pricePremiumPlusMonthly ||
+      !frontendBaseUrl
+    )
+      return null;
+    return {
+      secretKey,
+      webhookSecret,
+      pricePremiumMonthly,
+      pricePremiumPlusMonthly,
+      frontendBaseUrl,
+    };
   }
 
   email(): EmailConfig | null {
-    const resendApiKey = this.config.get<string>('RESEND_API_KEY')?.trim() ?? '';
-    const resendFromDefault = this.config.get<string>('RESEND_FROM_EMAIL')?.trim() ?? '';
-    const resendFromNotifications = this.config.get<string>('RESEND_FROM_NOTIFICATIONS_EMAIL')?.trim() ?? '';
-    const resendFromSupport = this.config.get<string>('RESEND_FROM_SUPPORT_EMAIL')?.trim() ?? '';
-    const resendFromNewsletter = this.config.get<string>('RESEND_FROM_NEWSLETTER_EMAIL')?.trim() ?? '';
+    const resendApiKey =
+      this.config.get<string>("RESEND_API_KEY")?.trim() ?? "";
+    const resendFromDefault =
+      this.config.get<string>("RESEND_FROM_EMAIL")?.trim() ?? "";
+    const resendFromNotifications =
+      this.config.get<string>("RESEND_FROM_NOTIFICATIONS_EMAIL")?.trim() ?? "";
+    const resendFromSupport =
+      this.config.get<string>("RESEND_FROM_SUPPORT_EMAIL")?.trim() ?? "";
+    const resendFromNewsletter =
+      this.config.get<string>("RESEND_FROM_NEWSLETTER_EMAIL")?.trim() ?? "";
 
     const fallback = resendFromDefault;
     const notifications = resendFromNotifications || fallback;
@@ -646,13 +835,22 @@ export class AppConfigService {
 
     if (resendApiKey && effectiveDefault) {
       return {
-        provider: 'resend',
+        provider: "resend",
         apiKey: resendApiKey,
         fromEmail: {
-          default: withDisplayName(effectiveDefault, 'Men of Hunger'),
-          notifications: withDisplayName(notifications || effectiveDefault, 'Men of Hunger'),
-          support: withDisplayName(support || effectiveDefault, 'Men of Hunger'),
-          newsletter: withDisplayName(newsletter || effectiveDefault, 'Men of Hunger'),
+          default: withDisplayName(effectiveDefault, "Men of Hunger"),
+          notifications: withDisplayName(
+            notifications || effectiveDefault,
+            "Men of Hunger",
+          ),
+          support: withDisplayName(
+            support || effectiveDefault,
+            "Men of Hunger",
+          ),
+          newsletter: withDisplayName(
+            newsletter || effectiveDefault,
+            "Men of Hunger",
+          ),
         },
       };
     }
@@ -664,7 +862,7 @@ export class AppConfigService {
    * Matches the Resend free-tier hard limit (100). Raise when upgrading plans.
    */
   emailDailyQuotaLimit(): number {
-    const raw = this.config.get<string>('EMAIL_DAILY_QUOTA_LIMIT') ?? '';
+    const raw = this.config.get<string>("EMAIL_DAILY_QUOTA_LIMIT") ?? "";
     const n = Number(raw.trim());
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : 100;
   }
@@ -674,7 +872,8 @@ export class AppConfigService {
    * Engagement sends are blocked once (quotaLimit - reserve) is reached.
    */
   emailDailyVerificationReserve(): number {
-    const raw = this.config.get<string>('EMAIL_DAILY_VERIFICATION_RESERVE') ?? '';
+    const raw =
+      this.config.get<string>("EMAIL_DAILY_VERIFICATION_RESERVE") ?? "";
     const n = Number(raw.trim());
     return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 15;
   }
@@ -685,86 +884,129 @@ export class AppConfigService {
    * Disable on the Resend free tier; enable after upgrading.
    */
   emailFollowedArticleEnabled(): boolean {
-    return this.readBool('EMAIL_FOLLOWED_ARTICLE_ENABLED', false);
+    return this.readBool("EMAIL_FOLLOWED_ARTICLE_ENABLED", false);
   }
 
   /** Daily cap for admin newsletter blasts. Independent of engagement/transactional quota. */
   emailBroadcastDailyQuota(): number {
-    const raw = this.config.get<string>('EMAIL_BROADCAST_DAILY_QUOTA') ?? '';
+    const raw = this.config.get<string>("EMAIL_BROADCAST_DAILY_QUOTA") ?? "";
     const n = Number(raw.trim());
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5000;
   }
 
   /** Physical mailing address required in newsletter footers (CAN-SPAM). */
   newsletterPostalAddress(): string | null {
-    const v = this.config.get<string>('NEWSLETTER_POSTAL_ADDRESS')?.trim() ?? '';
+    const v =
+      this.config.get<string>("NEWSLETTER_POSTAL_ADDRESS")?.trim() ?? "";
     return v ? v : null;
   }
 
   slackWebhookUrl(): string | null {
-    const v = this.config.get<string>('SLACK_WEBHOOK_URL')?.trim() ?? '';
+    const v = this.config.get<string>("SLACK_WEBHOOK_URL")?.trim() ?? "";
     return v ? v : null;
   }
 
   posthogApiKey(): string | null {
-    const v = this.config.get<string>('POSTHOG_API_KEY')?.trim() ?? '';
+    const v = this.config.get<string>("POSTHOG_API_KEY")?.trim() ?? "";
     return v ? v : null;
   }
 
   posthogHost(): string {
-    return (this.config.get<string>('POSTHOG_HOST')?.trim() || 'https://us.i.posthog.com').trim();
+    return (
+      this.config.get<string>("POSTHOG_HOST")?.trim() ||
+      "https://us.i.posthog.com"
+    ).trim();
   }
 
   /** PostHog "Feature flags secure API key" (phs_…); enables local flag evaluation. */
   posthogFeatureFlagsKey(): string | null {
-    const v = this.config.get<string>('POSTHOG_FEATURE_FLAGS_KEY')?.trim() ?? '';
+    const v =
+      this.config.get<string>("POSTHOG_FEATURE_FLAGS_KEY")?.trim() ?? "";
     return v ? v : null;
   }
 
   // ─── Marv (AI helper) ────────────────────────────────────────────────────
 
   marvBot(): MarvBotConfig {
-    const enabled = this.readBool('MARV_ENABLED', true);
-    const userId = this.config.get<string>('MARV_USER_ID')?.trim() || null;
-    const username = this.config.get<string>('MARV_USERNAME')?.trim() || 'marv';
-    const displayName = this.config.get<string>('MARV_DISPLAY_NAME')?.trim() || 'Marv';
+    const enabled = this.readBool("MARV_ENABLED", true);
+    const userId = this.config.get<string>("MARV_USER_ID")?.trim() || null;
+    const username = this.config.get<string>("MARV_USERNAME")?.trim() || "marv";
+    const displayName =
+      this.config.get<string>("MARV_DISPLAY_NAME")?.trim() || "Marv";
     const bio =
-      this.config.get<string>('MARV_BIO')?.trim() ||
-      'AI helper for Men of Hunger. Brief. Bible-conscious. Mention me to ask.';
-    const phone = this.config.get<string>('MARV_PHONE')?.trim() || '+10000000001';
+      this.config.get<string>("MARV_BIO")?.trim() ||
+      "AI helper for Men of Hunger. Brief. Bible-conscious. Mention me to ask.";
+    const phone =
+      this.config.get<string>("MARV_PHONE")?.trim() || "+10000000001";
     return { enabled, userId, username, displayName, bio, phone };
   }
 
   marvOpenAI(): MarvOpenAIConfig {
-    const apiKey = this.config.get<string>('OPENAI_API_KEY')?.trim() ?? '';
-    const fastModel = this.config.get<string>('OPENAI_MARV_FAST_MODEL')?.trim() || MARV_DEFAULT_FAST_MODEL;
-    const regularModel = this.config.get<string>('OPENAI_MARV_REGULAR_MODEL')?.trim() || MARV_DEFAULT_REGULAR_MODEL;
-    const smartModel = this.config.get<string>('OPENAI_MARV_SMART_MODEL')?.trim() || MARV_DEFAULT_SMART_MODEL;
-    const astraModel = this.config.get<string>('OPENAI_ADMIN_ASTRA_MODEL')?.trim() || MARV_DEFAULT_ASTRA_MODEL;
+    const apiKey = this.config.get<string>("OPENAI_API_KEY")?.trim() ?? "";
+    const fastModel =
+      this.config.get<string>("OPENAI_MARV_FAST_MODEL")?.trim() ||
+      MARV_DEFAULT_FAST_MODEL;
+    const regularModel =
+      this.config.get<string>("OPENAI_MARV_REGULAR_MODEL")?.trim() ||
+      MARV_DEFAULT_REGULAR_MODEL;
+    const smartModel =
+      this.config.get<string>("OPENAI_MARV_SMART_MODEL")?.trim() ||
+      MARV_DEFAULT_SMART_MODEL;
+    const astraModel =
+      this.config.get<string>("OPENAI_ADMIN_ASTRA_MODEL")?.trim() ||
+      MARV_DEFAULT_ASTRA_MODEL;
     // Web search is ON by default. Set MARV_WEB_SEARCH_ENABLED=false to disable.
-    const webSearchEnabled = this.readBool('MARV_WEB_SEARCH_ENABLED', true);
+    const webSearchEnabled = this.readBool("MARV_WEB_SEARCH_ENABLED", true);
     // Comma-separated list of modes that may use web search. Defaults to regular,smart only —
     // fast (gpt-5.6-luna) plus our 4k output cap often burns the budget on search processing,
     // and the $0.03 search fee dwarfs a Luna turn.
-    const webSearchModesRaw = this.config.get<string>('MARV_WEB_SEARCH_MODES')?.trim() || 'regular,smart';
-    const webSearchModes = webSearchModesRaw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const webSearchModesRaw =
+      this.config.get<string>("MARV_WEB_SEARCH_MODES")?.trim() ||
+      "regular,smart";
+    const webSearchModes = webSearchModesRaw
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
     // When web search is active, use a larger output-token budget so the model has room to
     // both process search results AND write a reply. Default 4096; tune with MARV_WEB_SEARCH_MAX_OUTPUT_TOKENS.
-    const webSearchMaxOutputTokens = this.readPositiveInt('MARV_WEB_SEARCH_MAX_OUTPUT_TOKENS', 4096);
+    const webSearchMaxOutputTokens = this.readPositiveInt(
+      "MARV_WEB_SEARCH_MAX_OUTPUT_TOKENS",
+      4096,
+    );
     // Vision is ON by default. Set MARV_VISION_ENABLED=false to disable.
-    const visionEnabled = this.readBool('MARV_VISION_ENABLED', true);
+    const visionEnabled = this.readBool("MARV_VISION_ENABLED", true);
     // All three model tiers support image inputs. Previously only regular,smart was default,
     // which meant auto-routed queries landing on fast would silently drop images and Marv
     // would claim he can't see them. fast (gpt-5.6-luna) handles vision fine; the token-budget
     // concern only applies to web search (see webSearchModes).
-    const visionModesRaw = this.config.get<string>('MARV_VISION_MODES')?.trim() || 'fast,regular,smart';
-    const visionModes = visionModesRaw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const visionModesRaw =
+      this.config.get<string>("MARV_VISION_MODES")?.trim() ||
+      "fast,regular,smart";
+    const visionModes = visionModesRaw
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
     // Per-turn image budget. Catch-me-up and mentions include EVERY image in the conversation
     // (multiple per post, throughout the thread) up to this cap. Each attached image bills the
     // per-image vision surcharge, so cost scales with count — raise via env if a deployment
     // wants even more. 16 covers a long image-bearing thread; extras still bill per image.
-    const visionMaxImagesPerTurn = this.readPositiveInt('MARV_VISION_MAX_IMAGES_PER_TURN', 16);
-    return { apiKey, fastModel, regularModel, smartModel, astraModel, webSearchEnabled, webSearchModes, webSearchMaxOutputTokens, visionEnabled, visionModes, visionMaxImagesPerTurn };
+    const visionMaxImagesPerTurn = this.readPositiveInt(
+      "MARV_VISION_MAX_IMAGES_PER_TURN",
+      16,
+    );
+    return {
+      apiKey,
+      fastModel,
+      regularModel,
+      smartModel,
+      astraModel,
+      webSearchEnabled,
+      webSearchModes,
+      webSearchMaxOutputTokens,
+      visionEnabled,
+      visionModes,
+      visionMaxImagesPerTurn,
+    };
   }
 
   marvCredits(): MarvCreditConfig {
@@ -772,29 +1014,41 @@ export class AppConfigService {
     // companion — high margin on the subscription, honest relative prices on usage.
     // Existing balances above the new cap clip on the next refill.
     return {
-      monthlyCredits: this.readPositiveInt('MARV_MONTHLY_CREDITS', 600),
-      maxCredits: this.readPositiveInt('MARV_MAX_CREDITS', 600),
-      creditsPerDay: this.readPositiveInt('MARV_CREDITS_PER_DAY', 20),
-      fastCost: this.readPositiveInt('MARV_FAST_COST', 1),
-      regularCost: this.readPositiveInt('MARV_REGULAR_COST', 2),
+      monthlyCredits: this.readPositiveInt("MARV_MONTHLY_CREDITS", 600),
+      maxCredits: this.readPositiveInt("MARV_MAX_CREDITS", 600),
+      creditsPerDay: this.readPositiveInt("MARV_CREDITS_PER_DAY", 20),
+      fastCost: this.readPositiveInt("MARV_FAST_COST", 1),
+      regularCost: this.readPositiveInt("MARV_REGULAR_COST", 2),
       // Smart (gpt-5.6-sol, ~$0.016/req) vs regular (gpt-5.6-terra, ~$0.009/req)
       // at ~2k in / 400 out. Credit ladder stays 1/2/5 — a gentler throttle than
       // the ~1:10:20 API-price ratio, so Smart stays usable.
-      smartCost: this.readPositiveInt('MARV_SMART_COST', 5),
+      smartCost: this.readPositiveInt("MARV_SMART_COST", 5),
       // Web search is the expensive API (~$0.03/call). Same weight as a Smart turn.
-      webSearchCreditCost: this.readPositiveInt('MARV_WEB_SEARCH_CREDIT_COST', 5),
+      webSearchCreditCost: this.readPositiveInt(
+        "MARV_WEB_SEARCH_CREDIT_COST",
+        5,
+      ),
       // Vision is cheap (~$0.002/image). One photo should not cost a full reply.
-      visionCreditCostPerImage: this.readPositiveInt('MARV_VISION_CREDIT_COST_PER_IMAGE', 1),
+      visionCreditCostPerImage: this.readPositiveInt(
+        "MARV_VISION_CREDIT_COST_PER_IMAGE",
+        1,
+      ),
       // Extra credits per URL fetched via Jina Reader. Jina's public endpoint is free-tier,
       // so 1 credit per fetch keeps it cheap while still accounting for the network overhead.
-      urlFetchCreditCost: this.readPositiveInt('MARV_URL_FETCH_CREDIT_COST', 1),
+      urlFetchCreditCost: this.readPositiveInt("MARV_URL_FETCH_CREDIT_COST", 1),
     };
   }
 
   marvLimits(): MarvLimitsConfig {
     return {
-      publicMaxInputTokens: this.readPositiveInt('MARV_PUBLIC_MAX_INPUT_TOKENS', 8000),
-      privateMaxInputTokens: this.readPositiveInt('MARV_PRIVATE_MAX_INPUT_TOKENS', 4000),
+      publicMaxInputTokens: this.readPositiveInt(
+        "MARV_PUBLIC_MAX_INPUT_TOKENS",
+        8000,
+      ),
+      privateMaxInputTokens: this.readPositiveInt(
+        "MARV_PRIVATE_MAX_INPUT_TOKENS",
+        4000,
+      ),
       // Cap, not a target — billed tokens follow what the model actually emits.
       // GPT-5.6 Luna/Terra/Sol all allow 128K output; this is a cost/latency cap,
       // not the model limit. Reasoning + tool-call JSON burn this before visible
@@ -802,14 +1056,32 @@ export class AppConfigService {
       // which surfaced as the canned "something went sideways" reply. 4096 leaves
       // room for a few tool rounds; the 80-word prompt still keeps the visible
       // reply short. Override with MARV_MAX_OUTPUT_TOKENS in .env.
-      maxOutputTokens: this.readPositiveInt('MARV_MAX_OUTPUT_TOKENS', 4096),
-      publicMaxPerUserPerHour: this.readPositiveInt('MARV_PUBLIC_MAX_PER_USER_PER_HOUR', 10),
-      publicMaxPerUserPerDay: this.readPositiveInt('MARV_PUBLIC_MAX_PER_USER_PER_DAY', 30),
-      publicThreadBurstLimit: this.readPositiveInt('MARV_PUBLIC_THREAD_BURST_LIMIT', 3),
-      publicThreadBurstWindowSeconds: this.readPositiveInt('MARV_PUBLIC_THREAD_BURST_WINDOW_SECONDS', 60),
-      privateMaxPerUserPerDay: this.readPositiveInt('MARV_PRIVATE_MAX_PER_USER_PER_DAY', 60),
-      privateMaxPer10Minutes: this.readPositiveInt('MARV_PRIVATE_MAX_PER_10_MIN', 10),
-      queueConcurrency: this.readPositiveInt('MARV_QUEUE_CONCURRENCY', 8),
+      maxOutputTokens: this.readPositiveInt("MARV_MAX_OUTPUT_TOKENS", 4096),
+      publicMaxPerUserPerHour: this.readPositiveInt(
+        "MARV_PUBLIC_MAX_PER_USER_PER_HOUR",
+        10,
+      ),
+      publicMaxPerUserPerDay: this.readPositiveInt(
+        "MARV_PUBLIC_MAX_PER_USER_PER_DAY",
+        30,
+      ),
+      publicThreadBurstLimit: this.readPositiveInt(
+        "MARV_PUBLIC_THREAD_BURST_LIMIT",
+        3,
+      ),
+      publicThreadBurstWindowSeconds: this.readPositiveInt(
+        "MARV_PUBLIC_THREAD_BURST_WINDOW_SECONDS",
+        60,
+      ),
+      privateMaxPerUserPerDay: this.readPositiveInt(
+        "MARV_PRIVATE_MAX_PER_USER_PER_DAY",
+        60,
+      ),
+      privateMaxPer10Minutes: this.readPositiveInt(
+        "MARV_PRIVATE_MAX_PER_10_MIN",
+        10,
+      ),
+      queueConcurrency: this.readPositiveInt("MARV_QUEUE_CONCURRENCY", 8),
     };
   }
 
@@ -821,8 +1093,8 @@ export class AppConfigService {
    */
   secTickersIngestUrl(): string {
     return (
-      this.config.get<string>('SEC_TICKERS_URL')?.trim() ||
-      'https://www.sec.gov/files/company_tickers.json'
+      this.config.get<string>("SEC_TICKERS_URL")?.trim() ||
+      "https://www.sec.gov/files/company_tickers.json"
     ).trim();
   }
 
@@ -833,72 +1105,126 @@ export class AppConfigService {
    */
   secTickersUserAgent(): string {
     return (
-      this.config.get<string>('SEC_TICKERS_USER_AGENT')?.trim() ||
-      'MenOfHunger/1.0 (contact@menofhunger.com)'
+      this.config.get<string>("SEC_TICKERS_USER_AGENT")?.trim() ||
+      "MenOfHunger/1.0 (contact@menofhunger.com)"
     ).trim();
   }
 
   // Optional: typed access to full validated env object if needed later.
   envSnapshot(): Partial<Env> {
     return {
-      NODE_ENV: this.config.get<string>('NODE_ENV') as Env['NODE_ENV'],
-      PORT: this.config.get<string>('PORT') as Env['PORT'],
-      DATABASE_URL: this.config.get<string>('DATABASE_URL') as Env['DATABASE_URL'],
-      ALLOWED_ORIGINS: this.config.get<string>('ALLOWED_ORIGINS') as Env['ALLOWED_ORIGINS'],
-      COOKIE_DOMAIN: this.config.get<string>('COOKIE_DOMAIN') as Env['COOKIE_DOMAIN'],
-      DISABLE_TWILIO_IN_DEV: this.config.get<string>('DISABLE_TWILIO_IN_DEV') as Env['DISABLE_TWILIO_IN_DEV'],
-      TWILIO_ACCOUNT_SID: this.config.get<string>('TWILIO_ACCOUNT_SID') as Env['TWILIO_ACCOUNT_SID'],
-      TWILIO_AUTH_TOKEN: this.config.get<string>('TWILIO_AUTH_TOKEN') as Env['TWILIO_AUTH_TOKEN'],
-      TWILIO_VERIFY_SERVICE_SID: this.config.get<string>('TWILIO_VERIFY_SERVICE_SID') as Env['TWILIO_VERIFY_SERVICE_SID'],
-      R2_ACCOUNT_ID: this.config.get<string>('R2_ACCOUNT_ID') as Env['R2_ACCOUNT_ID'],
-      R2_ACCESS_KEY_ID: this.config.get<string>('R2_ACCESS_KEY_ID') as Env['R2_ACCESS_KEY_ID'],
-      R2_SECRET_ACCESS_KEY: this.config.get<string>('R2_SECRET_ACCESS_KEY') as Env['R2_SECRET_ACCESS_KEY'],
-      R2_BUCKET: this.config.get<string>('R2_BUCKET') as Env['R2_BUCKET'],
-      R2_PUBLIC_BASE_URL: this.config.get<string>('R2_PUBLIC_BASE_URL') as Env['R2_PUBLIC_BASE_URL'],
-      GIPHY_API_KEY: this.config.get<string>('GIPHY_API_KEY') as Env['GIPHY_API_KEY'],
-      RATE_LIMIT_TTL_SECONDS: this.config.get<string>('RATE_LIMIT_TTL_SECONDS') as Env['RATE_LIMIT_TTL_SECONDS'],
-      RATE_LIMIT_LIMIT: this.config.get<string>('RATE_LIMIT_LIMIT') as Env['RATE_LIMIT_LIMIT'],
+      NODE_ENV: this.config.get<string>("NODE_ENV") as Env["NODE_ENV"],
+      PORT: this.config.get<string>("PORT") as Env["PORT"],
+      DATABASE_URL: this.config.get<string>(
+        "DATABASE_URL",
+      ) as Env["DATABASE_URL"],
+      ALLOWED_ORIGINS: this.config.get<string>(
+        "ALLOWED_ORIGINS",
+      ) as Env["ALLOWED_ORIGINS"],
+      COOKIE_DOMAIN: this.config.get<string>(
+        "COOKIE_DOMAIN",
+      ) as Env["COOKIE_DOMAIN"],
+      DISABLE_TWILIO_IN_DEV: this.config.get<string>(
+        "DISABLE_TWILIO_IN_DEV",
+      ) as Env["DISABLE_TWILIO_IN_DEV"],
+      TWILIO_ACCOUNT_SID: this.config.get<string>(
+        "TWILIO_ACCOUNT_SID",
+      ) as Env["TWILIO_ACCOUNT_SID"],
+      TWILIO_AUTH_TOKEN: this.config.get<string>(
+        "TWILIO_AUTH_TOKEN",
+      ) as Env["TWILIO_AUTH_TOKEN"],
+      TWILIO_VERIFY_SERVICE_SID: this.config.get<string>(
+        "TWILIO_VERIFY_SERVICE_SID",
+      ) as Env["TWILIO_VERIFY_SERVICE_SID"],
+      R2_ACCOUNT_ID: this.config.get<string>(
+        "R2_ACCOUNT_ID",
+      ) as Env["R2_ACCOUNT_ID"],
+      R2_ACCESS_KEY_ID: this.config.get<string>(
+        "R2_ACCESS_KEY_ID",
+      ) as Env["R2_ACCESS_KEY_ID"],
+      R2_SECRET_ACCESS_KEY: this.config.get<string>(
+        "R2_SECRET_ACCESS_KEY",
+      ) as Env["R2_SECRET_ACCESS_KEY"],
+      R2_BUCKET: this.config.get<string>("R2_BUCKET") as Env["R2_BUCKET"],
+      R2_PUBLIC_BASE_URL: this.config.get<string>(
+        "R2_PUBLIC_BASE_URL",
+      ) as Env["R2_PUBLIC_BASE_URL"],
+      GIPHY_API_KEY: this.config.get<string>(
+        "GIPHY_API_KEY",
+      ) as Env["GIPHY_API_KEY"],
+      RATE_LIMIT_TTL_SECONDS: this.config.get<string>(
+        "RATE_LIMIT_TTL_SECONDS",
+      ) as Env["RATE_LIMIT_TTL_SECONDS"],
+      RATE_LIMIT_LIMIT: this.config.get<string>(
+        "RATE_LIMIT_LIMIT",
+      ) as Env["RATE_LIMIT_LIMIT"],
       RATE_LIMIT_AUTH_START_TTL_SECONDS: this.config.get<string>(
-        'RATE_LIMIT_AUTH_START_TTL_SECONDS',
-      ) as Env['RATE_LIMIT_AUTH_START_TTL_SECONDS'],
-      RATE_LIMIT_AUTH_START_LIMIT: this.config.get<string>('RATE_LIMIT_AUTH_START_LIMIT') as Env['RATE_LIMIT_AUTH_START_LIMIT'],
+        "RATE_LIMIT_AUTH_START_TTL_SECONDS",
+      ) as Env["RATE_LIMIT_AUTH_START_TTL_SECONDS"],
+      RATE_LIMIT_AUTH_START_LIMIT: this.config.get<string>(
+        "RATE_LIMIT_AUTH_START_LIMIT",
+      ) as Env["RATE_LIMIT_AUTH_START_LIMIT"],
       RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS: this.config.get<string>(
-        'RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS',
-      ) as Env['RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS'],
-      RATE_LIMIT_AUTH_VERIFY_LIMIT: this.config.get<string>('RATE_LIMIT_AUTH_VERIFY_LIMIT') as Env['RATE_LIMIT_AUTH_VERIFY_LIMIT'],
+        "RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS",
+      ) as Env["RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS"],
+      RATE_LIMIT_AUTH_VERIFY_LIMIT: this.config.get<string>(
+        "RATE_LIMIT_AUTH_VERIFY_LIMIT",
+      ) as Env["RATE_LIMIT_AUTH_VERIFY_LIMIT"],
       RATE_LIMIT_POST_CREATE_TTL_SECONDS: this.config.get<string>(
-        'RATE_LIMIT_POST_CREATE_TTL_SECONDS',
-      ) as Env['RATE_LIMIT_POST_CREATE_TTL_SECONDS'],
+        "RATE_LIMIT_POST_CREATE_TTL_SECONDS",
+      ) as Env["RATE_LIMIT_POST_CREATE_TTL_SECONDS"],
       RATE_LIMIT_POST_CREATE_LIMIT: this.config.get<string>(
-        'RATE_LIMIT_POST_CREATE_LIMIT',
-      ) as Env['RATE_LIMIT_POST_CREATE_LIMIT'],
+        "RATE_LIMIT_POST_CREATE_LIMIT",
+      ) as Env["RATE_LIMIT_POST_CREATE_LIMIT"],
       RATE_LIMIT_INTERACT_TTL_SECONDS: this.config.get<string>(
-        'RATE_LIMIT_INTERACT_TTL_SECONDS',
-      ) as Env['RATE_LIMIT_INTERACT_TTL_SECONDS'],
-      RATE_LIMIT_INTERACT_LIMIT: this.config.get<string>('RATE_LIMIT_INTERACT_LIMIT') as Env['RATE_LIMIT_INTERACT_LIMIT'],
-      RATE_LIMIT_UPLOAD_TTL_SECONDS: this.config.get<string>('RATE_LIMIT_UPLOAD_TTL_SECONDS') as Env['RATE_LIMIT_UPLOAD_TTL_SECONDS'],
-      RATE_LIMIT_UPLOAD_LIMIT: this.config.get<string>('RATE_LIMIT_UPLOAD_LIMIT') as Env['RATE_LIMIT_UPLOAD_LIMIT'],
-      TRUST_PROXY: this.config.get<string>('TRUST_PROXY') as Env['TRUST_PROXY'],
-      BODY_JSON_LIMIT: this.config.get<string>('BODY_JSON_LIMIT') as Env['BODY_JSON_LIMIT'],
-      BODY_URLENCODED_LIMIT: this.config.get<string>('BODY_URLENCODED_LIMIT') as Env['BODY_URLENCODED_LIMIT'],
+        "RATE_LIMIT_INTERACT_TTL_SECONDS",
+      ) as Env["RATE_LIMIT_INTERACT_TTL_SECONDS"],
+      RATE_LIMIT_INTERACT_LIMIT: this.config.get<string>(
+        "RATE_LIMIT_INTERACT_LIMIT",
+      ) as Env["RATE_LIMIT_INTERACT_LIMIT"],
+      RATE_LIMIT_UPLOAD_TTL_SECONDS: this.config.get<string>(
+        "RATE_LIMIT_UPLOAD_TTL_SECONDS",
+      ) as Env["RATE_LIMIT_UPLOAD_TTL_SECONDS"],
+      RATE_LIMIT_UPLOAD_LIMIT: this.config.get<string>(
+        "RATE_LIMIT_UPLOAD_LIMIT",
+      ) as Env["RATE_LIMIT_UPLOAD_LIMIT"],
+      TRUST_PROXY: this.config.get<string>("TRUST_PROXY") as Env["TRUST_PROXY"],
+      BODY_JSON_LIMIT: this.config.get<string>(
+        "BODY_JSON_LIMIT",
+      ) as Env["BODY_JSON_LIMIT"],
+      BODY_URLENCODED_LIMIT: this.config.get<string>(
+        "BODY_URLENCODED_LIMIT",
+      ) as Env["BODY_URLENCODED_LIMIT"],
       REQUIRE_CSRF_ORIGIN_IN_PROD: this.config.get<string>(
-        'REQUIRE_CSRF_ORIGIN_IN_PROD',
-      ) as Env['REQUIRE_CSRF_ORIGIN_IN_PROD'],
-      STRIPE_SECRET_KEY: this.config.get<string>('STRIPE_SECRET_KEY') as Env['STRIPE_SECRET_KEY'],
-      STRIPE_WEBHOOK_SECRET: this.config.get<string>('STRIPE_WEBHOOK_SECRET') as Env['STRIPE_WEBHOOK_SECRET'],
-      STRIPE_PRICE_PREMIUM_MONTHLY: this.config.get<string>('STRIPE_PRICE_PREMIUM_MONTHLY') as Env['STRIPE_PRICE_PREMIUM_MONTHLY'],
+        "REQUIRE_CSRF_ORIGIN_IN_PROD",
+      ) as Env["REQUIRE_CSRF_ORIGIN_IN_PROD"],
+      STRIPE_SECRET_KEY: this.config.get<string>(
+        "STRIPE_SECRET_KEY",
+      ) as Env["STRIPE_SECRET_KEY"],
+      STRIPE_WEBHOOK_SECRET: this.config.get<string>(
+        "STRIPE_WEBHOOK_SECRET",
+      ) as Env["STRIPE_WEBHOOK_SECRET"],
+      STRIPE_PRICE_PREMIUM_MONTHLY: this.config.get<string>(
+        "STRIPE_PRICE_PREMIUM_MONTHLY",
+      ) as Env["STRIPE_PRICE_PREMIUM_MONTHLY"],
       STRIPE_PRICE_PREMIUM_PLUS_MONTHLY: this.config.get<string>(
-        'STRIPE_PRICE_PREMIUM_PLUS_MONTHLY',
-      ) as Env['STRIPE_PRICE_PREMIUM_PLUS_MONTHLY'],
-      RESEND_API_KEY: this.config.get<string>('RESEND_API_KEY') as Env['RESEND_API_KEY'],
-      RESEND_FROM_EMAIL: this.config.get<string>('RESEND_FROM_EMAIL') as Env['RESEND_FROM_EMAIL'],
+        "STRIPE_PRICE_PREMIUM_PLUS_MONTHLY",
+      ) as Env["STRIPE_PRICE_PREMIUM_PLUS_MONTHLY"],
+      RESEND_API_KEY: this.config.get<string>(
+        "RESEND_API_KEY",
+      ) as Env["RESEND_API_KEY"],
+      RESEND_FROM_EMAIL: this.config.get<string>(
+        "RESEND_FROM_EMAIL",
+      ) as Env["RESEND_FROM_EMAIL"],
       RESEND_FROM_NOTIFICATIONS_EMAIL: this.config.get<string>(
-        'RESEND_FROM_NOTIFICATIONS_EMAIL',
-      ) as Env['RESEND_FROM_NOTIFICATIONS_EMAIL'],
-      RESEND_FROM_SUPPORT_EMAIL: this.config.get<string>('RESEND_FROM_SUPPORT_EMAIL') as Env['RESEND_FROM_SUPPORT_EMAIL'],
+        "RESEND_FROM_NOTIFICATIONS_EMAIL",
+      ) as Env["RESEND_FROM_NOTIFICATIONS_EMAIL"],
+      RESEND_FROM_SUPPORT_EMAIL: this.config.get<string>(
+        "RESEND_FROM_SUPPORT_EMAIL",
+      ) as Env["RESEND_FROM_SUPPORT_EMAIL"],
       RESEND_FROM_NEWSLETTER_EMAIL: this.config.get<string>(
-        'RESEND_FROM_NEWSLETTER_EMAIL',
-      ) as Env['RESEND_FROM_NEWSLETTER_EMAIL'],
+        "RESEND_FROM_NEWSLETTER_EMAIL",
+      ) as Env["RESEND_FROM_NEWSLETTER_EMAIL"],
     };
   }
 }

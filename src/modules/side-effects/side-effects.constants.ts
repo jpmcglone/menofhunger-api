@@ -1,4 +1,4 @@
-import type { NotificationKind, PostVisibility } from '@prisma/client';
+import type { NotificationKind, PostVisibility } from "@prisma/client";
 
 /**
  * Dedicated BullMQ queue for post-commit side effects (notifications, push, fan-out).
@@ -8,7 +8,7 @@ import type { NotificationKind, PostVisibility } from '@prisma/client';
  * multi-minute hashtag-cleanup or weekly-digest sweep. Concurrency is tuned independently
  * via `SIDE_EFFECTS_QUEUE_CONCURRENCY` (default 12).
  */
-export const MOH_SIDE_EFFECTS_QUEUE = 'moh_side_effects';
+export const MOH_SIDE_EFFECTS_QUEUE = "moh_side_effects";
 
 /**
  * Every side effect the app can dispatch, mapped to its payload shape.
@@ -23,35 +23,37 @@ export const MOH_SIDE_EFFECTS_QUEUE = 'moh_side_effects';
  * or switch statement to update.
  */
 export interface SideEffectPayloads {
-  'outbound.deliver': { deliveryId: string };
-  'partner.webhook.deliver': { deliveryId: string };
+  "integrations.monitor": Record<string, never>;
+  "x.news.refresh": { slot: string };
+  "outbound.deliver": { deliveryId: string };
+  "partner.webhook.deliver": { deliveryId: string };
   // ─── Presence ─────────────────────────────────────────────────────────
   /** Someone just came online: tell followers who are online too (throttled, in-app only). */
-  'presence.followed-online': {
+  "presence.followed-online": {
     userId: string;
   };
   /** Send one viewer the follow-online pings that waited out their 5-minute quiet window. */
-  'presence.followed-online.flush': {
+  "presence.followed-online.flush": {
     viewerUserId: string;
   };
 
   // ─── Posts ────────────────────────────────────────────────────────────
-  'post.created': {
+  "post.created": {
     postId: string;
     actorUserId: string;
     didAwardStreak: boolean;
-    requestedMarvMode: 'fast' | 'regular' | 'smart' | null;
+    requestedMarvMode: "fast" | "regular" | "smart" | null;
   };
-  'board.mentions.added': {
+  "board.mentions.added": {
     postId: string;
     actorUserId: string;
     recipientIds: string[];
   };
-  'post.deleted': {
+  "post.deleted": {
     postId: string;
   };
   /** Set a Board post's tags from its title, text, and links (AI). Re-run when its content changes. */
-  'board.thread.tag': {
+  "board.thread.tag": {
     threadId: string;
   };
   /**
@@ -59,8 +61,8 @@ export interface SideEffectPayloads {
    * job is identical: reconcile the author's notification with whether the engagement still
    * exists. `active: false` means "remove the notification".
    */
-  'post.engagement.changed': {
-    kind: 'boost' | 'repost';
+  "post.engagement.changed": {
+    kind: "boost" | "repost";
     active: boolean;
     postId: string;
     recipientUserId: string;
@@ -74,7 +76,7 @@ export interface SideEffectPayloads {
    * The side-effects worker adjusts the post's `quotedPost` notification on the new
    * target (if any) and deletes the notification on the old target (if any).
    */
-  'post.quote.changed': {
+  "post.quote.changed": {
     /** The post whose body was edited. */
     postId: string;
     actorUserId: string;
@@ -85,26 +87,26 @@ export interface SideEffectPayloads {
   };
 
   // ─── Articles ─────────────────────────────────────────────────────────
-  'article.published': {
+  "article.published": {
     articleId: string;
     authorUserId: string;
   };
-  'article.comment.created': {
+  "article.comment.created": {
     articleId: string;
     commentId: string;
     actorUserId: string;
     parentCommentId: string | null;
     mentionUsernames: string[];
   };
-  'article.boosted': {
+  "article.boosted": {
     articleId: string;
     actorUserId: string;
   };
-  'article.unboosted': {
+  "article.unboosted": {
     articleId: string;
     actorUserId: string;
   };
-  'article.reaction.added': {
+  "article.reaction.added": {
     articleId: string;
     actorUserId: string;
     emoji: string;
@@ -119,7 +121,7 @@ export interface SideEffectPayloads {
    * (APNs, VAPID) that actually fail. Retries are safe because `pushCoalesce` suppresses a
    * duplicate send for the same tag inside the kind's coalesce window.
    */
-  'notification.push': {
+  "notification.push": {
     recipientUserId: string;
     kind: NotificationKind;
     actorUserId: string | null;
@@ -139,7 +141,7 @@ export interface SideEffectPayloads {
    * Debounced badge-only APNs sync after bell/groups undelivered counts change.
    * Optional hints let the worker skip a recompute when both are known and unchanged.
    */
-  'notification.badge.sync': {
+  "notification.badge.sync": {
     recipientUserId: string;
     undeliveredBellCount?: number;
     undeliveredGroupsCount?: number;
@@ -148,23 +150,27 @@ export interface SideEffectPayloads {
    * Drop lock-screen APNs the user already saw in-app (inbox vs groups section).
    * Separate from badge sync so debounce cannot swallow the clear.
    */
-  'notification.lockScreen.clear': {
+  "notification.lockScreen.clear": {
     recipientUserId: string;
-    section: 'inbox' | 'groups';
+    section: "inbox" | "groups";
   };
   /**
    * Patch switcher badges across an operator's identity cluster after bell, groups,
    * or chat unread changes. Handler re-reads the count. No-op when the user has no pages.
    */
-  'account.cluster.badge': {
+  "account.cluster.badge": {
     userId: string;
   };
   /**
    * One chunk of a large notification fan-out. Large recipient sets are split into child
    * jobs so a single job never holds the worker (or the Prisma pool) for minutes.
    */
-  'notification.fanout.chunk': {
-    kind: 'followed_post' | 'checkin_post' | 'followed_article' | 'community_group_post';
+  "notification.fanout.chunk": {
+    kind:
+      | "followed_post"
+      | "checkin_post"
+      | "followed_article"
+      | "community_group_post";
     recipientUserIds: string[];
     actorUserId: string;
     actorPostId: string | null;
@@ -178,7 +184,7 @@ export interface SideEffectPayloads {
 
   // ─── Crew ─────────────────────────────────────────────────────────────
   /** Invite row was created; notify the invitee. Handler reads the row for crew + message. */
-  'crew.invite.sent': {
+  "crew.invite.sent": {
     inviteId: string;
   };
   /**
@@ -186,44 +192,44 @@ export interface SideEffectPayloads {
    * notify, so accept/decline/cancel share one effect and a retry can't act on a stale
    * outcome.
    */
-  'crew.invite.resolved': {
+  "crew.invite.resolved": {
     inviteId: string;
   };
-  'crew.member.removed': {
+  "crew.member.removed": {
     crewId: string;
     actorUserId: string;
     /** The member who left or was kicked. */
     subjectUserId: string;
-    reason: 'left' | 'kicked';
+    reason: "left" | "kicked";
   };
   /**
    * Crew is gone, so its membership rows are too — the recipient list has to be carried in
    * the payload. It's a record of who *was* a member, which can't go stale.
    */
-  'crew.disbanded': {
+  "crew.disbanded": {
     crewId: string;
     actorUserId: string | null;
     memberUserIds: string[];
   };
-  'crew.owner.transferred': {
+  "crew.owner.transferred": {
     crewId: string;
     previousOwnerUserId: string | null;
     newOwnerUserId: string;
-    reason: 'direct' | 'vote' | 'inactivity';
+    reason: "direct" | "vote" | "inactivity";
   };
-  'crew.transfer.vote.opened': {
+  "crew.transfer.vote.opened": {
     crewId: string;
     voteId: string;
     actorUserId: string;
   };
-  'crew.wall.mentioned': {
+  "crew.wall.mentioned": {
     crewId: string;
     actorUserId: string;
     recipientUserIds: string[];
     bodySnippet: string | null;
   };
   /** Recorded after a member's check-in commits, so crew cache busts and streak advancement retry. */
-  'crew.checkin.recorded': {
+  "crew.checkin.recorded": {
     userId: string;
     dayKey: string;
     nowIso: string;
@@ -232,51 +238,51 @@ export interface SideEffectPayloads {
    * The crew's shared streak advanced — the highest-signal push in the product, so it gets
    * retries rather than being a fire-and-forget send from the check-in request.
    */
-  'crew.streak.advanced': {
+  "crew.streak.advanced": {
     crewId: string;
     dayKey: string;
     currentStreakDays: number;
   };
 
   // ─── Community groups ─────────────────────────────────────────────────
-  'group.invite.issued': {
+  "group.invite.issued": {
     groupId: string;
     inviteId: string;
     inviterUserId: string;
     inviteeUserId: string;
     bodySnippet: string | null;
   };
-  'group.invite.cancelled': {
+  "group.invite.cancelled": {
     groupId: string;
     inviteId: string;
     actorUserId: string;
     inviteeUserId: string;
   };
-  'group.invite.responded': {
+  "group.invite.responded": {
     groupId: string;
     inviteId: string;
     inviterUserId: string;
     inviteeUserId: string;
-    response: 'accepted' | 'declined';
+    response: "accepted" | "declined";
   };
   /** Someone asked to join a gated group; notify owners + moderators. */
-  'group.join.requested': {
+  "group.join.requested": {
     groupId: string;
     requestingUserId: string;
   };
   /** A moderator approved or rejected a join request. Approval also notifies members. */
-  'group.join.decided': {
+  "group.join.decided": {
     groupId: string;
     userId: string;
     actorUserId: string;
-    decision: 'approved' | 'rejected';
+    decision: "approved" | "rejected";
   };
   /** Someone joined an open group directly (no approval step); notify existing members. */
-  'group.member.joined': {
+  "group.member.joined": {
     groupId: string;
     joinerUserId: string;
   };
-  'group.member.removed': {
+  "group.member.removed": {
     groupId: string;
     userId: string;
     actorUserId: string;
@@ -287,24 +293,24 @@ export interface SideEffectPayloads {
    * The handler (not the caller) applies the 24h "don't re-notify" window, which also makes a
    * retry idempotent.
    */
-  'follow.created': {
+  "follow.created": {
     actorUserId: string;
     targetUserId: string;
   };
-  'follow.removed': {
+  "follow.removed": {
     actorUserId: string;
     targetUserId: string;
   };
 
   // ─── Coins / verification ─────────────────────────────────────────────
-  'coins.transferred': {
+  "coins.transferred": {
     recipientUserId: string;
     senderUserId: string;
     amountLabel: string;
     note: string | null;
   };
   /** A user just became verified; tell them. */
-  'user.verified': {
+  "user.verified": {
     userId: string;
   };
   /**
@@ -313,15 +319,15 @@ export interface SideEffectPayloads {
    * `direction: 'ended'` when they lost it entirely.
    * Premium <-> Premium+ moves are not dispatched.
    */
-  'billing.premium.changed': {
+  "billing.premium.changed": {
     userId: string;
-    direction: 'started' | 'ended';
+    direction: "started" | "ended";
   };
   /**
    * User just gained Premium — Marv sends a one-shot welcome DM.
    * Dispatched from the billing premium-changed handler when direction is `started`.
    */
-  'marv.premium.welcome': {
+  "marv.premium.welcome": {
     userId: string;
   };
   /**
@@ -330,7 +336,7 @@ export interface SideEffectPayloads {
    * active Stripe subscriptions defer their next charge to absorb the free month.
    * Payload uses IDs only (no mutable state snapshots).
    */
-  'referral.bonus.granted': {
+  "referral.bonus.granted": {
     recruitId: string;
     recruiterId: string;
   };
@@ -341,10 +347,10 @@ export interface SideEffectPayloads {
    * gets the current answer. `verifyUser` short-circuits when the user is already verified,
    * which is what makes this safe to retry.
    */
-  'user.auto-verify': {
+  "user.auto-verify": {
     userId: string;
     recruitedById: string | null;
-    source: 'auto_referral' | 'auto_signup';
+    source: "auto_referral" | "auto_signup";
   };
 
   // ─── Calls ────────────────────────────────────────────────────────────
@@ -353,7 +359,7 @@ export interface SideEffectPayloads {
    * PushKit (VoIP) ring if the call is still `ringing`, so a retry after the callee already
    * answered or declined is a no-op. Web/foreground iOS ring over the socket regardless.
    */
-  'call.direct.ringing': {
+  "call.direct.ringing": {
     callId: string;
     conversationId: string;
     callerUserId: string;
@@ -362,7 +368,7 @@ export interface SideEffectPayloads {
 
   // ─── Spaces schedule ──────────────────────────────────────────────────
   /** Host went live — fan out `space_live` to schedule subscribers. */
-  'space.schedule.live': {
+  "space.schedule.live": {
     spaceId: string;
     /** Snapshot before clearing non-owner subscribers on activate. */
     recipientUserIds?: string[];
@@ -372,13 +378,13 @@ export interface SideEffectPayloads {
    * rows to "was live" without bumping time, unread, or push.
    * Delete writes this inline before the Space row is removed (FK SET NULL).
    */
-  'space.schedule.ended': {
+  "space.schedule.ended": {
     spaceId: string;
     /** Fallback title if the space row is already gone. */
     spaceTitle?: string;
   };
   /** Schedule cleared or space deleted — fan out `space_schedule_cancelled`. */
-  'space.schedule.cancelled': {
+  "space.schedule.cancelled": {
     spaceId: string;
     ownerUserId: string;
     spaceTitle: string;
@@ -387,41 +393,41 @@ export interface SideEffectPayloads {
     recipientUserIds?: string[];
   };
   /** Schedule time changed — fan out cancel-style “rescheduled” copy then subscribers keep their sub. */
-  'space.schedule.rescheduled': {
+  "space.schedule.rescheduled": {
     spaceId: string;
     scheduledAt: string; // ISO
   };
   /** Delayed reminder job fired (day-of or 15-min). Handler re-reads DB. */
-  'space.schedule.reminder': {
+  "space.schedule.reminder": {
     spaceId: string;
-    kind: 'space_reminder_day' | 'space_reminder_soon';
+    kind: "space_reminder_day" | "space_reminder_soon";
     scheduledAtMs: number;
   };
   /** First schedule set — fan out `followed_space` + email to the host's followers. */
-  'space.schedule.announced': {
+  "space.schedule.announced": {
     spaceId: string;
   };
   /** Child job for a slice of followers on first announce. */
-  'space.schedule.announce.chunk': {
+  "space.schedule.announce.chunk": {
     spaceId: string;
     recipientUserIds: string[];
   };
   /** Push a public feed post to the author's connected Pickax account (`create`) or update the copy. */
-  'pickax.post.sync': {
+  "pickax.post.sync": {
     postId: string;
     create: boolean;
   };
   /** Push a published article to Pickax (`create`) or update the existing Pickax copy. */
-  'pickax.article.sync': {
+  "pickax.article.sync": {
     articleId: string;
     create: boolean;
   };
   /** Create the X copy of a public feed post. X posts are not edited after creation. */
-  'x.post.sync': {
+  "x.post.sync": {
     postId: string;
   };
   /** Share a published article on X as a link back to Men of Hunger. */
-  'x.article.sync': {
+  "x.article.sync": {
     articleId: string;
   };
 }

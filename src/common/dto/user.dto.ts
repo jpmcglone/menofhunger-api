@@ -1,19 +1,29 @@
-import { toAvatarVideoDto } from './avatar-video.dto';
-import type { AvatarVideoDto } from './avatar-video.dto';
-import type { AccountKind, BirthdayVisibility, FollowVisibility, HeardAboutUs, VerifiedStatus } from '@prisma/client';
-import { publicAssetUrl } from '../assets/public-asset-url';
-import { sanitizeFeatureToggles, type AppFeatureToggle } from '../feature-toggles';
+import { toAvatarVideoDto } from "./avatar-video.dto";
+import type { AvatarVideoDto } from "./avatar-video.dto";
+import type {
+  AccountKind,
+  BirthdayVisibility,
+  FollowVisibility,
+  HeardAboutUs,
+  VerifiedStatus,
+} from "@prisma/client";
+import { publicAssetUrl } from "../assets/public-asset-url";
+import {
+  sanitizeFeatureToggles,
+  type AppFeatureToggle,
+} from "../feature-toggles";
 
 /** Minimal org account summary shown alongside affiliated users. */
 export type OrgAffiliationDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
 };
 
 /** Relationship fields for list-user DTOs (follows, search). */
-export type UserNotificationPreference = 'all' | 'posts' | 'off';
+export type UserNotificationPreference = "all" | "posts" | "off";
 
 export type UserNotificationPreferencesDto = {
   preference: UserNotificationPreference;
@@ -54,7 +64,9 @@ type OrgMembershipRow = {
     id: string;
     username: string | null;
     name: string | null;
-    avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
+    avatarKey: string | null;
+    avatarVideoKey?: string | null;
+    avatarVideoDurationMs?: number | null;
     avatarUpdatedAt: Date | null;
   };
 };
@@ -69,7 +81,9 @@ export type UserListRow = {
   isOrganization: boolean;
   accountKind?: AccountKind;
   verifiedStatus: VerifiedStatus;
-  avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
+  avatarKey: string | null;
+  avatarVideoKey?: string | null;
+  avatarVideoDurationMs?: number | null;
   avatarUpdatedAt: Date | null;
   createdAt?: Date;
   isBot?: boolean;
@@ -87,7 +101,8 @@ export type UserListDto = {
   isOrganization: boolean;
   accountKind?: AccountKind;
   verifiedStatus: VerifiedStatus;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
   orgAffiliations: OrgAffiliationDto[];
   relationship?: UserListRelationship;
   createdAt?: string;
@@ -97,7 +112,11 @@ export type UserListDto = {
 export function toUserListDto(
   row: UserListRow,
   publicBaseUrl: string | null,
-  opts?: { relationship?: UserListRelationship; createdAt?: Date; orgAffiliations?: OrgAffiliationDto[] },
+  opts?: {
+    relationship?: UserListRelationship;
+    createdAt?: Date;
+    orgAffiliations?: OrgAffiliationDto[];
+  },
 ): UserListDto {
   const dto: UserListDto = {
     id: row.id,
@@ -106,28 +125,33 @@ export function toUserListDto(
     premium: row.premium,
     premiumPlus: row.premiumPlus,
     isOrganization: Boolean(row.isOrganization),
-    accountKind: row.accountKind ?? 'person',
+    accountKind: row.accountKind ?? "person",
     verifiedStatus: row.verifiedStatus,
     avatarUrl: publicAssetUrl({
       publicBaseUrl,
       key: row.avatarKey ?? null,
       updatedAt: row.avatarUpdatedAt ?? null,
-    }), avatarVideo: toAvatarVideoDto(row, publicBaseUrl),
+    }),
+    avatarVideo: toAvatarVideoDto(row, publicBaseUrl),
     // Prefer pre-computed affiliations (e.g. from raw SQL paths), fall back to row.orgMemberships.
-    orgAffiliations: opts?.orgAffiliations ?? (row.orgMemberships ?? []).map((m) => ({
-      id: m.org.id,
-      username: m.org.username,
-      name: m.org.name,
-      avatarUrl: publicAssetUrl({
-        publicBaseUrl,
-        key: m.org.avatarKey ?? null,
-        updatedAt: m.org.avatarUpdatedAt ?? null,
-      }), avatarVideo: toAvatarVideoDto(m.org, publicBaseUrl),
-    })),
+    orgAffiliations:
+      opts?.orgAffiliations ??
+      (row.orgMemberships ?? []).map((m) => ({
+        id: m.org.id,
+        username: m.org.username,
+        name: m.org.name,
+        avatarUrl: publicAssetUrl({
+          publicBaseUrl,
+          key: m.org.avatarKey ?? null,
+          updatedAt: m.org.avatarUpdatedAt ?? null,
+        }),
+        avatarVideo: toAvatarVideoDto(m.org, publicBaseUrl),
+      })),
   };
   if (row.isBot) dto.isBot = true;
   if (opts?.relationship) dto.relationship = opts.relationship;
-  if (opts?.createdAt !== undefined) dto.createdAt = opts.createdAt.toISOString();
+  if (opts?.createdAt !== undefined)
+    dto.createdAt = opts.createdAt.toISOString();
   else if (row.createdAt) dto.createdAt = row.createdAt.toISOString();
   return dto;
 }
@@ -147,6 +171,9 @@ export type UserDto = {
   /** Verified X handle. Written only when the member connects X. */
   xUsername: string | null;
   pickaxUsername: string | null;
+  rumbleUrl: string | null;
+  linkedinUrl: string | null;
+  youtubeUrl: string | null;
   locationInput: string | null;
   locationDisplay: string | null;
   locationZip: string | null;
@@ -175,7 +202,8 @@ export type UserDto = {
   unverifiedAt: string | null;
   followVisibility: FollowVisibility;
   birthdayVisibility: BirthdayVisibility;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   pinnedPostId: string | null;
   // Private rewards (self-only surfaces).
@@ -260,7 +288,8 @@ export type UserPreviewDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: string;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   lastOnlineAt: string | null;
   relationship: UserListRelationship;
@@ -286,6 +315,9 @@ export type UserDtoRow = {
   /** Verified X handle. Written only when the member connects X. */
   xUsername: string | null;
   pickaxUsername: string | null;
+  rumbleUrl: string | null;
+  linkedinUrl: string | null;
+  youtubeUrl: string | null;
   locationInput: string | null;
   locationDisplay: string | null;
   locationZip: string | null;
@@ -313,7 +345,9 @@ export type UserDtoRow = {
   unverifiedAt: Date | null;
   followVisibility: FollowVisibility;
   birthdayVisibility: BirthdayVisibility;
-  avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
+  avatarKey: string | null;
+  avatarVideoKey?: string | null;
+  avatarVideoDurationMs?: number | null;
   avatarUpdatedAt: Date | null;
   bannerKey: string | null;
   bannerUpdatedAt: Date | null;
@@ -326,13 +360,18 @@ export type UserDtoRow = {
   openToCrewAt: Date | null;
 };
 
-export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = null): UserDto {
+export function toUserDto(
+  user: UserDtoRow,
+  publicAssetBaseUrl: string | null = null,
+): UserDto {
   return {
     id: user.id,
     createdAt: user.createdAt.toISOString(),
     phone: user.phone ?? null,
     email: user.email ?? null,
-    emailVerifiedAt: user.emailVerifiedAt ? user.emailVerifiedAt.toISOString() : null,
+    emailVerifiedAt: user.emailVerifiedAt
+      ? user.emailVerifiedAt.toISOString()
+      : null,
     emailVerificationRequestedAt: user.emailVerificationRequestedAt
       ? user.emailVerificationRequestedAt.toISOString()
       : null,
@@ -343,6 +382,9 @@ export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = 
     website: user.website ?? null,
     xUsername: user.xUsername ?? null,
     pickaxUsername: user.pickaxUsername ?? null,
+    rumbleUrl: user.rumbleUrl ?? null,
+    linkedinUrl: user.linkedinUrl ?? null,
+    youtubeUrl: user.youtubeUrl ?? null,
     locationInput: user.locationInput ?? null,
     locationDisplay: user.locationDisplay ?? null,
     locationZip: user.locationZip ?? null,
@@ -364,31 +406,44 @@ export function toUserDto(user: UserDtoRow, publicAssetBaseUrl: string | null = 
     premium: user.premium,
     premiumPlus: user.premiumPlus,
     isOrganization: Boolean(user.isOrganization),
-    accountKind: user.accountKind ?? 'person',
+    accountKind: user.accountKind ?? "person",
     verifiedStatus: user.verifiedStatus,
     verifiedAt: user.verifiedAt ? user.verifiedAt.toISOString() : null,
     unverifiedAt: user.unverifiedAt ? user.unverifiedAt.toISOString() : null,
     followVisibility: user.followVisibility,
-    birthdayVisibility: user.birthdayVisibility ?? 'monthDay',
+    birthdayVisibility: user.birthdayVisibility ?? "monthDay",
     avatarUrl: publicAssetUrl({
       publicBaseUrl: publicAssetBaseUrl,
       key: user.avatarKey ?? null,
       updatedAt: user.avatarUpdatedAt ?? null,
-    }), avatarVideo: toAvatarVideoDto(user, publicAssetBaseUrl),
+    }),
+    avatarVideo: toAvatarVideoDto(user, publicAssetBaseUrl),
     bannerUrl: publicAssetUrl({
       publicBaseUrl: publicAssetBaseUrl,
       key: user.bannerKey ?? null,
       updatedAt: user.bannerUpdatedAt ?? null,
     }),
     pinnedPostId: user.pinnedPostId ?? null,
-    coins: typeof (user as any).coins === 'number' ? ((user as any).coins as number) : 0,
-    checkinStreakDays: typeof (user as any).checkinStreakDays === 'number' ? ((user as any).checkinStreakDays as number) : 0,
-    lastCheckinDayKey: (user as any).lastCheckinDayKey ? String((user as any).lastCheckinDayKey) : null,
+    coins:
+      typeof (user as any).coins === "number"
+        ? ((user as any).coins as number)
+        : 0,
+    checkinStreakDays:
+      typeof (user as any).checkinStreakDays === "number"
+        ? ((user as any).checkinStreakDays as number)
+        : 0,
+    lastCheckinDayKey: (user as any).lastCheckinDayKey
+      ? String((user as any).lastCheckinDayKey)
+      : null,
     // Invariant: longest streak can never be lower than current streak.
     // This also gracefully handles legacy users where `longestStreakDays` was introduced after streak tracking began.
     longestStreakDays: Math.max(
-      typeof (user as any).longestStreakDays === 'number' ? ((user as any).longestStreakDays as number) : 0,
-      typeof (user as any).checkinStreakDays === 'number' ? ((user as any).checkinStreakDays as number) : 0,
+      typeof (user as any).longestStreakDays === "number"
+        ? ((user as any).longestStreakDays as number)
+        : 0,
+      typeof (user as any).checkinStreakDays === "number"
+        ? ((user as any).checkinStreakDays as number)
+        : 0,
     ),
     locationPromptSkipped: Boolean((user as any).locationPromptSkipped),
     openToCrew: Boolean((user as any).openToCrewAt),

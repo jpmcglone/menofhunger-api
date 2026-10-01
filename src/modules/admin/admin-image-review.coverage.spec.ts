@@ -17,7 +17,22 @@ const reviewedMediaFields = new Set([
   'LinkMetadata.imageUrl',
 ]);
 
+// Explicit JSON review for integrations: none introduces an owned R2 derivative.
+// X images are constrained to pbs.twimg.com in XPublicSnapshotService; delivery
+// plans carry reviewed text/remote IDs/source hashes and retain media through PostMedia.
+// Admin control audit payloads contain numeric ceilings and a pause flag only.
+const reviewedIntegrationJsonFields = new Set([
+  'IntegrationPublicSnapshot.payload', 'XCrosspost.deliveryPlan',
+  'IntegrationControlAudit.before', 'IntegrationControlAudit.after',
+]);
+
 describe('media ownership schema coverage', () => {
+  it('keeps integration JSON storage explicitly reviewed for media ownership', () => {
+    const models = new Set(['IntegrationPublicSnapshot', 'XCrosspost', 'IntegrationControlAudit']);
+    const fields = Prisma.dmmf.datamodel.models.filter(model => models.has(model.name))
+      .flatMap(model => model.fields.filter(field => field.type === 'Json').map(field => `${model.name}.${field.name}`));
+    expect(fields.filter(field => !reviewedIntegrationJsonFields.has(field))).toEqual([]);
+  });
   it('requires review of every media key/URL field added to the schema', () => {
     const mediaFields = Prisma.dmmf.datamodel.models.flatMap((model) => model.fields
       .filter((field) => field.type === 'String' && /(?:r2Key|thumbnailR2Key|imageR2Key|imageKey|imageUrl|avatarKey|avatarVideoKey|sourceKey|videoKey|posterKey|bannerKey|avatarImageUrl|coverImageUrl|mp4Url)$/i.test(field.name))

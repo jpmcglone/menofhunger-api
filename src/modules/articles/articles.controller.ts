@@ -1,6 +1,6 @@
-import type { CrosspostMode } from '@prisma/client';
-import { PickaxCrosspostService } from '../pickax/pickax-crosspost.service';
-import { XCrosspostService } from '../x/x-crosspost.service';
+import type { CrosspostMode } from "@prisma/client";
+import { PickaxCrosspostService } from "../pickax/pickax-crosspost.service";
+import { XCrosspostService } from "../x/x-crosspost.service";
 import {
   Body,
   Controller,
@@ -11,18 +11,21 @@ import {
   Post,
   Query,
   UseGuards,
-} from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
-import { z } from 'zod';
-import { ApiTags } from '@nestjs/swagger';
-import { AuthGuard } from '../auth/auth.guard';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
-import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
-import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import { ArticlesService } from './articles.service';
-import { queryBoolean } from '../../common/validation/query-boolean';
+} from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
+import { z } from "zod";
+import { ApiTags } from "@nestjs/swagger";
+import { AuthGuard } from "../auth/auth.guard";
+import { OptionalAuthGuard } from "../auth/optional-auth.guard";
+import { CurrentUserId, OptionalCurrentUserId } from "../users/users.decorator";
+import {
+  rateLimitLimit,
+  rateLimitTtl,
+} from "../../common/throttling/rate-limit.resolver";
+import { ArticlesService } from "./articles.service";
+import { queryBoolean } from "../../common/validation/query-boolean";
 
-const visibilitySchema = z.enum(['public', 'verifiedOnly', 'premiumOnly']);
+const visibilitySchema = z.enum(["public", "verifiedOnly", "premiumOnly"]);
 
 const createSchema = z.object({
   title: z.string().trim().max(200).optional(),
@@ -47,8 +50,10 @@ const listSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
   authorUsername: z.string().optional(),
-  sort: z.enum(['new', 'trending']).optional(),
-  visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
+  sort: z.enum(["new", "trending"]).optional(),
+  visibility: z
+    .enum(["all", "public", "verifiedOnly", "premiumOnly"])
+    .optional(),
   mine: queryBoolean().optional(),
   followingOnly: queryBoolean().optional(),
   includeRestricted: queryBoolean().optional(),
@@ -61,17 +66,21 @@ const publishSchema = z.object({
   shareToFeed: z.boolean().optional(),
   /** Also publish to the author's connected Pickax account when the article is public. */
   crossPostToPickax: z.boolean().optional(),
-  /** Per-destination choice. Articles on X are always a link. */
-  crosspost: z.object({
-    pickax: z.enum(['link', 'native']).optional(),
-    x: z.never().optional(),
-  }).optional(),
+  /** Explicit link or native choice; the worker revalidates account capabilities. */
+  crosspost: z
+    .object({
+      pickax: z.enum(["link", "native"]).optional(),
+      x: z.enum(["link", "native"]).optional(),
+    })
+    .optional(),
 });
 
 const draftsListSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
   cursor: z.string().optional(),
-  visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
+  visibility: z
+    .enum(["all", "public", "verifiedOnly", "premiumOnly"])
+    .optional(),
 });
 
 const commentListSchema = z.object({
@@ -99,20 +108,20 @@ const shareSchema = z.object({
 
 const interactThrottle = {
   default: {
-    limit: rateLimitLimit('interact', 60),
-    ttl: rateLimitTtl('interact', 60),
+    limit: rateLimitLimit("interact", 60),
+    ttl: rateLimitTtl("interact", 60),
   },
 };
 
 const readThrottle = {
   default: {
-    limit: rateLimitLimit('read', 120),
-    ttl: rateLimitTtl('read', 60),
+    limit: rateLimitLimit("read", 120),
+    ttl: rateLimitTtl("read", 60),
   },
 };
 
-@ApiTags('Articles')
-@Controller('articles')
+@ApiTags("Articles")
+@Controller("articles")
 export class ArticlesController {
   constructor(
     private readonly articles: ArticlesService,
@@ -123,10 +132,12 @@ export class ArticlesController {
   // ─── Tag autocomplete ──────────────────────────────────────────────────────
 
   @Throttle(readThrottle)
-  @Get('tags')
+  @Get("tags")
   async listTags(@Query() query: unknown) {
-    const { q } = z.object({ q: z.string().trim().max(60).optional() }).parse(query);
-    const tags = await this.articles.listTagSuggestions(q ?? '');
+    const { q } = z
+      .object({ q: z.string().trim().max(60).optional() })
+      .parse(query);
+    const tags = await this.articles.listTagSuggestions(q ?? "");
     return { data: tags };
   }
 
@@ -134,12 +145,17 @@ export class ArticlesController {
 
   @UseGuards(OptionalAuthGuard)
   @Throttle(readThrottle)
-  @Get('trending')
-  async trending(@OptionalCurrentUserId() userId: string | undefined, @Query() query: unknown) {
-    const parsed = z.object({
-      limit: z.coerce.number().int().min(1).max(20).optional(),
-      includeBody: queryBoolean().optional(),
-    }).parse(query);
+  @Get("trending")
+  async trending(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Query() query: unknown,
+  ) {
+    const parsed = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(20).optional(),
+        includeBody: queryBoolean().optional(),
+      })
+      .parse(query);
     const result = await this.articles.listTrending({
       viewerUserId: userId,
       limit: parsed.limit,
@@ -153,7 +169,10 @@ export class ArticlesController {
   @UseGuards(OptionalAuthGuard)
   @Throttle(readThrottle)
   @Get()
-  async list(@OptionalCurrentUserId() userId: string | undefined, @Query() query: unknown) {
+  async list(
+    @OptionalCurrentUserId() userId: string | undefined,
+    @Query() query: unknown,
+  ) {
     const parsed = listSchema.parse(query);
     const result = await this.articles.listPublished({
       viewerUserId: userId,
@@ -161,40 +180,48 @@ export class ArticlesController {
       cursor: parsed.cursor,
       authorUsername: parsed.authorUsername,
       sort: parsed.sort,
-      visibilityFilter: parsed.visibility === 'all' ? undefined : parsed.visibility,
+      visibilityFilter:
+        parsed.visibility === "all" ? undefined : parsed.visibility,
       mine: parsed.mine,
       followingOnly: parsed.followingOnly,
       includeRestricted: parsed.includeRestricted,
       tag: parsed.tag,
       includeBody: parsed.includeBody ?? false,
     });
-    return { data: result.articles, pagination: { nextCursor: result.nextCursor } };
+    return {
+      data: result.articles,
+      pagination: { nextCursor: result.nextCursor },
+    };
   }
 
   // ─── List drafts ───────────────────────────────────────────────────────────
 
   @UseGuards(AuthGuard)
   @Throttle(readThrottle)
-  @Get('drafts')
+  @Get("drafts")
   async listDrafts(@CurrentUserId() userId: string, @Query() query: unknown) {
     const parsed = draftsListSchema.parse(query);
     const result = await this.articles.listDrafts({
       userId,
       limit: parsed.limit,
       cursor: parsed.cursor,
-      visibilityFilter: parsed.visibility === 'all' ? undefined : parsed.visibility,
+      visibilityFilter:
+        parsed.visibility === "all" ? undefined : parsed.visibility,
     });
-    return { data: result.articles, pagination: { nextCursor: result.nextCursor } };
+    return {
+      data: result.articles,
+      pagination: { nextCursor: result.nextCursor },
+    };
   }
 
   // ─── Get single ───────────────────────────────────────────────────────────
 
   @UseGuards(OptionalAuthGuard)
   @Throttle(readThrottle)
-  @Get(':id')
+  @Get(":id")
   async getById(
     @OptionalCurrentUserId() userId: string | undefined,
-    @Param('id') id: string,
+    @Param("id") id: string,
   ) {
     const article = await this.articles.getById(id, userId);
     return { data: article };
@@ -215,8 +242,12 @@ export class ArticlesController {
 
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
-  @Patch(':id/save')
-  async save(@CurrentUserId() userId: string, @Param('id') id: string, @Body() body: unknown) {
+  @Patch(":id/save")
+  async save(
+    @CurrentUserId() userId: string,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
     const parsed = saveSchema.parse(body);
     const article = await this.articles.save(userId, id, {
       ...parsed,
@@ -230,17 +261,28 @@ export class ArticlesController {
 
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
-  @Post(':id/publish')
-  async publish(@CurrentUserId() userId: string, @Param('id') id: string, @Body() body: unknown) {
+  @Post(":id/publish")
+  async publish(
+    @CurrentUserId() userId: string,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
     const parsed = publishSchema.parse(body ?? {});
     const { crossPostToPickax, crosspost, ...publishInput } = parsed;
-    const article = await this.articles.publish(userId, id, { ...publishInput, crosspost: crosspost ?? (crossPostToPickax ? { pickax: 'native' } : undefined) });
-    const pickaxMode: CrosspostMode | null = crosspost?.pickax ?? (crossPostToPickax ? 'native' : null);
+    const article = await this.articles.publish(userId, id, {
+      ...publishInput,
+      crosspost:
+        crosspost ?? (crossPostToPickax ? { pickax: "native" } : undefined),
+    });
+    const pickaxMode: CrosspostMode | null =
+      crosspost?.pickax ?? (crossPostToPickax ? "native" : null);
     const pickax = pickaxMode
       ? await this.pickax.requestArticleCrosspost(userId, id, pickaxMode)
       : null;
     if (!pickaxMode) await this.pickax.requestArticleUpdate(userId, id);
-    const x = crosspost?.x ? await this.x.requestArticleCrosspost(userId, id) : null;
+    const x = crosspost?.x
+      ? await this.x.requestArticleCrosspost(userId, id, crosspost.x)
+      : null;
     return { data: article, crossposts: { pickax, x } };
   }
 
@@ -248,8 +290,8 @@ export class ArticlesController {
 
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
-  @Post(':id/unpublish')
-  async unpublish(@CurrentUserId() userId: string, @Param('id') id: string) {
+  @Post(":id/unpublish")
+  async unpublish(@CurrentUserId() userId: string, @Param("id") id: string) {
     const article = await this.articles.unpublish(userId, id);
     return { data: article };
   }
@@ -258,8 +300,8 @@ export class ArticlesController {
 
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
-  @Delete(':id')
-  async delete(@CurrentUserId() userId: string, @Param('id') id: string) {
+  @Delete(":id")
+  async delete(@CurrentUserId() userId: string, @Param("id") id: string) {
     const result = await this.articles.delete(userId, id);
     return { data: result };
   }
@@ -268,16 +310,16 @@ export class ArticlesController {
 
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
-  @Post(':id/boost')
-  async boost(@CurrentUserId() userId: string, @Param('id') id: string) {
+  @Post(":id/boost")
+  async boost(@CurrentUserId() userId: string, @Param("id") id: string) {
     const result = await this.articles.boost(userId, id);
     return { data: result };
   }
 
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
-  @Delete(':id/boost')
-  async unboost(@CurrentUserId() userId: string, @Param('id') id: string) {
+  @Delete(":id/boost")
+  async unboost(@CurrentUserId() userId: string, @Param("id") id: string) {
     const result = await this.articles.unboost(userId, id);
     return { data: result };
   }
@@ -286,10 +328,10 @@ export class ArticlesController {
 
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
-  @Post(':id/reactions')
+  @Post(":id/reactions")
   async addReaction(
     @CurrentUserId() userId: string,
-    @Param('id') id: string,
+    @Param("id") id: string,
     @Body() body: unknown,
   ) {
     const { reactionId } = reactionSchema.parse(body);
@@ -299,11 +341,11 @@ export class ArticlesController {
 
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
-  @Delete(':id/reactions/:reactionId')
+  @Delete(":id/reactions/:reactionId")
   async removeReaction(
     @CurrentUserId() userId: string,
-    @Param('id') id: string,
-    @Param('reactionId') reactionId: string,
+    @Param("id") id: string,
+    @Param("reactionId") reactionId: string,
   ) {
     const result = await this.articles.removeReaction(userId, id, reactionId);
     return { data: result };
@@ -313,10 +355,10 @@ export class ArticlesController {
 
   @UseGuards(OptionalAuthGuard)
   @Throttle(readThrottle)
-  @Get(':id/comments')
+  @Get(":id/comments")
   async listComments(
     @OptionalCurrentUserId() userId: string | undefined,
-    @Param('id') id: string,
+    @Param("id") id: string,
     @Query() query: unknown,
   ) {
     const parsed = commentListSchema.parse(query);
@@ -326,16 +368,19 @@ export class ArticlesController {
       limit: parsed.limit,
       cursor: parsed.cursor,
     });
-    return { data: result.comments, pagination: { nextCursor: result.nextCursor } };
+    return {
+      data: result.comments,
+      pagination: { nextCursor: result.nextCursor },
+    };
   }
 
   @UseGuards(OptionalAuthGuard)
   @Throttle(readThrottle)
-  @Get(':id/comments/:commentId')
+  @Get(":id/comments/:commentId")
   async getComment(
     @OptionalCurrentUserId() userId: string | undefined,
-    @Param('id') id: string,
-    @Param('commentId') commentId: string,
+    @Param("id") id: string,
+    @Param("commentId") commentId: string,
   ) {
     const result = await this.articles.getComment({
       articleId: id,
@@ -347,11 +392,11 @@ export class ArticlesController {
 
   @UseGuards(OptionalAuthGuard)
   @Throttle(readThrottle)
-  @Get(':id/comments/:commentId/replies')
+  @Get(":id/comments/:commentId/replies")
   async listReplies(
     @OptionalCurrentUserId() userId: string | undefined,
-    @Param('id') id: string,
-    @Param('commentId') commentId: string,
+    @Param("id") id: string,
+    @Param("commentId") commentId: string,
     @Query() query: unknown,
   ) {
     const parsed = commentListSchema.parse(query);
@@ -362,15 +407,18 @@ export class ArticlesController {
       limit: parsed.limit,
       cursor: parsed.cursor,
     });
-    return { data: result.comments, pagination: { nextCursor: result.nextCursor } };
+    return {
+      data: result.comments,
+      pagination: { nextCursor: result.nextCursor },
+    };
   }
 
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
-  @Post(':id/comments')
+  @Post(":id/comments")
   async createComment(
     @CurrentUserId() userId: string,
-    @Param('id') id: string,
+    @Param("id") id: string,
     @Body() body: unknown,
   ) {
     const parsed = commentCreateSchema.parse(body);
@@ -383,10 +431,10 @@ export class ArticlesController {
 
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
-  @Patch('comments/:commentId')
+  @Patch("comments/:commentId")
   async updateComment(
     @CurrentUserId() userId: string,
-    @Param('commentId') commentId: string,
+    @Param("commentId") commentId: string,
     @Body() body: unknown,
   ) {
     const { body: text } = commentUpdateSchema.parse(body);
@@ -396,10 +444,10 @@ export class ArticlesController {
 
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
-  @Delete('comments/:commentId')
+  @Delete("comments/:commentId")
   async deleteComment(
     @CurrentUserId() userId: string,
-    @Param('commentId') commentId: string,
+    @Param("commentId") commentId: string,
   ) {
     const result = await this.articles.deleteComment(userId, commentId);
     return { data: result };
@@ -409,26 +457,34 @@ export class ArticlesController {
 
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
-  @Post('comments/:commentId/reactions')
+  @Post("comments/:commentId/reactions")
   async addCommentReaction(
     @CurrentUserId() userId: string,
-    @Param('commentId') commentId: string,
+    @Param("commentId") commentId: string,
     @Body() body: unknown,
   ) {
     const { reactionId } = reactionSchema.parse(body);
-    const result = await this.articles.addCommentReaction(userId, commentId, reactionId);
+    const result = await this.articles.addCommentReaction(
+      userId,
+      commentId,
+      reactionId,
+    );
     return { data: result };
   }
 
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
-  @Delete('comments/:commentId/reactions/:reactionId')
+  @Delete("comments/:commentId/reactions/:reactionId")
   async removeCommentReaction(
     @CurrentUserId() userId: string,
-    @Param('commentId') commentId: string,
-    @Param('reactionId') reactionId: string,
+    @Param("commentId") commentId: string,
+    @Param("reactionId") reactionId: string,
   ) {
-    const result = await this.articles.removeCommentReaction(userId, commentId, reactionId);
+    const result = await this.articles.removeCommentReaction(
+      userId,
+      commentId,
+      reactionId,
+    );
     return { data: result };
   }
 
@@ -436,14 +492,19 @@ export class ArticlesController {
 
   @UseGuards(AuthGuard)
   @Throttle(interactThrottle)
-  @Post(':id/share')
+  @Post(":id/share")
   async createSharePost(
     @CurrentUserId() userId: string,
-    @Param('id') id: string,
+    @Param("id") id: string,
     @Body() body: unknown,
   ) {
     const parsed = shareSchema.parse(body);
-    const result = await this.articles.createSharePost(userId, id, parsed.body ?? '', parsed.visibility);
+    const result = await this.articles.createSharePost(
+      userId,
+      id,
+      parsed.body ?? "",
+      parsed.visibility,
+    );
     return { data: result };
   }
 }

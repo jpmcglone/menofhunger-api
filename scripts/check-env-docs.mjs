@@ -13,12 +13,12 @@ import { fileURLToPath } from 'node:url'
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const NAME = '([A-Z][A-Z0-9_]+)'
 const READERS = [
-  new RegExp(`\\bconfig\\.get(?:<[^>]+>)?\\(\\s*'${NAME}'`, 'g'),
-  new RegExp(`\\bthis\\.read[A-Z]\\w*\\(\\s*'${NAME}'`, 'g'),
+  new RegExp(`\\bconfig\\.get(?:<[^>]+>)?\\(\\s*["']${NAME}["']`, 'g'),
+  new RegExp(`\\bthis\\.read[A-Z]\\w*\\(\\s*["']${NAME}["']`, 'g'),
   new RegExp(`\\bprocess\\.env\\.${NAME}`, 'g'),
-  new RegExp(`\\bprocess\\.env\\[\\s*'${NAME}'\\s*\\]`, 'g'),
+  new RegExp(`\\bprocess\\.env\\[\\s*["']${NAME}["']\\s*\\]`, 'g'),
 ]
-const SCHEMA_KEY = new RegExp(`^\\s{2}${NAME}:`, 'gm')
+const SCHEMA_KEY = new RegExp(`^\\s+${NAME}:`, 'gm')
 // Read by tooling outside src/ rather than by the API process.
 const EXTERNAL = new Set(['POSTGRES_PORT'])
 

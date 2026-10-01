@@ -1,722 +1,932 @@
-import { z } from 'zod';
+import { z } from "zod";
 import {
   MARV_DEFAULT_ASTRA_MODEL,
   MARV_DEFAULT_FAST_MODEL,
   MARV_DEFAULT_REGULAR_MODEL,
   MARV_DEFAULT_SMART_MODEL,
-} from '../marvin/marvin-models';
+} from "../marvin/marvin-models";
 
-export const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  PORT: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PORT must be a number'),
-  DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+export const envSchema = z
+  .object({
+    NODE_ENV: z
+      .enum(["development", "test", "production"])
+      .default("development"),
+    PORT: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "PORT must be a number",
+      ),
+    DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
 
-  // Redis (BullMQ). Default is dev-friendly; require explicit value in production.
-  REDIS_URL: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('redis://localhost:6379'),
-  ),
-
-  // Process roles (enable/disable parts of the app for API vs worker deployments).
-  RUN_HTTP: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('true'),
-  ),
-  RUN_SCHEDULERS: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('true'),
-  ),
-  RUN_JOB_CONSUMERS: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('true'),
-  ),
-
-  // In-flight side-effect jobs per worker (notifications, push, fan-out).
-  SIDE_EFFECTS_QUEUE_CONCURRENCY: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'SIDE_EFFECTS_QUEUE_CONCURRENCY must be a number'),
-
-  // Prisma connection retry (e.g. when Postgres is starting in docker compose).
-  PRISMA_CONNECT_RETRIES: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PRISMA_CONNECT_RETRIES must be a number'),
-  PRISMA_CONNECT_RETRY_DELAY_MS: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PRISMA_CONNECT_RETRY_DELAY_MS must be a number'),
-
-  // Comma-separated list of allowed web origins for CORS (must be explicit when using cookies).
-  // Examples:
-  // - http://localhost:3000
-  // - https://menofhunger.com
-  // Note: some hosts inject empty strings for unset env vars. Treat "" as unset.
-  ALLOWED_ORIGINS: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('http://localhost:3000'),
-  ),
-
-  // Secrets (recommended in all envs; required in production)
-  // Note: treat empty strings as unset; provide dev defaults so app code never reads process.env directly.
-  OTP_HMAC_SECRET: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('dev-otp-secret-change-me'),
-  ),
-  SESSION_HMAC_SECRET: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('dev-session-secret-change-me'),
-  ),
-
-  // Cookie domain. In production you likely want `.menofhunger.com`.
-  COOKIE_DOMAIN: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // Canonical public API base, including the version prefix, used for one-time
-  // native-to-browser handoff URLs (for example https://api.menofhunger.com/v1).
-  BROWSER_HANDOFF_BASE_URL: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().url().optional(),
-  ),
-
-  // Dev-only: if true, do not attempt to send SMS via Twilio (use 000000 bypass flow).
-  DISABLE_TWILIO_IN_DEV: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // App Review: a single phone number that App Review can sign in with using a fixed code,
-  // bypassing Twilio even in production. Only active when both vars are set.
-  // Set these in your production env and supply them in App Store Connect Review Notes.
-  APP_REVIEW_PHONE: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  APP_REVIEW_CODE: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // Twilio (production only)
-  TWILIO_ACCOUNT_SID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  TWILIO_AUTH_TOKEN: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  // Twilio Verify Service SID (starts with VA...)
-  TWILIO_VERIFY_SERVICE_SID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  // Legacy (not used when TWILIO_VERIFY_SERVICE_SID is set)
-  TWILIO_FROM_NUMBER: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  TWILIO_MESSAGING_SERVICE_SID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // WebRTC ICE servers for DM calling. STUN defaults to Google's public servers.
-  // TURN is optional fallback infrastructure; all three TURN vars must be set to enable it.
-  RTC_STUN_URLS: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  RTC_TURN_URLS: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  RTC_TURN_USERNAME: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  RTC_TURN_CREDENTIAL: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  // Cloudflare Realtime TURN. When both are set, start/join mints short-lived ICE credentials.
-  CF_TURN_KEY_ID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  CF_TURN_API_TOKEN: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // SFU rollout is opt-in; credentials alone must never change live call routing.
-  CLOUDFLARE_SFU_APP_ID: z.string().optional(),
-  CLOUDFLARE_SFU_APP_SECRET: z.string().optional(),
-  CALLS_SFU_ENABLED: z.enum(['true', 'false']).optional().default('false'),
-
-  // Cloudflare R2 (S3-compatible) for public assets (avatars/banners).
-  R2_ACCOUNT_ID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  R2_ACCESS_KEY_ID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  R2_SECRET_ACCESS_KEY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  R2_BUCKET: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  // Public base URL for reading objects, e.g. https://moh-assets.<accountId>.r2.dev
-  R2_PUBLIC_BASE_URL: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // Giphy (server-side proxy for GIF search)
-  GIPHY_API_KEY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // Scripture translation ID for bible.helloao.org (default: BSB = Berean Standard Bible).
-  // Set to a different ID (e.g. NKJV) once a commercial licence is in place.
-  SCRIPTURE_TRANSLATION: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // Global API rate limiting (generous defaults if unset).
-  RATE_LIMIT_TTL_SECONDS: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_TTL_SECONDS must be a number'),
-  RATE_LIMIT_LIMIT: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_LIMIT must be a number'),
-
-  // Route-specific throttles (all optional; defaults are reasonable).
-  RATE_LIMIT_AUTH_START_TTL_SECONDS: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_AUTH_START_TTL_SECONDS must be a number'),
-  RATE_LIMIT_AUTH_START_LIMIT: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_AUTH_START_LIMIT must be a number'),
-
-  RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS must be a number'),
-  RATE_LIMIT_AUTH_VERIFY_LIMIT: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_AUTH_VERIFY_LIMIT must be a number'),
-
-  RATE_LIMIT_POST_CREATE_TTL_SECONDS: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_POST_CREATE_TTL_SECONDS must be a number'),
-  RATE_LIMIT_POST_CREATE_LIMIT: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_POST_CREATE_LIMIT must be a number'),
-
-  RATE_LIMIT_INTERACT_TTL_SECONDS: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_INTERACT_TTL_SECONDS must be a number'),
-  RATE_LIMIT_INTERACT_LIMIT: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_INTERACT_LIMIT must be a number'),
-
-  RATE_LIMIT_UPLOAD_TTL_SECONDS: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_UPLOAD_TTL_SECONDS must be a number'),
-  RATE_LIMIT_UPLOAD_LIMIT: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'RATE_LIMIT_UPLOAD_LIMIT must be a number'),
-
-  // Express / proxy settings (recommended in production behind a reverse proxy / Cloudflare).
-  // When enabled, Express will respect X-Forwarded-* headers for req.ip / req.protocol.
-  TRUST_PROXY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // Body size limits (protects memory + prevents accidental huge payloads).
-  BODY_JSON_LIMIT: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('1mb'),
-  ),
-  BODY_URLENCODED_LIMIT: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('25kb'),
-  ),
-
-  // CSRF hardening (cookie auth): require Origin/Referer on unsafe methods in production.
-  REQUIRE_CSRF_ORIGIN_IN_PROD: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('true'),
-  ),
-
-  // Dev-only: log every request (method, path, status, ms, request-id).
-  LOG_REQUESTS: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // Dev-only: print startup config summary (opt-in).
-  LOG_STARTUP_INFO: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // Presence: minutes with no activity ping before marking user idle (default 3).
-  PRESENCE_IDLE_AFTER_MINUTES: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PRESENCE_IDLE_AFTER_MINUTES must be a number'),
-  // Presence: if user stays idle this many minutes, disconnect them (consider offline and close socket).
-  PRESENCE_IDLE_DISCONNECT_MINUTES: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'PRESENCE_IDLE_DISCONNECT_MINUTES must be a number'),
-
-  // Web Push (browser notifications). Generate: npx web-push generate-vapid-keys
-  VAPID_PUBLIC_KEY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  VAPID_PRIVATE_KEY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  // Base URL for push notification click-through (canonical frontend). If unset, first ALLOWED_ORIGINS entry is used.
-  PUSH_FRONTEND_BASE_URL: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // Apple IAP (StoreKit 2 / App Store Server API)
-  APPLE_IAP_BUNDLE_ID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  // Issuer ID from App Store Connect → Users and Access → Integrations → In-App Purchase
-  APPLE_IAP_ISSUER_ID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  // Key ID from App Store Connect (the short ID shown under your subscription key)
-  APPLE_IAP_KEY_ID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  // Contents of the .p8 key file. Literal "\n" sequences are normalized to newlines at read time.
-  APPLE_IAP_PRIVATE_KEY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  // JSON map of productId -> tier, e.g. '{"com.menofhunger.premium":"premium","com.menofhunger.premiumplus":"premiumPlus"}'
-  APPLE_IAP_PRODUCT_TIER_MAP: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  // App Store environment to verify signed data against: 'sandbox' (default) or 'production'.
-  APPLE_IAP_ENVIRONMENT: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.enum(['sandbox', 'production']).optional(),
-  ),
-  // Numeric App Store app ID (App Store Connect → App Information → "Apple ID"). Required in production.
-  APPLE_IAP_APP_APPLE_ID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // Stripe billing (Premium / Premium+ subscriptions)
-  STRIPE_SECRET_KEY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  STRIPE_WEBHOOK_SECRET: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  STRIPE_PRICE_PREMIUM_MONTHLY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  STRIPE_PRICE_PREMIUM_PLUS_MONTHLY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // Email (optional): configure Mailgun for digests/re-engagement.
-  // Email (optional): Resend (digests + verification + nudges).
-  RESEND_API_KEY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  RESEND_FROM_EMAIL: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  RESEND_FROM_NOTIFICATIONS_EMAIL: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  RESEND_FROM_SUPPORT_EMAIL: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  RESEND_FROM_NEWSLETTER_EMAIL: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // Slack Incoming Webhook URL (optional; notifications silently no-op when unset).
-  // Create one at: https://api.slack.com/apps → your app → Incoming Webhooks
-  SLACK_WEBHOOK_URL: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // PostHog product analytics (optional; events silently no-op when unset)
-  // ─── Strava integration ─────────────────────────────────────────────────
-  STRAVA_CLIENT_ID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  STRAVA_CLIENT_SECRET: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  STRAVA_WEBHOOK_VERIFY_TOKEN: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // Encrypts members' Pickax API credentials at rest (min 32 chars). Cross-posting is off when unset.
-  PICKAX_SECRET_ENCRYPTION_KEY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().min(32).optional(),
-  ),
-
-  // X (Twitter) OAuth cross-posting. Off until the client id, secret, and encryption key are set.
-  X_CLIENT_ID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  X_CLIENT_SECRET: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  X_TOKEN_ENCRYPTION_KEY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().min(32).optional(),
-  ),
-  X_MONTHLY_BUDGET_CENTS: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.coerce.number().int().min(0).max(100_000).optional().default(300),
-  ),
-
-  POSTHOG_API_KEY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  POSTHOG_HOST: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('https://us.i.posthog.com'),
-  ),
-  POSTHOG_FEATURE_FLAGS_KEY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-
-  // Sentry error + performance monitoring (optional; disabled when SENTRY_DSN is unset).
-  // Read directly in src/instrument.ts, which runs before Nest config is available.
-  SENTRY_DSN: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().url().optional(),
-  ),
-  SENTRY_ENVIRONMENT: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  SENTRY_TRACES_SAMPLE_RATE: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.coerce.number().min(0).max(1).optional(),
-  ),
-
-  // ─── Marv (AI helper) ────────────────────────────────────────────────────
-  // Global on/off. Defaults to true; admin UI can override via MarvinGlobalSettings row.
-  MARV_ENABLED: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('true'),
-  ),
-  // Optional override of the Marv bot user id. When unset, MarvinSeedService
-  // creates/looks up the user by MARV_USERNAME and caches the id in memory.
-  MARV_USER_ID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  MARV_USERNAME: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('marv'),
-  ),
-  MARV_DISPLAY_NAME: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('Marv'),
-  ),
-  MARV_BIO: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('AI helper for Men of Hunger. Brief. Bible-conscious. Mention me to ask.'),
-  ),
-  // Marv phone (Marv is a real User; users have unique phones). Use a
-  // recognizable bot-only number so it never collides with a real signup.
-  MARV_PHONE: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('+10000000001'),
-  ),
-
-  // OpenAI Responses API. Member Marv personality lives in code
-  // (`marvin-system-prompt.ts`) and is sent as `instructions`. Need an API key.
-  OPENAI_API_KEY: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  // Ignored. Kept so existing deployments can leave the old stored-prompt env
-  // vars set without failing validation. Remove after the next env cleanup.
-  OPENAI_MARV_PROMPT_ID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  OPENAI_MARV_PROMPT_VERSION: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  OPENAI_MARV_FAST_MODEL: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default(MARV_DEFAULT_FAST_MODEL),
-  ),
-  OPENAI_MARV_REGULAR_MODEL: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default(MARV_DEFAULT_REGULAR_MODEL),
-  ),
-  OPENAI_MARV_SMART_MODEL: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default(MARV_DEFAULT_SMART_MODEL),
-  ),
-  OPENAI_ADMIN_ASTRA_MODEL: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default(MARV_DEFAULT_ASTRA_MODEL),
-  ),
-
-  // Credit bucket — see MarvinCreditService.
-  MARV_MONTHLY_CREDITS: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_MONTHLY_CREDITS must be a number'),
-  MARV_MAX_CREDITS: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_MAX_CREDITS must be a number'),
-  MARV_CREDITS_PER_DAY: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_CREDITS_PER_DAY must be a number'),
-  MARV_FAST_COST: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_FAST_COST must be a number'),
-  MARV_REGULAR_COST: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_REGULAR_COST must be a number'),
-  MARV_SMART_COST: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_SMART_COST must be a number'),
-
-  // Token caps (passed to the Responses API max_output_tokens + used to clamp prompt assembly).
-  MARV_PUBLIC_MAX_INPUT_TOKENS: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PUBLIC_MAX_INPUT_TOKENS must be a number'),
-  MARV_PRIVATE_MAX_INPUT_TOKENS: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PRIVATE_MAX_INPUT_TOKENS must be a number'),
-  MARV_MAX_OUTPUT_TOKENS: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_MAX_OUTPUT_TOKENS must be a number'),
-
-  // Rate limits (separate from the global throttler — these are enforced inside the job).
-  MARV_PUBLIC_MAX_PER_USER_PER_HOUR: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PUBLIC_MAX_PER_USER_PER_HOUR must be a number'),
-  MARV_PUBLIC_MAX_PER_USER_PER_DAY: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PUBLIC_MAX_PER_USER_PER_DAY must be a number'),
-  MARV_PUBLIC_THREAD_BURST_LIMIT: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PUBLIC_THREAD_BURST_LIMIT must be a number'),
-  MARV_PUBLIC_THREAD_BURST_WINDOW_SECONDS: z
-    .string()
-    .optional()
-    .refine(
-      (v) => (v ? !Number.isNaN(Number(v)) : true),
-      'MARV_PUBLIC_THREAD_BURST_WINDOW_SECONDS must be a number',
+    // Redis (BullMQ). Default is dev-friendly; require explicit value in production.
+    REDIS_URL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("redis://localhost:6379"),
     ),
-  MARV_PRIVATE_MAX_PER_USER_PER_DAY: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PRIVATE_MAX_PER_USER_PER_DAY must be a number'),
-  MARV_PRIVATE_MAX_PER_10_MIN: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_PRIVATE_MAX_PER_10_MIN must be a number'),
 
-  // Marv web search (optional — gates hosted web_search tool attachment).
-  MARV_WEB_SEARCH_ENABLED: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  MARV_WEB_SEARCH_MODES: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  MARV_WEB_SEARCH_MAX_OUTPUT_TOKENS: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_WEB_SEARCH_MAX_OUTPUT_TOKENS must be a number'),
-  MARV_WEB_SEARCH_CREDIT_COST: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_WEB_SEARCH_CREDIT_COST must be a number'),
+    // Process roles (enable/disable parts of the app for API vs worker deployments).
+    RUN_HTTP: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("true"),
+    ),
+    RUN_SCHEDULERS: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("true"),
+    ),
+    RUN_JOB_CONSUMERS: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("true"),
+    ),
 
-  // Marv vision (optional — gates image/GIF inputs to OpenAI). Requires a model that supports vision.
-  MARV_VISION_ENABLED: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  // Comma-separated modes that may receive image inputs. Default is all three;
-  // gpt-5.6-luna handles vision. Web search stays off for fast (see MARV_WEB_SEARCH_MODES).
-  MARV_VISION_MODES: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional(),
-  ),
-  MARV_VISION_MAX_IMAGES_PER_TURN: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true), 'MARV_VISION_MAX_IMAGES_PER_TURN must be a positive number'),
-  MARV_VISION_CREDIT_COST_PER_IMAGE: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) : true), 'MARV_VISION_CREDIT_COST_PER_IMAGE must be a number'),
+    // In-flight side-effect jobs per worker (notifications, push, fan-out).
+    SIDE_EFFECTS_QUEUE_CONCURRENCY: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "SIDE_EFFECTS_QUEUE_CONCURRENCY must be a number",
+      ),
 
-  // BullMQ worker concurrency for the dedicated Marv queue. Marv replies are I/O-bound
-  // (waiting on OpenAI), so concurrency >> 1 is safe and necessary — the default queue
-  // worker would serialize all replies behind cron sweeps. Sized for ~50–200 simultaneous
-  // premium users at peak; lower it if you see OpenAI rate-limit errors.
-  MARV_QUEUE_CONCURRENCY: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true), 'MARV_QUEUE_CONCURRENCY must be a positive number'),
+    // Prisma connection retry (e.g. when Postgres is starting in docker compose).
+    PRISMA_CONNECT_RETRIES: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "PRISMA_CONNECT_RETRIES must be a number",
+      ),
+    PRISMA_CONNECT_RETRY_DELAY_MS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "PRISMA_CONNECT_RETRY_DELAY_MS must be a number",
+      ),
 
-  // Read-only member MCP: tool calls per Premium member per UTC day (default 200).
-  MCP_MEMBER_DAILY_CALLS: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true), 'MCP_MEMBER_DAILY_CALLS must be a positive number'),
+    // Comma-separated list of allowed web origins for CORS (must be explicit when using cookies).
+    // Examples:
+    // - http://localhost:3000
+    // - https://menofhunger.com
+    // Note: some hosts inject empty strings for unset env vars. Treat "" as unset.
+    ALLOWED_ORIGINS: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("http://localhost:3000"),
+    ),
 
-  // Email quota budget — matches the Resend free-tier hard limit (100/day).
-  // Upgrade Resend and raise these to remove the constraint.
-  // EMAIL_DAILY_QUOTA_LIMIT: total sends allowed per UTC day (default 100).
-  EMAIL_DAILY_QUOTA_LIMIT: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true), 'EMAIL_DAILY_QUOTA_LIMIT must be a positive number'),
-  // EMAIL_DAILY_VERIFICATION_RESERVE: sends kept in reserve for transactional email (default 15).
-  // Engagement sends are blocked once (quota - reserve) is reached.
-  EMAIL_DAILY_VERIFICATION_RESERVE: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) >= 0 : true), 'EMAIL_DAILY_VERIFICATION_RESERVE must be a non-negative number'),
-  // EMAIL_BROADCAST_DAILY_QUOTA: admin newsletter sends per UTC day (default 5000).
-  // Separate from engagement/transactional so a blast cannot starve verification or digests.
-  EMAIL_BROADCAST_DAILY_QUOTA: z
-    .string()
-    .optional()
-    .refine((v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true), 'EMAIL_BROADCAST_DAILY_QUOTA must be a positive number'),
-  // NEWSLETTER_POSTAL_ADDRESS: physical mailing address for CAN-SPAM footer. Required to send.
-  NEWSLETTER_POSTAL_ADDRESS: z.string().optional(),
+    // Secrets (recommended in all envs; required in production)
+    // Note: treat empty strings as unset; provide dev defaults so app code never reads process.env directly.
+    OTP_HMAC_SECRET: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("dev-otp-secret-change-me"),
+    ),
+    SESSION_HMAC_SECRET: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("dev-session-secret-change-me"),
+    ),
 
-  // Per-publish article fan-out email. Disable (false) on the Resend free tier —
-  // new articles already appear in the weekly digest. Enable (true) after upgrading.
-  EMAIL_FOLLOWED_ARTICLE_ENABLED: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().optional().default('false'),
-  ),
-  // Partner capabilities remain disabled until production credentials and rollout are ready.
-  PARTNER_API_ENABLED: z.string().optional().default('false'),
-  OUTBOUND_DELIVERY_PAUSED: z.enum(['true', 'false']).default('false'),
-  PARTNER_WEBHOOKS_ENABLED: z.string().optional().default('false'),
-  PARTNER_OIDC_JWKS: z.string().optional(),
-  PARTNER_ENCRYPTION_KEY: z.string().optional(),
-  PICKAX_PARTNER_CLIENT_ID: z.string().optional(),
-  PICKAX_OAUTH_ISSUER: z.string().url().optional(),
-  PICKAX_OAUTH_CLIENT_ID: z.string().optional(),
-  PICKAX_OAUTH_CLIENT_SECRET: z.string().optional(),
-  PICKAX_OAUTH_ENABLED: z.string().optional().default('false'),
-  PICKAX_REMOTE_DELETE_ENABLED: z.string().optional().default('false'),
-  X_COUNT_ALLOWANCE_ENABLED: z.string().optional().default('false'),
-}).superRefine((env, ctx) => {
-  if (env.NODE_ENV !== 'production') return;
+    // Cookie domain. In production you likely want `.menofhunger.com`.
+    COOKIE_DOMAIN: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
 
-  if (!env.OTP_HMAC_SECRET || env.OTP_HMAC_SECRET.length < 16) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['OTP_HMAC_SECRET'],
-      message: 'OTP_HMAC_SECRET is required in production (min 16 chars)',
-    });
-  }
+    // Canonical public API base, including the version prefix, used for one-time
+    // native-to-browser handoff URLs (for example https://api.menofhunger.com/v1).
+    BROWSER_HANDOFF_BASE_URL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().url().optional(),
+    ),
 
-  if (!env.SESSION_HMAC_SECRET || env.SESSION_HMAC_SECRET.length < 16) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['SESSION_HMAC_SECRET'],
-      message: 'SESSION_HMAC_SECRET is required in production (min 16 chars)',
-    });
-  }
+    // Dev-only: if true, do not attempt to send SMS via Twilio (use 000000 bypass flow).
+    DISABLE_TWILIO_IN_DEV: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
 
-  if (!env.REDIS_URL || !String(env.REDIS_URL).trim()) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['REDIS_URL'],
-      message: 'REDIS_URL is required in production',
-    });
-  }
-});
+    // App Review: a single phone number that App Review can sign in with using a fixed code,
+    // bypassing Twilio even in production. Only active when both vars are set.
+    // Set these in your production env and supply them in App Store Connect Review Notes.
+    APP_REVIEW_PHONE: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    APP_REVIEW_CODE: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // Twilio (production only)
+    TWILIO_ACCOUNT_SID: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    TWILIO_AUTH_TOKEN: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    // Twilio Verify Service SID (starts with VA...)
+    TWILIO_VERIFY_SERVICE_SID: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    // Legacy (not used when TWILIO_VERIFY_SERVICE_SID is set)
+    TWILIO_FROM_NUMBER: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    TWILIO_MESSAGING_SERVICE_SID: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // WebRTC ICE servers for DM calling. STUN defaults to Google's public servers.
+    // TURN is optional fallback infrastructure; all three TURN vars must be set to enable it.
+    RTC_STUN_URLS: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    RTC_TURN_URLS: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    RTC_TURN_USERNAME: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    RTC_TURN_CREDENTIAL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    // Cloudflare Realtime TURN. When both are set, start/join mints short-lived ICE credentials.
+    CF_TURN_KEY_ID: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    CF_TURN_API_TOKEN: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // SFU rollout is opt-in; credentials alone must never change live call routing.
+    CLOUDFLARE_SFU_APP_ID: z.string().optional(),
+    CLOUDFLARE_SFU_APP_SECRET: z.string().optional(),
+    CALLS_SFU_ENABLED: z.enum(["true", "false"]).optional().default("false"),
+
+    // Cloudflare R2 (S3-compatible) for public assets (avatars/banners).
+    R2_ACCOUNT_ID: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    R2_ACCESS_KEY_ID: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    R2_SECRET_ACCESS_KEY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    R2_BUCKET: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    // Public base URL for reading objects, e.g. https://moh-assets.<accountId>.r2.dev
+    R2_PUBLIC_BASE_URL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // Giphy (server-side proxy for GIF search)
+    GIPHY_API_KEY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // Scripture translation ID for bible.helloao.org (default: BSB = Berean Standard Bible).
+    // Set to a different ID (e.g. NKJV) once a commercial licence is in place.
+    SCRIPTURE_TRANSLATION: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // Global API rate limiting (generous defaults if unset).
+    RATE_LIMIT_TTL_SECONDS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "RATE_LIMIT_TTL_SECONDS must be a number",
+      ),
+    RATE_LIMIT_LIMIT: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "RATE_LIMIT_LIMIT must be a number",
+      ),
+
+    // Route-specific throttles (all optional; defaults are reasonable).
+    RATE_LIMIT_AUTH_START_TTL_SECONDS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "RATE_LIMIT_AUTH_START_TTL_SECONDS must be a number",
+      ),
+    RATE_LIMIT_AUTH_START_LIMIT: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "RATE_LIMIT_AUTH_START_LIMIT must be a number",
+      ),
+
+    RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "RATE_LIMIT_AUTH_VERIFY_TTL_SECONDS must be a number",
+      ),
+    RATE_LIMIT_AUTH_VERIFY_LIMIT: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "RATE_LIMIT_AUTH_VERIFY_LIMIT must be a number",
+      ),
+
+    RATE_LIMIT_POST_CREATE_TTL_SECONDS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "RATE_LIMIT_POST_CREATE_TTL_SECONDS must be a number",
+      ),
+    RATE_LIMIT_POST_CREATE_LIMIT: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "RATE_LIMIT_POST_CREATE_LIMIT must be a number",
+      ),
+
+    RATE_LIMIT_INTERACT_TTL_SECONDS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "RATE_LIMIT_INTERACT_TTL_SECONDS must be a number",
+      ),
+    RATE_LIMIT_INTERACT_LIMIT: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "RATE_LIMIT_INTERACT_LIMIT must be a number",
+      ),
+
+    RATE_LIMIT_UPLOAD_TTL_SECONDS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "RATE_LIMIT_UPLOAD_TTL_SECONDS must be a number",
+      ),
+    RATE_LIMIT_UPLOAD_LIMIT: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "RATE_LIMIT_UPLOAD_LIMIT must be a number",
+      ),
+
+    // Express / proxy settings (recommended in production behind a reverse proxy / Cloudflare).
+    // When enabled, Express will respect X-Forwarded-* headers for req.ip / req.protocol.
+    TRUST_PROXY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // Body size limits (protects memory + prevents accidental huge payloads).
+    BODY_JSON_LIMIT: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("1mb"),
+    ),
+    BODY_URLENCODED_LIMIT: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("25kb"),
+    ),
+
+    // CSRF hardening (cookie auth): require Origin/Referer on unsafe methods in production.
+    REQUIRE_CSRF_ORIGIN_IN_PROD: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("true"),
+    ),
+
+    // Dev-only: log every request (method, path, status, ms, request-id).
+    LOG_REQUESTS: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // Dev-only: print startup config summary (opt-in).
+    LOG_STARTUP_INFO: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // Presence: minutes with no activity ping before marking user idle (default 3).
+    PRESENCE_IDLE_AFTER_MINUTES: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "PRESENCE_IDLE_AFTER_MINUTES must be a number",
+      ),
+    // Presence: if user stays idle this many minutes, disconnect them (consider offline and close socket).
+    PRESENCE_IDLE_DISCONNECT_MINUTES: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "PRESENCE_IDLE_DISCONNECT_MINUTES must be a number",
+      ),
+
+    // Web Push (browser notifications). Generate: npx web-push generate-vapid-keys
+    VAPID_PUBLIC_KEY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    VAPID_PRIVATE_KEY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    // Base URL for push notification click-through (canonical frontend). If unset, first ALLOWED_ORIGINS entry is used.
+    PUSH_FRONTEND_BASE_URL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // Apple IAP (StoreKit 2 / App Store Server API)
+    APPLE_IAP_BUNDLE_ID: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    // Issuer ID from App Store Connect → Users and Access → Integrations → In-App Purchase
+    APPLE_IAP_ISSUER_ID: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    // Key ID from App Store Connect (the short ID shown under your subscription key)
+    APPLE_IAP_KEY_ID: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    // Contents of the .p8 key file. Literal "\n" sequences are normalized to newlines at read time.
+    APPLE_IAP_PRIVATE_KEY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    // JSON map of productId -> tier, e.g. '{"com.menofhunger.premium":"premium","com.menofhunger.premiumplus":"premiumPlus"}'
+    APPLE_IAP_PRODUCT_TIER_MAP: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    // App Store environment to verify signed data against: 'sandbox' (default) or 'production'.
+    APPLE_IAP_ENVIRONMENT: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.enum(["sandbox", "production"]).optional(),
+    ),
+    // Numeric App Store app ID (App Store Connect → App Information → "Apple ID"). Required in production.
+    APPLE_IAP_APP_APPLE_ID: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // Stripe billing (Premium / Premium+ subscriptions)
+    STRIPE_SECRET_KEY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    STRIPE_WEBHOOK_SECRET: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    STRIPE_PRICE_PREMIUM_MONTHLY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    STRIPE_PRICE_PREMIUM_PLUS_MONTHLY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // Email (optional): configure Mailgun for digests/re-engagement.
+    // Email (optional): Resend (digests + verification + nudges).
+    RESEND_API_KEY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    RESEND_FROM_EMAIL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    RESEND_FROM_NOTIFICATIONS_EMAIL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    RESEND_FROM_SUPPORT_EMAIL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    RESEND_FROM_NEWSLETTER_EMAIL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // Slack Incoming Webhook URL (optional; notifications silently no-op when unset).
+    // Create one at: https://api.slack.com/apps → your app → Incoming Webhooks
+    SLACK_WEBHOOK_URL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // PostHog product analytics (optional; events silently no-op when unset)
+    // ─── Strava integration ─────────────────────────────────────────────────
+    STRAVA_CLIENT_ID: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    STRAVA_CLIENT_SECRET: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    STRAVA_WEBHOOK_VERIFY_TOKEN: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // Encrypts members' Pickax API credentials at rest (min 32 chars). Cross-posting is off when unset.
+    PICKAX_SECRET_ENCRYPTION_KEY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().min(32).optional(),
+    ),
+
+    // X (Twitter) OAuth cross-posting. Off until the client id, secret, and encryption key are set.
+    X_CLIENT_ID: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    X_CLIENT_SECRET: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    X_TOKEN_ENCRYPTION_KEY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().min(32).optional(),
+    ),
+    X_MONTHLY_BUDGET_CENTS: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.coerce.number().int().min(0).max(100_000).optional().default(300),
+    ),
+
+    POSTHOG_API_KEY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    POSTHOG_HOST: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("https://us.i.posthog.com"),
+    ),
+    POSTHOG_FEATURE_FLAGS_KEY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+
+    // Sentry error + performance monitoring (optional; disabled when SENTRY_DSN is unset).
+    // Read directly in src/instrument.ts, which runs before Nest config is available.
+    SENTRY_DSN: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().url().optional(),
+    ),
+    SENTRY_ENVIRONMENT: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    SENTRY_TRACES_SAMPLE_RATE: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.coerce.number().min(0).max(1).optional(),
+    ),
+
+    // ─── Marv (AI helper) ────────────────────────────────────────────────────
+    // Global on/off. Defaults to true; admin UI can override via MarvinGlobalSettings row.
+    MARV_ENABLED: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("true"),
+    ),
+    // Optional override of the Marv bot user id. When unset, MarvinSeedService
+    // creates/looks up the user by MARV_USERNAME and caches the id in memory.
+    MARV_USER_ID: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    MARV_USERNAME: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("marv"),
+    ),
+    MARV_DISPLAY_NAME: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("Marv"),
+    ),
+    MARV_BIO: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z
+        .string()
+        .optional()
+        .default(
+          "AI helper for Men of Hunger. Brief. Bible-conscious. Mention me to ask.",
+        ),
+    ),
+    // Marv phone (Marv is a real User; users have unique phones). Use a
+    // recognizable bot-only number so it never collides with a real signup.
+    MARV_PHONE: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("+10000000001"),
+    ),
+
+    // OpenAI Responses API. Member Marv personality lives in code
+    // (`marvin-system-prompt.ts`) and is sent as `instructions`. Need an API key.
+    OPENAI_API_KEY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    // Ignored. Kept so existing deployments can leave the old stored-prompt env
+    // vars set without failing validation. Remove after the next env cleanup.
+    OPENAI_MARV_PROMPT_ID: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    OPENAI_MARV_PROMPT_VERSION: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    OPENAI_MARV_FAST_MODEL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default(MARV_DEFAULT_FAST_MODEL),
+    ),
+    OPENAI_MARV_REGULAR_MODEL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default(MARV_DEFAULT_REGULAR_MODEL),
+    ),
+    OPENAI_MARV_SMART_MODEL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default(MARV_DEFAULT_SMART_MODEL),
+    ),
+    OPENAI_ADMIN_ASTRA_MODEL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default(MARV_DEFAULT_ASTRA_MODEL),
+    ),
+
+    // Credit bucket — see MarvinCreditService.
+    MARV_MONTHLY_CREDITS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_MONTHLY_CREDITS must be a number",
+      ),
+    MARV_MAX_CREDITS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_MAX_CREDITS must be a number",
+      ),
+    MARV_CREDITS_PER_DAY: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_CREDITS_PER_DAY must be a number",
+      ),
+    MARV_FAST_COST: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_FAST_COST must be a number",
+      ),
+    MARV_REGULAR_COST: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_REGULAR_COST must be a number",
+      ),
+    MARV_SMART_COST: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_SMART_COST must be a number",
+      ),
+
+    // Token caps (passed to the Responses API max_output_tokens + used to clamp prompt assembly).
+    MARV_PUBLIC_MAX_INPUT_TOKENS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_PUBLIC_MAX_INPUT_TOKENS must be a number",
+      ),
+    MARV_PRIVATE_MAX_INPUT_TOKENS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_PRIVATE_MAX_INPUT_TOKENS must be a number",
+      ),
+    MARV_MAX_OUTPUT_TOKENS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_MAX_OUTPUT_TOKENS must be a number",
+      ),
+
+    // Rate limits (separate from the global throttler — these are enforced inside the job).
+    MARV_PUBLIC_MAX_PER_USER_PER_HOUR: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_PUBLIC_MAX_PER_USER_PER_HOUR must be a number",
+      ),
+    MARV_PUBLIC_MAX_PER_USER_PER_DAY: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_PUBLIC_MAX_PER_USER_PER_DAY must be a number",
+      ),
+    MARV_PUBLIC_THREAD_BURST_LIMIT: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_PUBLIC_THREAD_BURST_LIMIT must be a number",
+      ),
+    MARV_PUBLIC_THREAD_BURST_WINDOW_SECONDS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_PUBLIC_THREAD_BURST_WINDOW_SECONDS must be a number",
+      ),
+    MARV_PRIVATE_MAX_PER_USER_PER_DAY: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_PRIVATE_MAX_PER_USER_PER_DAY must be a number",
+      ),
+    MARV_PRIVATE_MAX_PER_10_MIN: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_PRIVATE_MAX_PER_10_MIN must be a number",
+      ),
+
+    // Marv web search (optional — gates hosted web_search tool attachment).
+    MARV_WEB_SEARCH_ENABLED: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    MARV_WEB_SEARCH_MODES: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    MARV_WEB_SEARCH_MAX_OUTPUT_TOKENS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_WEB_SEARCH_MAX_OUTPUT_TOKENS must be a number",
+      ),
+    MARV_WEB_SEARCH_CREDIT_COST: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_WEB_SEARCH_CREDIT_COST must be a number",
+      ),
+
+    // Marv vision (optional — gates image/GIF inputs to OpenAI). Requires a model that supports vision.
+    MARV_VISION_ENABLED: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    // Comma-separated modes that may receive image inputs. Default is all three;
+    // gpt-5.6-luna handles vision. Web search stays off for fast (see MARV_WEB_SEARCH_MODES).
+    MARV_VISION_MODES: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    MARV_VISION_MAX_IMAGES_PER_TURN: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true),
+        "MARV_VISION_MAX_IMAGES_PER_TURN must be a positive number",
+      ),
+    MARV_VISION_CREDIT_COST_PER_IMAGE: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) : true),
+        "MARV_VISION_CREDIT_COST_PER_IMAGE must be a number",
+      ),
+
+    // BullMQ worker concurrency for the dedicated Marv queue. Marv replies are I/O-bound
+    // (waiting on OpenAI), so concurrency >> 1 is safe and necessary — the default queue
+    // worker would serialize all replies behind cron sweeps. Sized for ~50–200 simultaneous
+    // premium users at peak; lower it if you see OpenAI rate-limit errors.
+    MARV_QUEUE_CONCURRENCY: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true),
+        "MARV_QUEUE_CONCURRENCY must be a positive number",
+      ),
+
+    // Read-only member MCP: tool calls per Premium member per UTC day (default 200).
+    MCP_MEMBER_DAILY_CALLS: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true),
+        "MCP_MEMBER_DAILY_CALLS must be a positive number",
+      ),
+
+    // Email quota budget — matches the Resend free-tier hard limit (100/day).
+    // Upgrade Resend and raise these to remove the constraint.
+    // EMAIL_DAILY_QUOTA_LIMIT: total sends allowed per UTC day (default 100).
+    EMAIL_DAILY_QUOTA_LIMIT: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true),
+        "EMAIL_DAILY_QUOTA_LIMIT must be a positive number",
+      ),
+    // EMAIL_DAILY_VERIFICATION_RESERVE: sends kept in reserve for transactional email (default 15).
+    // Engagement sends are blocked once (quota - reserve) is reached.
+    EMAIL_DAILY_VERIFICATION_RESERVE: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) && Number(v) >= 0 : true),
+        "EMAIL_DAILY_VERIFICATION_RESERVE must be a non-negative number",
+      ),
+    // EMAIL_BROADCAST_DAILY_QUOTA: admin newsletter sends per UTC day (default 5000).
+    // Separate from engagement/transactional so a blast cannot starve verification or digests.
+    EMAIL_BROADCAST_DAILY_QUOTA: z
+      .string()
+      .optional()
+      .refine(
+        (v) => (v ? !Number.isNaN(Number(v)) && Number(v) > 0 : true),
+        "EMAIL_BROADCAST_DAILY_QUOTA must be a positive number",
+      ),
+    // NEWSLETTER_POSTAL_ADDRESS: physical mailing address for CAN-SPAM footer. Required to send.
+    NEWSLETTER_POSTAL_ADDRESS: z.string().optional(),
+
+    // Per-publish article fan-out email. Disable (false) on the Resend free tier —
+    // new articles already appear in the weekly digest. Enable (true) after upgrading.
+    EMAIL_FOLLOWED_ARTICLE_ENABLED: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("false"),
+    ),
+    // Partner capabilities remain disabled until production credentials and rollout are ready.
+    PARTNER_API_ENABLED: z.string().optional().default("false"),
+    OUTBOUND_DELIVERY_PAUSED: z.enum(["true", "false"]).default("false"),
+    PARTNER_WEBHOOKS_ENABLED: z.string().optional().default("false"),
+    PARTNER_OIDC_JWKS: z.string().optional(),
+    PARTNER_ENCRYPTION_KEY: z.string().optional(),
+    PICKAX_PARTNER_CLIENT_ID: z.string().optional(),
+    PICKAX_OAUTH_ISSUER: z.string().url().optional(),
+    PICKAX_OAUTH_CLIENT_ID: z.string().optional(),
+    PICKAX_OAUTH_CLIENT_SECRET: z.string().optional(),
+    PICKAX_OAUTH_ENABLED: z.string().optional().default("false"),
+    PICKAX_REMOTE_DELETE_ENABLED: z.string().optional().default("false"),
+    X_COUNT_ALLOWANCE_ENABLED: z.string().optional().default("false"),
+    INTEGRATION_BUDGET_ENABLED: z.enum(["true", "false"]).default("false"),
+    INTEGRATION_COMPANY_MONTHLY_MICROS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(2_000_000_000)
+      .default(0),
+    INTEGRATION_COMPANY_DAILY_MICROS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(2_000_000_000)
+      .default(0),
+    INTEGRATION_REMOVAL_HEADROOM_MICROS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(2_000_000_000)
+      .default(0),
+    INTEGRATION_X_MONTHLY_MICROS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(2_000_000_000)
+      .default(0),
+    INTEGRATION_FUNDED_RESERVE_MICROS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(2_000_000_000)
+      .default(0),
+    INTEGRATION_ACQUISITION_MICROS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(2_000_000_000)
+      .default(0),
+    INTEGRATION_X_PRICE_VERSION: z.string().max(100).default(""),
+    X_ARTICLE_ENABLED: z.enum(["true", "false"]).default("false"),
+    X_ARTICLE_ACCOUNT_IDS: z.string().max(4000).optional(),
+    X_ARTICLE_MAX_MICROS: z.preprocess(
+      (value) =>
+        typeof value === "string" && !value.trim() ? undefined : value,
+      z.coerce.number().int().min(0).max(10_000_000).optional(),
+    ),
+    X_ARTICLE_PRICE_VERSION: z.string().max(100).optional(),
+    X_ARTICLE_BUCKET: z.enum(["regular", "expensive"]).default("regular"),
+    X_NEWS_ENABLED: z.enum(["true", "false"]).default("false"),
+    X_NEWS_PILOT_START: z.string().datetime().optional(),
+    X_NEWS_ACCOUNT_USER_ID: z.string().max(100).optional(),
+    X_NEWS_QUERY: z.string().trim().min(1).max(2048).optional(),
+    X_NEWS_REQUEST_MAX_MICROS: z.preprocess(
+      (value) =>
+        typeof value === "string" && !value.trim() ? undefined : value,
+      z.coerce.number().int().min(0).max(10_000_000).optional(),
+    ),
+    X_NEWS_PRICE_VERSION: z.string().max(100).optional(),
+    X_PROFILE_CONTEXT_ENABLED: z.enum(["true", "false"]).default("false"),
+    X_PROFILE_PREVIEW_ENABLED: z.enum(["true", "false"]).default("false"),
+    X_ADVANCED_ENABLED: z.enum(["true", "false"]).default("false"),
+    X_ADVANCED_ACCOUNT_IDS: z.string().default(""),
+    X_QUOTE_ENTERPRISE_ACCOUNT_IDS: z.string().default(""),
+    X_LONG_TEXT_ACCOUNT_IDS: z.string().default(""),
+    X_EDIT_ACCOUNT_IDS: z.string().default(""),
+    X_ADVANCED_PRICE_VERSION: z.string().default(""),
+    X_ADVANCED_POST_MAX_MICROS: z.preprocess(
+      (v) => (typeof v === "string" && !v.trim() ? undefined : v),
+      z.coerce.number().int().min(0).max(10_000_000).optional(),
+    ),
+    X_ADVANCED_MEDIA_MAX_MICROS: z.preprocess(
+      (v) => (typeof v === "string" && !v.trim() ? undefined : v),
+      z.coerce.number().int().min(0).max(10_000_000).optional(),
+    ),
+    X_IMAGE_UPLOAD_MAX_MICROS: z.preprocess(
+      (value) =>
+        typeof value === "string" && !value.trim() ? undefined : value,
+      z.coerce.number().int().min(0).max(1_000_000).optional(),
+    ),
+  })
+  .superRefine((env, ctx) => {
+    if (env.NODE_ENV !== "production") return;
+
+    if (!env.OTP_HMAC_SECRET || env.OTP_HMAC_SECRET.length < 16) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["OTP_HMAC_SECRET"],
+        message: "OTP_HMAC_SECRET is required in production (min 16 chars)",
+      });
+    }
+
+    if (!env.SESSION_HMAC_SECRET || env.SESSION_HMAC_SECRET.length < 16) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["SESSION_HMAC_SECRET"],
+        message: "SESSION_HMAC_SECRET is required in production (min 16 chars)",
+      });
+    }
+
+    if (!env.REDIS_URL || !String(env.REDIS_URL).trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["REDIS_URL"],
+        message: "REDIS_URL is required in production",
+      });
+    }
+  });
 
 export type Env = z.infer<typeof envSchema>;
 
@@ -727,11 +937,10 @@ export function validateEnv<TSchema extends z.ZodTypeAny>(schema: TSchema) {
       // Nest expects thrown errors to abort bootstrap.
       throw new Error(
         `Invalid environment variables:\n${parsed.error.issues
-          .map((i) => `- ${i.path.join('.')}: ${i.message}`)
-          .join('\n')}`,
+          .map((i) => `- ${i.path.join(".")}: ${i.message}`)
+          .join("\n")}`,
       );
     }
     return parsed.data;
   };
 }
-

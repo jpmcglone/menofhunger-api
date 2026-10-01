@@ -1,6 +1,6 @@
 # Integrations and profile previews implementation plan
 
-Status: design and planning only. Prepared October 1, 2026. No application code, migrations, credentials, or production settings were changed for this plan.
+Status: local implementation in progress, October 1, 2026. API, iOS and web changes are available for local review; **the full plan is not complete**. Nothing has been pushed or deployed. Credentials and production settings have not changed. See [local testing and implementation status](integrations-local-testing.md) for what works, what is implemented but disabled, and what remains unimplemented.
 
 MOH should publish the formats each connected destination actually supports, while enforcing predictable spending. Profile links should reveal useful previews without navigating away. Reuse the existing crossposting, link metadata, profile, and location systems rather than introducing separate infrastructure for each provider.
 
@@ -219,3 +219,7 @@ Roll out to test accounts, then a small enabled cohort. Compare reserved versus 
 - Funding for existing nonpaid X publishing before migrating the old link entitlements.
 
 These are implementation acceptance gates, not reasons to postpone the shared designs or build unrelated functionality now.
+
+## October 1 X implementation update
+
+X advanced publishing, database budget aggregation, admin spending controls/reconciliation on iOS and web, deduplicated operational alerts, durable public preview/metrics snapshots, and isolated native/browser provider fixtures are implemented locally. See [local testing and precise remaining limits](integrations-local-testing.md). Advanced formats use the explicit post-detail review editor; account-specific live access and price ceilings remain activation gates. No push or deployment has been performed.

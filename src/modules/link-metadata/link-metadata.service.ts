@@ -1,12 +1,19 @@
-import { featurePageForPath } from '../../common/feature-pages';
-import { spotifyContent, isSpotifyShareUrl, resolveSpotifyShareUrl, fetchSpotifyMetadata } from './spotify-link-metadata';
-import { Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-import { AppConfigService } from '../app/app-config.service';
-import { RedisKeys } from '../redis/redis-keys';
-import { CacheService } from '../redis/cache.service';
-import { CacheTtl } from '../redis/cache-ttl';
+import { readLimitedResponse } from "../../common/http/read-limited-response";
+import { publicPreviewUrl } from "../../common/urls/public-preview-url";
+import { featurePageForPath } from "../../common/feature-pages";
+import {
+  spotifyContent,
+  isSpotifyShareUrl,
+  resolveSpotifyShareUrl,
+  fetchSpotifyMetadata,
+} from "./spotify-link-metadata";
+import { Injectable, Logger } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { AppConfigService } from "../app/app-config.service";
+import { RedisKeys } from "../redis/redis-keys";
+import { CacheService } from "../redis/cache.service";
+import { CacheTtl } from "../redis/cache-ttl";
 import {
   isPickaxGatedMarkdown,
   isPickaxPostUrl,
@@ -15,22 +22,29 @@ import {
   parsePickaxAuthorFromJina,
   parsePickaxBodyFromJina,
   pickaxAuthorFromTitle,
-} from './pickax-link-metadata';
+} from "./pickax-link-metadata";
 import {
   isXPostUrl,
   parseXSyndicationResponse,
   parseXPostUrl,
   type SocialPostMetadataDto,
   xSyndicationToken,
-} from './x-link-metadata';
+} from "./x-link-metadata";
 import {
   isRumbleVideoUrl,
   enrichRumbleVideo,
   needsRumbleDimensionRefresh,
   type VideoEmbedDto,
-} from './rumble-link-metadata';
-import { isSubstackPostUrl, enrichSubstackPost } from './substack-link-metadata';
-import { fetchYoutubeMetadata, needsYoutubeEnrichment, youtubeVideoId } from './youtube-link-metadata';
+} from "./rumble-link-metadata";
+import {
+  isSubstackPostUrl,
+  enrichSubstackPost,
+} from "./substack-link-metadata";
+import {
+  fetchYoutubeMetadata,
+  needsYoutubeEnrichment,
+  youtubeVideoId,
+} from "./youtube-link-metadata";
 
 export type LinkMetadataDto = {
   url: string;
@@ -49,7 +63,7 @@ const X_ENRICH_TIMEOUT_MS = 6_000;
 const SUBSTACK_ENRICH_TIMEOUT_MS = 6_000;
 /** Rumble does oEmbed then embedJS for encoded width/height. */
 const RUMBLE_ENRICH_TIMEOUT_MS = 6_000;
-const X_CONNECTOR_LAUNCHED_AT = new Date('2026-07-16T00:00:00.000Z');
+const X_CONNECTOR_LAUNCHED_AT = new Date("2026-07-16T00:00:00.000Z");
 const STALE_DAYS = 7;
 /** Keyset pagination page size when scanning recent posts during backfill. */
 const BACKFILL_POST_PAGE_SIZE = 500;
@@ -63,40 +77,52 @@ const BACKFILL_MAX_URLS = 2_000;
 // (which would hit a login-redirect and cache "Login | Men of Hunger") and instead
 // synthesize clean, accurate metadata from the URL path.
 
-const MOH_HOSTNAME = 'menofhunger.com';
+const MOH_HOSTNAME = "menofhunger.com";
 
 function getMohPageTitle(pathname: string): string {
-  const parts = pathname.split('/').filter(Boolean);
-  const s0 = parts[0] ?? '';
-  const s1 = parts[1] ?? '';
+  const parts = pathname.split("/").filter(Boolean);
+  const s0 = parts[0] ?? "";
+  const s1 = parts[1] ?? "";
 
-  if (!s0 || s0 === 'login' || s0 === 'index') return 'Men of Hunger';
-  if (s0 === 'home') return 'Home';
-  if (s0 === 'u' && s1) return `@${s1}`;
-  if (s0 === 'p') return 'Post';
-  if (s0 === 'a') return 'Article';
-  if (s0 === 'spaces' || s0 === 's') return 'Space';
-  if (s0 === 'admin') return 'Admin';
+  if (!s0 || s0 === "login" || s0 === "index") return "Men of Hunger";
+  if (s0 === "home") return "Home";
+  if (s0 === "u" && s1) return `@${s1}`;
+  if (s0 === "p") return "Post";
+  if (s0 === "a") return "Article";
+  if (s0 === "spaces" || s0 === "s") return "Space";
+  if (s0 === "admin") return "Admin";
 
-  if (s0 === 'settings') {
-    if (!s1) return 'Settings';
+  if (s0 === "settings") {
+    if (!s1) return "Settings";
     const settingsLabels: Record<string, string> = {
-      billing: 'Billing', account: 'Account', notifications: 'Notifications',
-      verification: 'Verification', profile: 'Profile', privacy: 'Privacy',
+      billing: "Billing",
+      account: "Account",
+      notifications: "Notifications",
+      verification: "Verification",
+      profile: "Profile",
+      privacy: "Privacy",
     };
-    const label = settingsLabels[s1] ?? (s1.charAt(0).toUpperCase() + s1.slice(1));
+    const label =
+      settingsLabels[s1] ?? s1.charAt(0).toUpperCase() + s1.slice(1);
     return `${label} · Settings`;
   }
 
   const topLabels: Record<string, string> = {
-    notifications: 'Notifications', messages: 'Messages', discover: 'Discover',
-    groups: 'Groups', search: 'Search', coins: 'Coins', earn: 'Earn',
-    checkins: 'Check-ins', explore: 'Explore', leaderboard: 'Leaderboard',
+    notifications: "Notifications",
+    messages: "Messages",
+    discover: "Discover",
+    groups: "Groups",
+    search: "Search",
+    coins: "Coins",
+    earn: "Earn",
+    checkins: "Check-ins",
+    explore: "Explore",
+    leaderboard: "Leaderboard",
   };
   if (topLabels[s0]) return topLabels[s0]!;
 
   // Fallback: capitalize each path segment, join with ·
-  return parts.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(' · ');
+  return parts.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" · ");
 }
 
 function buildMohSyntheticMeta(url: string): LinkMetadataDto {
@@ -107,18 +133,20 @@ function buildMohSyntheticMeta(url: string): LinkMetadataDto {
       url,
       title: feature?.title ?? getMohPageTitle(u.pathname),
       description: feature?.description ?? null,
-      imageUrl: feature ? new URL(feature.image, 'https://menofhunger.com').href : null,
-      siteName: 'Men of Hunger',
+      imageUrl: feature
+        ? new URL(feature.image, "https://menofhunger.com").href
+        : null,
+      siteName: "Men of Hunger",
       socialPost: null,
       videoEmbed: null,
     };
   } catch {
     return {
       url,
-      title: 'Men of Hunger',
+      title: "Men of Hunger",
       description: null,
       imageUrl: null,
-      siteName: 'Men of Hunger',
+      siteName: "Men of Hunger",
       socialPost: null,
       videoEmbed: null,
     };
@@ -126,7 +154,7 @@ function buildMohSyntheticMeta(url: string): LinkMetadataDto {
 }
 
 type MicrolinkResponse = {
-  status: 'success' | 'error';
+  status: "success" | "error";
   data?: {
     url?: string;
     title?: string;
@@ -138,16 +166,16 @@ type MicrolinkResponse = {
 };
 
 function normalizeText(v: string | null | undefined): string | null {
-  const s = (v ?? '').trim();
+  const s = (v ?? "").trim();
   return s ? s : null;
 }
 
 function normalizeUrl(raw: string): string | null {
-  const s = (raw ?? '').trim();
+  const s = (raw ?? "").trim();
   if (!s) return null;
   try {
     const u = new URL(s);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
     return u.toString();
   } catch {
     return null;
@@ -173,30 +201,60 @@ export class LinkMetadataService {
     if (configuredBase) {
       try {
         const configured = new URL(configuredBase).hostname.toLowerCase();
-        if (configured && (h === configured || h === `www.${configured}`)) return true;
-      } catch { /* ignore */ }
+        if (configured && (h === configured || h === `www.${configured}`))
+          return true;
+      } catch {
+        /* ignore */
+      }
     }
     return false;
   }
 
-  async getMetadata(url: string): Promise<LinkMetadataDto | null> {
+  async getMetadata(
+    url: string,
+    profilePreview = false,
+  ): Promise<LinkMetadataDto | null> {
     const normalized = normalizeUrl(url);
-    if (!normalized) return null;
+    if (!normalized || (profilePreview && !publicPreviewUrl(normalized)))
+      return null;
 
     // Keep canonical URLs in the existing metadata contract; no new persisted media fields.
     if (isSpotifyShareUrl(normalized)) {
       const identity = `${normalized}:spotify-share-v1`;
-      const result = await this.cache.getOrSetJsonWithLock<{ meta: LinkMetadataDto | null }>({
-        enabled: true, key: RedisKeys.linkMeta(identity), lockKey: RedisKeys.linkMetaLock(identity),
-        ttlSeconds: value => value.meta ? CacheTtl.linkMetaFrontSeconds : CacheTtl.linkMetaNullSeconds,
-        lockTtlMs: 8_000, lockWaitMs: 250,
+      const result = await this.cache.getOrSetJsonWithLock<{
+        meta: LinkMetadataDto | null;
+      }>({
+        enabled: true,
+        key: RedisKeys.linkMeta(identity),
+        lockKey: RedisKeys.linkMetaLock(identity),
+        ttlSeconds: (value) =>
+          value.meta
+            ? CacheTtl.linkMetaFrontSeconds
+            : CacheTtl.linkMetaNullSeconds,
+        lockTtlMs: 8_000,
+        lockWaitMs: 250,
         computeAndSet: async () => {
           try {
-            const canonical = await resolveSpotifyShareUrl(normalized, AbortSignal.timeout(4_000));
+            const canonical = await resolveSpotifyShareUrl(
+              normalized,
+              AbortSignal.timeout(4_000),
+            );
             if (!canonical) return { meta: null };
             const meta = await this.getMetadata(canonical);
-            return { meta: meta ?? { url: canonical, title: 'Spotify', description: null, imageUrl: null, siteName: 'Spotify', socialPost: null, videoEmbed: null } };
-          } catch { return { meta: null }; }
+            return {
+              meta: meta ?? {
+                url: canonical,
+                title: "Spotify",
+                description: null,
+                imageUrl: null,
+                siteName: "Spotify",
+                socialPost: null,
+                videoEmbed: null,
+              },
+            };
+          } catch {
+            return { meta: null };
+          }
         },
         fallback: async () => ({ meta: null }),
       });
@@ -210,24 +268,36 @@ export class LinkMetadataService {
       if (this.isMohHost(u.hostname)) {
         return buildMohSyntheticMeta(normalized);
       }
-    } catch { /* fall through */ }
+    } catch {
+      /* fall through */
+    }
 
     const youtube = youtubeVideoId(normalized) != null;
     // Bypass old scraper/null results without flushing unrelated caches.
-    const cacheIdentity = youtube ? `${normalized}:youtube-v1` : normalized;
+    const cacheIdentity = profilePreview
+      ? `${normalized}:profile-v1`
+      : youtube
+        ? `${normalized}:youtube-v1`
+        : normalized;
     const cacheKey = RedisKeys.linkMeta(cacheIdentity);
-    const cached = await this.cache.getJson<{ meta: LinkMetadataDto | null }>(cacheKey);
-    if (cached && Object.prototype.hasOwnProperty.call(cached, 'meta')) {
+    const cached = await this.cache.getJson<{ meta: LinkMetadataDto | null }>(
+      cacheKey,
+    );
+    if (cached && Object.prototype.hasOwnProperty.call(cached, "meta")) {
       const cachedMeta = cached.meta ?? null;
       const cachedNeedsPickaxEnrichment =
         isPickaxPostUrl(normalized) && needsPickaxEnrichment(cachedMeta);
       const cachedNeedsXEnrichment =
         isXPostUrl(normalized) &&
         cachedMeta != null &&
-        !Object.prototype.hasOwnProperty.call(cachedMeta, 'socialPost');
+        !Object.prototype.hasOwnProperty.call(cachedMeta, "socialPost");
       const cachedNeedsRumbleRefresh =
         isRumbleVideoUrl(normalized) && needsRumbleDimensionRefresh(cachedMeta);
-      if (!cachedNeedsPickaxEnrichment && !cachedNeedsXEnrichment && !cachedNeedsRumbleRefresh) {
+      if (
+        !cachedNeedsPickaxEnrichment &&
+        !cachedNeedsXEnrichment &&
+        !cachedNeedsRumbleRefresh
+      ) {
         return cachedMeta;
       }
     }
@@ -236,8 +306,12 @@ export class LinkMetadataService {
       where: { url: normalized },
     });
 
-    const staleThreshold = new Date(Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000);
-    const existingIsFresh = Boolean(existing && existing.updatedAt >= staleThreshold);
+    const staleThreshold = new Date(
+      Date.now() - (profilePreview ? 1 : STALE_DAYS) * 24 * 60 * 60 * 1000,
+    );
+    const existingIsFresh = Boolean(
+      existing && existing.updatedAt >= staleThreshold,
+    );
     const existingNeedsPickaxEnrichment =
       Boolean(existing) &&
       isPickaxPostUrl(normalized) &&
@@ -247,9 +321,9 @@ export class LinkMetadataService {
       isXPostUrl(normalized) &&
       existing.updatedAt < X_CONNECTOR_LAUNCHED_AT &&
       (!existing.socialPost ||
-        typeof existing.socialPost !== 'object' ||
+        typeof existing.socialPost !== "object" ||
         Array.isArray(existing.socialPost) ||
-        existing.socialPost.platform !== 'x');
+        existing.socialPost.platform !== "x");
     const existingNeedsRumbleRefresh =
       existing != null &&
       isRumbleVideoUrl(normalized) &&
@@ -265,7 +339,13 @@ export class LinkMetadataService {
     ) {
       const dto = this.toDto(existing);
       // Keep a short front-cache even when DB is fresh to reduce load.
-      void this.cache.setJson(cacheKey, { meta: dto }, { ttlSeconds: CacheTtl.linkMetaFrontSeconds }).catch(() => undefined);
+      void this.cache
+        .setJson(
+          cacheKey,
+          { meta: dto },
+          { ttlSeconds: CacheTtl.linkMetaFrontSeconds },
+        )
+        .catch(() => undefined);
       return dto;
     }
 
@@ -274,12 +354,25 @@ export class LinkMetadataService {
     const pickax = isPickaxPostUrl(normalized);
     const xPost = isXPostUrl(normalized);
     const rumble = isRumbleVideoUrl(normalized);
-    const wrapped = await this.cache.getOrSetJsonWithLock<{ meta: LinkMetadataDto | null }>({
+    const wrapped = await this.cache.getOrSetJsonWithLock<{
+      meta: LinkMetadataDto | null;
+    }>({
       enabled: true,
       key: cacheKey,
-      ttlSeconds: (value) => value.meta ? CacheTtl.linkMetaFrontSeconds : CacheTtl.linkMetaNullSeconds,
+      ttlSeconds: (value) =>
+        value.meta
+          ? CacheTtl.linkMetaFrontSeconds
+          : CacheTtl.linkMetaNullSeconds,
       lockKey,
-      lockTtlMs: youtube ? 6_000 : pickax ? 12_000 : xPost ? 10_000 : rumble ? 8_000 : 4_000,
+      lockTtlMs: youtube
+        ? 6_000
+        : pickax
+          ? 12_000
+          : xPost
+            ? 10_000
+            : rumble
+              ? 8_000
+              : 4_000,
       lockWaitMs: pickax || xPost || rumble ? 500 : 250,
       computeAndSet: async () => {
         const fresh = await this.fetchAndUpsert(normalized);
@@ -288,13 +381,22 @@ export class LinkMetadataService {
         await this.cache.setJson(
           cacheKey,
           { meta: dto },
-          { ttlSeconds: dto ? CacheTtl.linkMetaFrontSeconds : CacheTtl.linkMetaNullSeconds },
+          {
+            ttlSeconds: dto
+              ? CacheTtl.linkMetaFrontSeconds
+              : CacheTtl.linkMetaNullSeconds,
+          },
         );
         return { meta: dto };
       },
       fallback: async () => {
         // If lock contention, fall back to stale DB value (if present).
-        return { meta: existing ? this.toDto(existing) : null };
+        return {
+          meta:
+            existing && (!profilePreview || existingIsFresh)
+              ? this.toDto(existing)
+              : null,
+        };
       },
     });
     return wrapped?.meta ?? null;
@@ -316,11 +418,15 @@ export class LinkMetadataService {
       imageUrl: normalizeText(row.imageUrl),
       siteName: normalizeText(row.siteName),
       socialPost:
-        row.socialPost && typeof row.socialPost === 'object' && !Array.isArray(row.socialPost)
+        row.socialPost &&
+        typeof row.socialPost === "object" &&
+        !Array.isArray(row.socialPost)
           ? (row.socialPost as unknown as SocialPostMetadataDto)
           : null,
       videoEmbed:
-        row.videoEmbed && typeof row.videoEmbed === 'object' && !Array.isArray(row.videoEmbed)
+        row.videoEmbed &&
+        typeof row.videoEmbed === "object" &&
+        !Array.isArray(row.videoEmbed)
           ? (row.videoEmbed as unknown as VideoEmbedDto)
           : null,
     };
@@ -330,19 +436,48 @@ export class LinkMetadataService {
    * URL preview lookup for Marv. Extracts http(s) URLs from `text` and returns every one,
    * including a bare URL when metadata is not cached yet. Missing rows are fetched, with a cap.
    */
-  async previewLinks(text: string): Promise<Array<{ url: string; title: string | null; description: string | null; siteName: string | null; imageUrl: string | null }>> {
+  async previewLinks(
+    text: string,
+  ): Promise<
+    Array<{
+      url: string;
+      title: string | null;
+      description: string | null;
+      siteName: string | null;
+      imageUrl: string | null;
+    }>
+  > {
     if (!text) return [];
     const urlRegex = /https?:\/\/[^\s"'>)]+/gi;
     const found = text.match(urlRegex) ?? [];
-    const urls = [...new Set(
-      found.map((u) => normalizeUrl(u)).filter((u): u is string => Boolean(u)),
-    )].slice(0, 12);
+    const urls = [
+      ...new Set(
+        found
+          .map((u) => normalizeUrl(u))
+          .filter((u): u is string => Boolean(u)),
+      ),
+    ].slice(0, 12);
     if (urls.length === 0) return [];
-    const byUrl = new Map<string, { url: string; title: string | null; description: string | null; siteName: string | null; imageUrl: string | null }>();
+    const byUrl = new Map<
+      string,
+      {
+        url: string;
+        title: string | null;
+        description: string | null;
+        siteName: string | null;
+        imageUrl: string | null;
+      }
+    >();
     try {
       const rows = await this.prisma.linkMetadata.findMany({
         where: { url: { in: urls } },
-        select: { url: true, title: true, description: true, siteName: true, imageUrl: true },
+        select: {
+          url: true,
+          title: true,
+          description: true,
+          siteName: true,
+          imageUrl: true,
+        },
       });
       for (const r of rows) {
         byUrl.set(r.url, {
@@ -354,25 +489,38 @@ export class LinkMetadataService {
         });
       }
     } catch (err) {
-      this.logger.warn(`[link-metadata] previewLinks DB error: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(
+        `[link-metadata] previewLinks DB error: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     const missing = urls.filter((url) => !byUrl.has(url)).slice(0, 8);
-    await Promise.all(missing.map(async (url) => {
-      try {
-        const meta = await this.getMetadata(url);
-        if (!meta) return;
-        byUrl.set(url, {
-          url: meta.url,
-          title: normalizeText(meta.title),
-          description: normalizeText(meta.description),
-          siteName: normalizeText(meta.siteName),
-          imageUrl: normalizeText(meta.imageUrl),
-        });
-      } catch {
-        // Keep the raw URL even when the fetch fails.
-      }
-    }));
-    return urls.map((url) => byUrl.get(url) ?? { url, title: null, description: null, siteName: null, imageUrl: null });
+    await Promise.all(
+      missing.map(async (url) => {
+        try {
+          const meta = await this.getMetadata(url);
+          if (!meta) return;
+          byUrl.set(url, {
+            url: meta.url,
+            title: normalizeText(meta.title),
+            description: normalizeText(meta.description),
+            siteName: normalizeText(meta.siteName),
+            imageUrl: normalizeText(meta.imageUrl),
+          });
+        } catch {
+          // Keep the raw URL even when the fetch fails.
+        }
+      }),
+    );
+    return urls.map(
+      (url) =>
+        byUrl.get(url) ?? {
+          url,
+          title: null,
+          description: null,
+          siteName: null,
+          imageUrl: null,
+        },
+    );
   }
 
   private async fetchAndUpsert(url: string) {
@@ -410,36 +558,47 @@ export class LinkMetadataService {
       });
       return upserted;
     } catch (err) {
-      this.logger.warn(`Failed to fetch link metadata for ${url}: ${(err as Error).message}`);
+      this.logger.warn(
+        `Failed to fetch link metadata for ${url}: ${(err as Error).message}`,
+      );
       return null;
     }
   }
 
-  private async fetchFromExternal(url: string): Promise<LinkMetadataDto | null> {
+  private async fetchFromExternal(
+    url: string,
+  ): Promise<LinkMetadataDto | null> {
     const controller = new AbortController();
-    const timeoutMs = youtubeVideoId(url) || spotifyContent(url) ? 4_000 : isPickaxPostUrl(url)
-      ? PICKAX_ENRICH_TIMEOUT_MS
-      : isXPostUrl(url)
-        ? X_ENRICH_TIMEOUT_MS
-        : isSubstackPostUrl(url)
-          ? SUBSTACK_ENRICH_TIMEOUT_MS
-          : isRumbleVideoUrl(url)
-            ? RUMBLE_ENRICH_TIMEOUT_MS
-            : FETCH_TIMEOUT_MS;
+    const timeoutMs =
+      youtubeVideoId(url) || spotifyContent(url)
+        ? 4_000
+        : isPickaxPostUrl(url)
+          ? PICKAX_ENRICH_TIMEOUT_MS
+          : isXPostUrl(url)
+            ? X_ENRICH_TIMEOUT_MS
+            : isSubstackPostUrl(url)
+              ? SUBSTACK_ENRICH_TIMEOUT_MS
+              : isRumbleVideoUrl(url)
+                ? RUMBLE_ENRICH_TIMEOUT_MS
+                : FETCH_TIMEOUT_MS;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const u = new URL(url);
-      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+      if (u.protocol !== "http:" && u.protocol !== "https:") return null;
 
       if (spotifyContent(url)) {
         const meta = await fetchSpotifyMetadata(url, controller.signal);
-        return meta ? { url, ...meta, socialPost: null, videoEmbed: null } : null;
+        return meta
+          ? { url, ...meta, socialPost: null, videoEmbed: null }
+          : null;
       }
 
       if (youtubeVideoId(url)) {
         const meta = await fetchYoutubeMetadata(url, controller.signal);
-        return meta ? { url, ...meta, socialPost: null, videoEmbed: null } : null;
+        return meta
+          ? { url, ...meta, socialPost: null, videoEmbed: null }
+          : null;
       }
 
       let base: LinkMetadataDto | null = null;
@@ -447,19 +606,25 @@ export class LinkMetadataService {
       let pickaxPartial: LinkMetadataDto | null = null;
 
       if (isXPostUrl(u.toString())) {
-        const xMetadata = await this.enrichXPost(u.toString(), controller.signal);
+        const xMetadata = await this.enrichXPost(
+          u.toString(),
+          controller.signal,
+        );
         if (xMetadata) return xMetadata;
       }
 
       if (isRumbleVideoUrl(u.toString())) {
-        const videoEmbed = await enrichRumbleVideo(u.toString(), controller.signal);
+        const videoEmbed = await enrichRumbleVideo(
+          u.toString(),
+          controller.signal,
+        );
         if (videoEmbed) {
           return {
             url: u.toString(),
             title: null,
             description: null,
             imageUrl: videoEmbed.thumbnailUrl,
-            siteName: 'Rumble',
+            siteName: "Rumble",
             socialPost: null,
             videoEmbed,
           };
@@ -467,7 +632,10 @@ export class LinkMetadataService {
       }
 
       if (isSubstackPostUrl(u.toString())) {
-        const enriched = await enrichSubstackPost(u.toString(), controller.signal);
+        const enriched = await enrichSubstackPost(
+          u.toString(),
+          controller.signal,
+        );
         if (enriched) {
           return {
             url: u.toString(),
@@ -486,23 +654,36 @@ export class LinkMetadataService {
       // when available, author avatar/handle. Give it the full timeout budget
       // instead of spending most of that budget on weak OG metadata first.
       if (pickaxPost) {
-        pickaxPartial = await this.enrichPickaxPost(u.toString(), null, controller.signal);
+        pickaxPartial = await this.enrichPickaxPost(
+          u.toString(),
+          null,
+          controller.signal,
+        );
         if (pickaxPartial?.description) return pickaxPartial;
       }
 
       try {
         const microlinkUrl = `https://api.microlink.io/?url=${encodeURIComponent(u.toString())}&screenshot=false`;
-        const r = await fetch(microlinkUrl, { method: 'GET', signal: controller.signal });
+        const r = await fetch(microlinkUrl, {
+          method: "GET",
+          redirect: "error",
+          signal: controller.signal,
+        });
         if (r.ok) {
-          const json = (await r.json()) as MicrolinkResponse;
-          if (json?.status === 'success' && json.data) {
-            const img =
-              Array.isArray(json.data.image) ? json.data.image?.[0]?.url : (json.data.image as { url?: string } | undefined)?.url;
+          const json = JSON.parse(
+            (await readLimitedResponse(r, 1_048_576)).toString("utf8"),
+          ) as MicrolinkResponse;
+          if (json?.status === "success" && json.data) {
+            const img = Array.isArray(json.data.image)
+              ? json.data.image?.[0]?.url
+              : (json.data.image as { url?: string } | undefined)?.url;
             base = {
               url: normalizeText(json.data.url ?? null) ?? u.toString(),
               title: normalizeText(json.data.title ?? null),
               description: normalizeText(json.data.description ?? null),
-              siteName: normalizeText(json.data.publisher ?? null) ?? normalizeText(json.data.author ?? null),
+              siteName:
+                normalizeText(json.data.publisher ?? null) ??
+                normalizeText(json.data.author ?? null),
               imageUrl: normalizeText(img ?? null),
               socialPost: null,
               videoEmbed: null,
@@ -527,7 +708,7 @@ export class LinkMetadataService {
           return {
             ...base,
             title: pickaxAuthorFromTitle(base.title) ?? base.title,
-            siteName: 'Pickax',
+            siteName: "Pickax",
             imageUrl: isWeakPickaxImage(base.imageUrl) ? null : base.imageUrl,
           };
         }
@@ -536,27 +717,33 @@ export class LinkMetadataService {
       }
 
       const proxied = `https://r.jina.ai/${u.toString()}`;
-      const res = await fetch(proxied, { method: 'GET', signal: controller.signal });
+      const res = await fetch(proxied, {
+        method: "GET",
+        redirect: "error",
+        signal: controller.signal,
+      });
       if (!res.ok) return null;
-      const md = await res.text();
+      const md = (await readLimitedResponse(res, 1_048_576)).toString("utf8");
 
-      const titleMatch = (md ?? '').toString().match(/^\s*Title:\s*(.+)\s*$/m);
+      const titleMatch = (md ?? "").toString().match(/^\s*Title:\s*(.+)\s*$/m);
       const title = normalizeText(titleMatch?.[1] ?? null);
-      const imageMatch = (md ?? '').toString().match(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/i);
+      const imageMatch = (md ?? "")
+        .toString()
+        .match(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/i);
       const imageUrl = normalizeText(imageMatch?.[1] ?? null);
 
       return {
         url: u.toString(),
         title,
         description: null,
-        siteName: normalizeText(u.hostname.replace(/^www\./, '')) ?? null,
+        siteName: normalizeText(u.hostname.replace(/^www\./, "")) ?? null,
         imageUrl,
         socialPost: null,
         videoEmbed: null,
       };
     } catch (err) {
       const name = (err as { name?: string })?.name;
-      if (name === 'AbortError' || name === 'TimeoutError') return null;
+      if (name === "AbortError" || name === "TimeoutError") return null;
       throw err;
     } finally {
       clearTimeout(timeout);
@@ -574,8 +761,8 @@ export class LinkMetadataService {
       const response = await fetch(
         `https://cdn.syndication.twimg.com/tweet-result?id=${encodeURIComponent(parsed.id)}&lang=en&token=${encodeURIComponent(token)}`,
         {
-          method: 'GET',
-          headers: { Accept: 'application/json' },
+          method: "GET",
+          headers: { Accept: "application/json" },
           signal,
         },
       );
@@ -587,13 +774,13 @@ export class LinkMetadataService {
         title: socialPost.author.name,
         description: socialPost.text,
         imageUrl: socialPost.author.avatarUrl,
-        siteName: 'X',
+        siteName: "X",
         socialPost,
         videoEmbed: null,
       };
     } catch (error) {
       const name = (error as { name?: string })?.name;
-      if (name === 'AbortError' || name === 'TimeoutError') return null;
+      if (name === "AbortError" || name === "TimeoutError") return null;
       this.logger.warn(
         `[link-metadata] X enrichment failed for ${url}: ${
           error instanceof Error ? error.message : String(error)
@@ -610,11 +797,11 @@ export class LinkMetadataService {
   ): Promise<LinkMetadataDto | null> {
     try {
       const proxied = `https://r.jina.ai/${url}`;
-      const res = await fetch(proxied, { method: 'GET', signal });
+      const res = await fetch(proxied, { method: "GET", signal });
       if (!res.ok) return null;
-      const md = await res.text();
+      const md = (await readLimitedResponse(res, 1_048_576)).toString("utf8");
       if (isPickaxGatedMarkdown(md)) return null;
-      const titleMatch = (md ?? '').toString().match(/^\s*Title:\s*(.+)\s*$/m);
+      const titleMatch = (md ?? "").toString().match(/^\s*Title:\s*(.+)\s*$/m);
       const titleFromJina = normalizeText(titleMatch?.[1] ?? null);
       const { avatarUrl, username } = parsePickaxAuthorFromJina(md);
       const authorName =
@@ -629,8 +816,10 @@ export class LinkMetadataService {
         // Prefer the scraped body; OG/microlink descriptions are often truncated.
         description: bodyFromJina ?? base?.description ?? null,
         // Prefer @handle in siteName so clients can render a post-like subtitle.
-        siteName: username ? `@${username}` : 'Pickax',
-        imageUrl: avatarUrl ?? (isWeakPickaxImage(base?.imageUrl) ? null : (base?.imageUrl ?? null)),
+        siteName: username ? `@${username}` : "Pickax",
+        imageUrl:
+          avatarUrl ??
+          (isWeakPickaxImage(base?.imageUrl) ? null : (base?.imageUrl ?? null)),
         socialPost: null,
         videoEmbed: null,
       };
@@ -641,17 +830,18 @@ export class LinkMetadataService {
 
   /** Extracts links from post body text (for cron backfill). Uses same logic as www extractLinksFromText. */
   extractLinks(text: string): string[] {
-    const input = (text ?? '').toString();
+    const input = (text ?? "").toString();
     const urlPattern = /https?:\/\/[^\s<>"')\]]+/gi;
     const matches = input.match(urlPattern) ?? [];
     const out: string[] = [];
     const seen = new Set<string>();
     for (const m of matches) {
-      const url = (m ?? '').trim();
+      const url = (m ?? "").trim();
       if (!url) continue;
       try {
         const parsed = new URL(url);
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue;
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+          continue;
         const norm = parsed.toString();
         if (seen.has(norm)) continue;
         seen.add(norm);
@@ -670,7 +860,11 @@ export class LinkMetadataService {
    * total posts scanned and URLs collected, so a large recent-post volume cannot
    * blow up memory or the DB.
    */
-  async runBackfill(): Promise<{ urlsFound: number; cached: number; truncated: boolean }> {
+  async runBackfill(): Promise<{
+    urlsFound: number;
+    cached: number;
+    truncated: boolean;
+  }> {
     const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const seen = new Set<string>();
 
@@ -682,7 +876,7 @@ export class LinkMetadataService {
     while (postsScanned < BACKFILL_MAX_POSTS && seen.size < BACKFILL_MAX_URLS) {
       const baseWhere = {
         deletedAt: null,
-        body: { not: '' },
+        body: { not: "" },
         createdAt: { gte: since },
       } as const;
 
@@ -692,7 +886,12 @@ export class LinkMetadataService {
               ...baseWhere,
               OR: [
                 { createdAt: { lt: cursorCreatedAt } },
-                { AND: [{ createdAt: cursorCreatedAt }, { id: { lt: cursorId } }] },
+                {
+                  AND: [
+                    { createdAt: cursorCreatedAt },
+                    { id: { lt: cursorId } },
+                  ],
+                },
               ],
             }
           : baseWhere;
@@ -701,14 +900,14 @@ export class LinkMetadataService {
         await this.prisma.post.findMany({
           where: pageWhere,
           select: { id: true, createdAt: true, body: true },
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: BACKFILL_POST_PAGE_SIZE,
         });
 
       if (posts.length === 0) break;
 
       for (const p of posts) {
-        for (const url of this.extractLinks(p.body ?? '')) {
+        for (const url of this.extractLinks(p.body ?? "")) {
           seen.add(url);
           if (seen.size >= BACKFILL_MAX_URLS) {
             truncated = true;
@@ -744,7 +943,9 @@ export class LinkMetadataService {
       const existing = await this.prisma.linkMetadata.findUnique({
         where: { url: normalized },
       });
-      const staleThreshold = new Date(Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000);
+      const staleThreshold = new Date(
+        Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000,
+      );
       if (existing && existing.updatedAt >= staleThreshold) continue;
 
       const result = await this.fetchAndUpsert(normalized);

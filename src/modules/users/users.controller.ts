@@ -1,43 +1,77 @@
-import { UsersProfileWriteService } from './users-profile-write.service';
-import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, NotFoundException, Param, Patch, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { z } from 'zod';
-import { ApiTags } from '@nestjs/swagger';
-import type { Response } from 'express';
-import { PrismaService } from '../prisma/prisma.service';
-import { AuthGuard } from '../auth/auth.guard';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
-import { AuthService } from '../auth/auth.service';
-import { AppConfigService } from '../app/app-config.service';
-import { FollowsService, type FollowListUser } from '../follows/follows.service';
-import { CurrentUserId, OptionalCurrentUserId } from './users.decorator';
-import { validateUsername } from './users.utils';
+import { publicPreviewUrl } from "../../common/urls/public-preview-url";
+import { normalizeSocialProfileUrl } from "../../common/urls/social-profile-url";
+import { UsersProfileWriteService } from "./users-profile-write.service";
+import type { AvatarVideoDto } from "../../common/dto/avatar-video.dto";
+import {
+  BadRequestException,
+  Body,
+  ConflictException,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  NotFoundException,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query,
+  Res,
+  UseGuards,
+} from "@nestjs/common";
+import { Prisma } from "@prisma/client";
+import { z } from "zod";
+import { ApiTags } from "@nestjs/swagger";
+import type { Response } from "express";
+import { PrismaService } from "../prisma/prisma.service";
+import { AuthGuard } from "../auth/auth.guard";
+import { OptionalAuthGuard } from "../auth/optional-auth.guard";
+import { AuthService } from "../auth/auth.service";
+import { AppConfigService } from "../app/app-config.service";
+import {
+  FollowsService,
+  type FollowListUser,
+} from "../follows/follows.service";
+import { CurrentUserId, OptionalCurrentUserId } from "./users.decorator";
+import { validateUsername } from "./users.utils";
 import {
   HEARD_ABOUT_US_OTHER_MAX,
   HEARD_ABOUT_US_VALUES,
   isFullyOnboarded,
   resolveHeardAboutUs,
   resolveOnboardingUsername,
-} from './onboarding.utils';
-import { toUserDto } from './user.dto';
-import { toUserListDto, type NudgeStateDto } from '../../common/dto';
-import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
-import { Throttle } from '@nestjs/throttler';
-import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import { PublicProfileCacheService } from './public-profile-cache.service';
-import { PublicProfilesService, type PublicProfilePayload } from './public-profiles.service';
-import { UsersMeRealtimeService } from './users-me-realtime.service';
-import { UsersPublicRealtimeService } from './users-public-realtime.service';
-import { canonicalizeTopicValue } from '../../common/topics/topic-utils';
-import { UsersLocationService, STATE_NAMES } from './users-location.service';
-import { EmailVerificationService } from '../email/email-verification.service';
-import { PosthogService } from '../../common/posthog/posthog.service';
-import { SlackService } from '../../common/slack/slack.service';
-import { PresenceService } from '../presence/presence.service';
-import { totalUserArticlesWhere, totalUserBoardPoints, totalUserPostsWhere } from '../../common/content-counts';
-import type { LocationBrowseResponseDto } from './location-browse.dto';
-import { MEMBERS_MAP_SNAPSHOT_SELECT, MembersMapRealtimeService } from './members-map-realtime.service';
+} from "./onboarding.utils";
+import { toUserDto } from "./user.dto";
+import { toUserListDto, type NudgeStateDto } from "../../common/dto";
+import { USER_LIST_SELECT } from "../../common/prisma-selects/user.select";
+import { Throttle } from "@nestjs/throttler";
+import {
+  rateLimitLimit,
+  rateLimitTtl,
+} from "../../common/throttling/rate-limit.resolver";
+import { PublicProfileCacheService } from "./public-profile-cache.service";
+import {
+  PublicProfilesService,
+  type PublicProfilePayload,
+} from "./public-profiles.service";
+import { UsersMeRealtimeService } from "./users-me-realtime.service";
+import { UsersPublicRealtimeService } from "./users-public-realtime.service";
+import { canonicalizeTopicValue } from "../../common/topics/topic-utils";
+import { UsersLocationService, STATE_NAMES } from "./users-location.service";
+import { EmailVerificationService } from "../email/email-verification.service";
+import { PosthogService } from "../../common/posthog/posthog.service";
+import { SlackService } from "../../common/slack/slack.service";
+import { PresenceService } from "../presence/presence.service";
+import {
+  totalUserArticlesWhere,
+  totalUserBoardPoints,
+  totalUserPostsWhere,
+} from "../../common/content-counts";
+import type { LocationBrowseResponseDto } from "./location-browse.dto";
+import {
+  MEMBERS_MAP_SNAPSHOT_SELECT,
+  MembersMapRealtimeService,
+} from "./members-map-realtime.service";
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -58,46 +92,67 @@ type PreviewBatchEntry = {
 };
 
 function normalizeWebsite(raw: string): string {
-  const s = (raw ?? '').trim();
-  if (!s) throw new BadRequestException('Website is required.');
+  const s = (raw ?? "").trim();
+  if (!s) throw new BadRequestException("Website is required.");
   const withScheme = /^https?:\/\//i.test(s) ? s : `https://${s}`;
   let u: URL;
   try {
-    u = new URL(withScheme);
+    const safe = publicPreviewUrl(withScheme);
+    if (!safe)
+      throw new BadRequestException(
+        "Use a public website URL without credentials or API secrets.",
+      );
+    u = new URL(safe);
   } catch {
-    throw new BadRequestException('Website must be a valid URL.');
+    throw new BadRequestException("Website must be a valid URL.");
   }
-  if (!/^https?:$/.test(u.protocol)) throw new BadRequestException('Website must be a valid URL.');
+  if (!/^https?:$/.test(u.protocol))
+    throw new BadRequestException("Website must be a valid URL.");
   // Remove default ports and normalize.
-  u.hash = '';
+  u.hash = "";
   return u.toString();
 }
 
 const profileSchema = z.object({
   name: z.string().trim().max(50).optional(),
   bio: z.string().trim().max(160).optional(),
-  email: z.union([z.string().trim().email(), z.literal('')]).optional(),
+  email: z.union([z.string().trim().email(), z.literal("")]).optional(),
   interests: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
-  website: z.union([z.string().trim().max(200), z.literal('')]).optional(),
-  locationQuery: z.union([z.string().trim().max(80), z.literal('')]).optional(),
+  website: z.union([z.string().trim().max(200), z.literal("")]).optional(),
+  rumbleUrl: z.string().trim().max(300).optional(),
+  linkedinUrl: z.string().trim().max(300).optional(),
+  youtubeUrl: z.string().trim().max(300).optional(),
+  locationQuery: z.union([z.string().trim().max(80), z.literal("")]).optional(),
 });
 
 const settingsSchema = z.object({
-  followVisibility: z.enum(['all', 'verified', 'premium', 'none']).optional(),
-  birthdayVisibility: z.enum(['none', 'monthDay', 'full']).optional(),
+  followVisibility: z.enum(["all", "verified", "premium", "none"]).optional(),
+  birthdayVisibility: z.enum(["none", "monthDay", "full"]).optional(),
 });
 
 const onboardingSchema = z.object({
   username: z.string().min(1).optional(),
   name: z.string().trim().max(50).optional(),
-  email: z.union([z.string().trim().email(), z.literal('')]).optional(),
+  email: z.union([z.string().trim().email(), z.literal("")]).optional(),
   // Expect YYYY-MM-DD from client.
-  birthdate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Birthdate must be a date (YYYY-MM-DD).').optional(),
-  interests: z.array(z.string().trim().min(1).max(40)).min(1).max(30).optional(),
+  birthdate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Birthdate must be a date (YYYY-MM-DD).")
+    .optional(),
+  interests: z
+    .array(z.string().trim().min(1).max(40))
+    .min(1)
+    .max(30)
+    .optional(),
   menOnlyConfirmed: z.boolean().optional(),
-  locationQuery: z.union([z.string().trim().max(80), z.literal('')]).optional(),
+  locationQuery: z.union([z.string().trim().max(80), z.literal("")]).optional(),
   heardAboutUs: z.enum(HEARD_ABOUT_US_VALUES).optional(),
-  heardAboutUsOther: z.string().trim().max(HEARD_ABOUT_US_OTHER_MAX).optional().nullable(),
+  heardAboutUsOther: z
+    .string()
+    .trim()
+    .max(HEARD_ABOUT_US_OTHER_MAX)
+    .optional()
+    .nullable(),
 });
 
 const newestUsersSchema = z.object({
@@ -125,10 +180,10 @@ function normalizeTag(raw: string): string {
   return raw
     .toLowerCase()
     .trim()
-    .replace(/[^\w\s-]/g, '')
-    .replace(/[\s_]+/g, '-')
-    .replace(/-{2,}/g, '-')
-    .replace(/^-+|-+$/g, '')
+    .replace(/[^\w\s-]/g, "")
+    .replace(/[\s_]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
     .substring(0, 50);
 }
 
@@ -139,15 +194,23 @@ function isAtLeast18(birthdateUtcMidnight: Date): boolean {
   const dd = birthdateUtcMidnight.getUTCDate();
 
   const now = new Date();
-  const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const cutoff = new Date(Date.UTC(todayUtc.getUTCFullYear() - 18, todayUtc.getUTCMonth(), todayUtc.getUTCDate()));
+  const todayUtc = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+  const cutoff = new Date(
+    Date.UTC(
+      todayUtc.getUTCFullYear() - 18,
+      todayUtc.getUTCMonth(),
+      todayUtc.getUTCDate(),
+    ),
+  );
 
   const d = new Date(Date.UTC(yyyy, mm, dd));
   return d.getTime() <= cutoff.getTime();
 }
 
-const JOHN_USERNAME = 'john';
-const MENOFHUNGER_USERNAME = 'menofhunger';
+const JOHN_USERNAME = "john";
+const MENOFHUNGER_USERNAME = "menofhunger";
 
 type UserPreviewPayload = {
   id: string;
@@ -157,9 +220,10 @@ type UserPreviewPayload = {
   premium: boolean;
   premiumPlus: boolean;
   isOrganization: boolean;
-  accountKind?: 'person' | 'page';
+  accountKind?: "person" | "page";
   verifiedStatus: string;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   lastOnlineAt: string | null;
   checkinStreakDays: number;
@@ -182,8 +246,8 @@ const affiliatesQuerySchema = z.object({
   cursor: z.string().min(1).optional(),
 });
 
-@ApiTags('Profiles & Social')
-@Controller('users')
+@ApiTags("Profiles & Social")
+@Controller("users")
 export class UsersController {
   constructor(
     private readonly prisma: PrismaService,
@@ -203,15 +267,20 @@ export class UsersController {
     private readonly membersMapRealtime: MembersMapRealtimeService,
   ) {}
 
-  private async viewerCanSeeLastOnline(viewerUserId: string | null): Promise<boolean> {
+  private async viewerCanSeeLastOnline(
+    viewerUserId: string | null,
+  ): Promise<boolean> {
     if (!viewerUserId) return false;
     try {
       const viewer = await this.prisma.user.findUnique({
         where: { id: viewerUserId },
         select: { verifiedStatus: true, siteAdmin: true },
       });
-      const verifiedStatus = (viewer as any)?.verifiedStatus ?? 'none';
-      return Boolean((viewer as any)?.siteAdmin) || (typeof verifiedStatus === 'string' && verifiedStatus !== 'none');
+      const verifiedStatus = (viewer as any)?.verifiedStatus ?? "none";
+      return (
+        Boolean((viewer as any)?.siteAdmin) ||
+        (typeof verifiedStatus === "string" && verifiedStatus !== "none")
+      );
     } catch {
       return false;
     }
@@ -228,14 +297,21 @@ export class UsersController {
    *
    * Uses FollowsService so follow notifications go through the normal flow.
    */
-  private async ensureStarterFollowsOnFirstUsernameSet(userId: string, newUsername: string): Promise<void> {
-    const usernameLower = (newUsername ?? '').trim().toLowerCase();
+  private async ensureStarterFollowsOnFirstUsernameSet(
+    userId: string,
+    newUsername: string,
+  ): Promise<void> {
+    const usernameLower = (newUsername ?? "").trim().toLowerCase();
     if (!usernameLower) return;
 
     // First: one-way follow to @menofhunger (if account exists).
     if (usernameLower !== MENOFHUNGER_USERNAME) {
       try {
-        await this.followsService.follow({ viewerUserId: userId, username: MENOFHUNGER_USERNAME, source: 'starter' });
+        await this.followsService.follow({
+          viewerUserId: userId,
+          username: MENOFHUNGER_USERNAME,
+          source: "starter",
+        });
         // New users: enable reply notifications for starter follows.
         await this.followsService.setPostNotificationsEnabled({
           viewerUserId: userId,
@@ -252,14 +328,18 @@ export class UsersController {
     const john = await this.prisma.user.findFirst({
       where: {
         usernameIsSet: true,
-        username: { equals: JOHN_USERNAME, mode: 'insensitive' },
+        username: { equals: JOHN_USERNAME, mode: "insensitive" },
       },
       select: { id: true },
     });
     if (!john) return;
 
     try {
-      await this.followsService.follow({ viewerUserId: userId, username: JOHN_USERNAME, source: 'starter' });
+      await this.followsService.follow({
+        viewerUserId: userId,
+        username: JOHN_USERNAME,
+        source: "starter",
+      });
       // New users: enable reply notifications for starter follows.
       await this.followsService.setPostNotificationsEnabled({
         viewerUserId: userId,
@@ -271,7 +351,11 @@ export class UsersController {
     }
 
     try {
-      await this.followsService.follow({ viewerUserId: john.id, username: newUsername.trim(), source: 'starter' });
+      await this.followsService.follow({
+        viewerUserId: john.id,
+        username: newUsername.trim(),
+        source: "starter",
+      });
     } catch {
       // Idempotent or visibility; ignore.
     }
@@ -284,10 +368,13 @@ export class UsersController {
       ttl: 60_000,
     },
   })
-  @Get('username/available')
-  async usernameAvailable(@Query('username') username: string | undefined) {
-    const parsed = validateUsername(username ?? '');
-    if (!parsed.ok) return { data: { available: false, normalized: null, error: parsed.error } };
+  @Get("username/available")
+  async usernameAvailable(@Query("username") username: string | undefined) {
+    const parsed = validateUsername(username ?? "");
+    if (!parsed.ok)
+      return {
+        data: { available: false, normalized: null, error: parsed.error },
+      };
 
     const exists =
       (
@@ -305,11 +392,11 @@ export class UsersController {
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 120),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 120),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Get('newest')
+  @Get("newest")
   async newest(@CurrentUserId() viewerUserId: string, @Query() query: unknown) {
     const parsed = newestUsersSchema.parse(query);
     const limit = parsed.limit ?? 12;
@@ -323,7 +410,7 @@ export class UsersController {
         followers: { none: { followerId: viewerUserId } },
       },
       select: USER_LIST_SELECT,
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit,
     });
 
@@ -338,7 +425,8 @@ export class UsersController {
           viewerFollowsUser: rel.viewerFollows.has(u.id),
           userFollowsViewer: rel.followsViewer.has(u.id),
           viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(u.id),
-          viewerNotificationPreference: rel.viewerNotificationPreferences.get(u.id) ?? 'off',
+          viewerNotificationPreference:
+            rel.viewerNotificationPreferences.get(u.id) ?? "off",
         },
       }),
     );
@@ -347,12 +435,17 @@ export class UsersController {
   }
 
   @UseGuards(AuthGuard)
-  @Throttle({ default: { limit: rateLimitLimit('publicRead', 60), ttl: rateLimitTtl('publicRead', 60) } })
-  @Get('location-preview')
+  @Throttle({
+    default: {
+      limit: rateLimitLimit("publicRead", 60),
+      ttl: rateLimitTtl("publicRead", 60),
+    },
+  })
+  @Get("location-preview")
   async locationPreview(@Query() query: unknown) {
     const { zip } = z.object({ zip: z.string().trim() }).parse(query);
     const result = this.usersLocation.normalizeUsLocation(zip);
-    const stateCode = (result.state ?? '').toUpperCase();
+    const stateCode = (result.state ?? "").toUpperCase();
     return {
       data: {
         zip: result.zip,
@@ -365,36 +458,53 @@ export class UsersController {
   }
 
   @UseGuards(AuthGuard)
-  @Throttle({ default: { limit: rateLimitLimit('interact', 60), ttl: rateLimitTtl('interact', 60) } })
-  @Post('me/skip-location-prompt')
+  @Throttle({
+    default: {
+      limit: rateLimitLimit("interact", 60),
+      ttl: rateLimitTtl("interact", 60),
+    },
+  })
+  @Post("me/skip-location-prompt")
   async skipLocationPrompt(@CurrentUserId() userId: string) {
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { locationPromptSkipped: true },
     });
     const r2PublicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    void this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'profile_changed');
+    void this.usersMeRealtime.emitMeUpdatedFromUser(updated, "profile_changed");
     return { data: { user: toUserDto(updated, r2PublicBaseUrl) } };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 60),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 60),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Get('by-location')
+  @Get("by-location")
   async byLocation(
     @CurrentUserId() viewerUserId: string,
     @Query() query: unknown,
   ): Promise<{ data: LocationBrowseResponseDto }> {
-    const { state, zip, city, county, limit = 10 } = byLocationSchema.parse(query);
+    const {
+      state,
+      zip,
+      city,
+      county,
+      limit = 10,
+    } = byLocationSchema.parse(query);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const stateCode = state.toUpperCase();
     const stateDisplay = STATE_NAMES[stateCode] ?? stateCode;
 
-    const baseWhere = { usernameIsSet: true, bannedAt: null };
+    // The count and every sample use the same viewer visibility policy.
+    const baseWhere = {
+      usernameIsSet: true,
+      bannedAt: null,
+      blocksInitiated: { none: { blockedId: viewerUserId } },
+      blocksReceived: { none: { blockerId: viewerUserId } },
+    };
 
     // State-only queries show all members including the viewer themselves.
     const isStateOnly = !zip && !city && !county;
@@ -402,10 +512,14 @@ export class UsersController {
 
     const fetchSection = async (where: Record<string, unknown>) => {
       const rows = await this.prisma.user.findMany({
-        where: { ...baseWhere, ...where, id: { notIn: Array.from(excludedIds) } },
+        where: {
+          ...baseWhere,
+          ...where,
+          id: { notIn: Array.from(excludedIds) },
+        },
         select: USER_LIST_SELECT,
         // Most active streakers first; oldest/founding members break ties.
-        orderBy: [{ checkinStreakDays: 'desc' }, { createdAt: 'asc' }],
+        orderBy: [{ checkinStreakDays: "desc" }, { createdAt: "asc" }],
         take: limit,
       });
       rows.forEach((r) => excludedIds.add(r.id));
@@ -414,8 +528,12 @@ export class UsersController {
 
     // Run sequentially: each section excludes IDs collected by earlier (closer) sections.
     const zipRows = zip ? await fetchSection({ locationZip: zip }) : [];
-    const cityRows = city ? await fetchSection({ locationCity: city, locationState: stateCode }) : [];
-    const countyRows = county ? await fetchSection({ locationCounty: county, locationState: stateCode }) : [];
+    const cityRows = city
+      ? await fetchSection({ locationCity: city, locationState: stateCode })
+      : [];
+    const countyRows = county
+      ? await fetchSection({ locationCounty: county, locationState: stateCode })
+      : [];
     const stateRows = await fetchSection({ locationState: stateCode });
     const memberCount = await this.prisma.user.count({
       where: { ...baseWhere, locationState: stateCode },
@@ -434,16 +552,45 @@ export class UsersController {
             viewerFollowsUser: rel.viewerFollows.has(u.id),
             userFollowsViewer: rel.followsViewer.has(u.id),
             viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(u.id),
-            viewerNotificationPreference: rel.viewerNotificationPreferences.get(u.id) ?? 'off',
+            viewerNotificationPreference:
+              rel.viewerNotificationPreferences.get(u.id) ?? "off",
           },
         }),
       );
 
-    const sections: LocationBrowseResponseDto['sections'] = [
-      ...(zip ? [{ key: 'sameZip' as const, label: 'Same ZIP code', users: mapUsers(zipRows) }] : []),
-      ...(city ? [{ key: 'sameCity' as const, label: 'Same city', users: mapUsers(cityRows) }] : []),
-      ...(county ? [{ key: 'sameCounty' as const, label: 'Same county', users: mapUsers(countyRows) }] : []),
-      { key: 'sameState' as const, label: `Members in ${stateDisplay}`, users: mapUsers(stateRows) },
+    const sections: LocationBrowseResponseDto["sections"] = [
+      ...(zip
+        ? [
+            {
+              key: "sameZip" as const,
+              label: "Same ZIP code",
+              users: mapUsers(zipRows),
+            },
+          ]
+        : []),
+      ...(city
+        ? [
+            {
+              key: "sameCity" as const,
+              label: "Same city",
+              users: mapUsers(cityRows),
+            },
+          ]
+        : []),
+      ...(county
+        ? [
+            {
+              key: "sameCounty" as const,
+              label: "Same county",
+              users: mapUsers(countyRows),
+            },
+          ]
+        : []),
+      {
+        key: "sameState" as const,
+        label: `Members in ${stateDisplay}`,
+        users: mapUsers(stateRows),
+      },
     ];
 
     return {
@@ -464,17 +611,17 @@ export class UsersController {
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Get('me/article-tag-preferences')
+  @Get("me/article-tag-preferences")
   async getMyArticleTagPreferences(@CurrentUserId() userId: string) {
     // Legacy endpoint: read canonical taxonomy preferences first, fallback to historical rows.
     const canonical = await this.prisma.userTaxonomyPreference.findMany({
       where: { userId },
       include: { term: { select: { slug: true, label: true } } },
-      orderBy: [{ createdAt: 'asc' }],
+      orderBy: [{ createdAt: "asc" }],
     });
     if (canonical.length > 0) {
       return {
@@ -484,7 +631,7 @@ export class UsersController {
     const legacy = await this.prisma.userArticleTagPreference.findMany({
       where: { userId },
       select: { tag: true, label: true },
-      orderBy: [{ createdAt: 'asc' }, { tag: 'asc' }],
+      orderBy: [{ createdAt: "asc" }, { tag: "asc" }],
     });
     return { data: legacy };
   }
@@ -492,11 +639,11 @@ export class UsersController {
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Put('me/article-tag-preferences')
+  @Put("me/article-tag-preferences")
   async setMyArticleTagPreferences(
     @CurrentUserId() userId: string,
     @Body() body: unknown,
@@ -509,21 +656,29 @@ export class UsersController {
       if (!tag || !label) continue;
       if (!deduped.has(tag)) deduped.set(tag, label);
     }
-    const rows = [...deduped.entries()].map(([tag, label]) => ({ userId, tag, label }));
+    const rows = [...deduped.entries()].map(([tag, label]) => ({
+      userId,
+      tag,
+      label,
+    }));
 
     const slugs = rows.map((r) => r.tag);
-    const terms = slugs.length > 0
-      ? await this.prisma.taxonomyTerm.findMany({
-          where: { slug: { in: slugs }, status: 'active' },
-          select: { id: true, slug: true, label: true },
-        })
-      : [];
+    const terms =
+      slugs.length > 0
+        ? await this.prisma.taxonomyTerm.findMany({
+            where: { slug: { in: slugs }, status: "active" },
+            select: { id: true, slug: true, label: true },
+          })
+        : [];
     const bySlug = new Map(terms.map((t) => [t.slug, t]));
 
     await this.prisma.$transaction(async (tx) => {
       await tx.userArticleTagPreference.deleteMany({ where: { userId } });
       if (rows.length > 0) {
-        await tx.userArticleTagPreference.createMany({ data: rows, skipDuplicates: true });
+        await tx.userArticleTagPreference.createMany({
+          data: rows,
+          skipDuplicates: true,
+        });
       }
       await tx.userTaxonomyPreference.deleteMany({ where: { userId } });
       const prefRows = rows
@@ -531,7 +686,10 @@ export class UsersController {
         .filter(Boolean)
         .map((t) => ({ userId, termId: (t as { id: string }).id }));
       if (prefRows.length > 0) {
-        await tx.userTaxonomyPreference.createMany({ data: prefRows, skipDuplicates: true });
+        await tx.userTaxonomyPreference.createMany({
+          data: prefRows,
+          skipDuplicates: true,
+        });
       }
     });
 
@@ -543,18 +701,18 @@ export class UsersController {
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Get('me/taxonomy-preferences')
+  @Get("me/taxonomy-preferences")
   async getMyTaxonomyPreferences(@CurrentUserId() userId: string) {
     const rows = await this.prisma.userTaxonomyPreference.findMany({
       where: { userId },
       include: {
         term: { select: { id: true, slug: true, label: true, kind: true } },
       },
-      orderBy: [{ createdAt: 'asc' }],
+      orderBy: [{ createdAt: "asc" }],
     });
     return {
       data: rows.map((r) => ({
@@ -569,29 +727,39 @@ export class UsersController {
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Put('me/taxonomy-preferences')
-  async setMyTaxonomyPreferences(@CurrentUserId() userId: string, @Body() body: unknown) {
+  @Put("me/taxonomy-preferences")
+  async setMyTaxonomyPreferences(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ) {
     const parsed = taxonomyPreferencesSchema.parse(body);
-    const termIds = [...new Set((parsed.termIds ?? []).map((v) => v.trim()).filter(Boolean))];
-    const slugs = [...new Set((parsed.slugs ?? []).map((v) => normalizeTag(v)).filter(Boolean))];
+    const termIds = [
+      ...new Set((parsed.termIds ?? []).map((v) => v.trim()).filter(Boolean)),
+    ];
+    const slugs = [
+      ...new Set(
+        (parsed.slugs ?? []).map((v) => normalizeTag(v)).filter(Boolean),
+      ),
+    ];
 
-    const terms = (termIds.length > 0 || slugs.length > 0)
-      ? await this.prisma.taxonomyTerm.findMany({
-          where: {
-            status: 'active',
-            OR: [
-              ...(termIds.length > 0 ? [{ id: { in: termIds } }] : []),
-              ...(slugs.length > 0 ? [{ slug: { in: slugs } }] : []),
-            ],
-          },
-          select: { id: true, slug: true, label: true, kind: true },
-          take: 30,
-        })
-      : [];
+    const terms =
+      termIds.length > 0 || slugs.length > 0
+        ? await this.prisma.taxonomyTerm.findMany({
+            where: {
+              status: "active",
+              OR: [
+                ...(termIds.length > 0 ? [{ id: { in: termIds } }] : []),
+                ...(slugs.length > 0 ? [{ slug: { in: slugs } }] : []),
+              ],
+            },
+            select: { id: true, slug: true, label: true, kind: true },
+            take: 30,
+          })
+        : [];
 
     await this.prisma.$transaction(async (tx) => {
       await tx.userTaxonomyPreference.deleteMany({ where: { userId } });
@@ -605,7 +773,11 @@ export class UsersController {
       await tx.userArticleTagPreference.deleteMany({ where: { userId } });
       if (terms.length > 0) {
         await tx.userArticleTagPreference.createMany({
-          data: terms.map((t) => ({ userId, tag: t.slug, label: t.label.slice(0, 50) })),
+          data: terms.map((t) => ({
+            userId,
+            tag: t.slug,
+            label: t.label.slice(0, 50),
+          })),
           skipDuplicates: true,
         });
       }
@@ -622,16 +794,16 @@ export class UsersController {
   }
 
   @UseGuards(AuthGuard)
-  @Patch('me/username')
+  @Patch("me/username")
   async setMyUsername(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsedBody = setUsernameSchema.parse(body);
-    const desired = (parsedBody.username ?? '').trim();
-    if (!desired) throw new BadRequestException('Username is required.');
+    const desired = (parsedBody.username ?? "").trim();
+    if (!desired) throw new BadRequestException("Username is required.");
 
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new NotFoundException('User not found.');
+    if (!user) throw new NotFoundException("User not found.");
 
-    const currentLower = (user.username ?? '').trim().toLowerCase();
+    const currentLower = (user.username ?? "").trim().toLowerCase();
     const desiredLower = desired.toLowerCase();
     // Allow capitalization-only changes to the current username, even if the username doesn't meet
     // current validation rules (e.g. legacy/special-case usernames).
@@ -640,15 +812,22 @@ export class UsersController {
         where: { id: userId },
         data: { username: desired },
       });
-      await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+      await this.publicProfileCache.invalidateForUser({
+        id: updated.id,
+        username: updated.username ?? null,
+      });
       await this.emitUserSelfUpdated(updated.id);
       this.presence.markSeenFromHttp(userId);
-      return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
+      return {
+        data: {
+          user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
+        },
+      };
     }
 
     if (user.usernameIsSet) {
       // Once set, the only change allowed is capitalization (handled above).
-      throw new ConflictException('Username is already set.');
+      throw new ConflictException("Username is already set.");
     }
 
     const parsed = validateUsername(desired);
@@ -663,19 +842,30 @@ export class UsersController {
         },
       });
 
-      await this.ensureStarterFollowsOnFirstUsernameSet(userId, updated.username ?? parsed.username);
+      await this.ensureStarterFollowsOnFirstUsernameSet(
+        userId,
+        updated.username ?? parsed.username,
+      );
       this.membersMapRealtime.notifyChange(userId, user, updated);
 
-      await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+      await this.publicProfileCache.invalidateForUser({
+        id: updated.id,
+        username: updated.username ?? null,
+      });
       await this.emitUserSelfUpdated(updated.id);
-      this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'username_set');
+      this.usersMeRealtime.emitMeUpdatedFromUser(updated, "username_set");
       this.presence.markSeenFromHttp(userId);
       return {
-        data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) },
+        data: {
+          user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
+        },
       };
     } catch (err: unknown) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        throw new ConflictException('That username is taken.');
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2002"
+      ) {
+        throw new ConflictException("That username is taken.");
       }
       throw err;
     }
@@ -694,12 +884,12 @@ export class UsersController {
    */
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 300),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 300),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
   @UseGuards(OptionalAuthGuard)
-  @Post('preview/batch')
+  @Post("preview/batch")
   @HttpCode(200)
   async userPreviewBatch(@Body() body: unknown) {
     const parsed = previewBatchSchema.parse(body);
@@ -708,16 +898,17 @@ export class UsersController {
     const requested: string[] = [];
     const seen = new Set<string>();
     for (const raw of parsed.usernames) {
-      const un = (raw ?? '').toLowerCase().trim();
+      const un = (raw ?? "").toLowerCase().trim();
       if (!un || seen.has(un)) continue;
       seen.add(un);
       requested.push(un);
     }
-    if (requested.length === 0) return { data: { results: [] as PreviewBatchEntry[] } };
+    if (requested.length === 0)
+      return { data: { results: [] as PreviewBatchEntry[] } };
 
     const rows = await this.prisma.user.findMany({
       where: {
-        username: { in: requested, mode: 'insensitive' },
+        username: { in: requested, mode: "insensitive" },
         bannedAt: null,
       },
       select: {
@@ -732,7 +923,7 @@ export class UsersController {
 
     const byLowerUsername = new Map<string, (typeof rows)[number]>();
     for (const row of rows) {
-      const key = (row.username ?? '').toLowerCase().trim();
+      const key = (row.username ?? "").toLowerCase().trim();
       if (key) byLowerUsername.set(key, row);
     }
 
@@ -745,7 +936,7 @@ export class UsersController {
         premium: Boolean(found.premium),
         premiumPlus: Boolean(found.premiumPlus),
         isOrganization: Boolean(found.isOrganization),
-        verifiedStatus: String(found.verifiedStatus ?? 'none'),
+        verifiedStatus: String(found.verifiedStatus ?? "none"),
       };
     });
 
@@ -754,15 +945,15 @@ export class UsersController {
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 300),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 300),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
   @UseGuards(OptionalAuthGuard)
-  @Get(':username/preview')
+  @Get(":username/preview")
   async userPreview(
     @OptionalCurrentUserId() userId: string | undefined,
-    @Param('username') username: string,
+    @Param("username") username: string,
     @Res({ passthrough: true }) res: Response,
   ) {
     const viewerUserId = userId ?? null;
@@ -771,15 +962,22 @@ export class UsersController {
     const profileResult = await this.publicProfiles.getByUsernameOrId(username);
     const profile = profileResult.payload;
     if (!this.appConfig.isProd()) {
-      res.setHeader('x-moh-cache', `publicProfile=${profileResult.cache}`);
+      res.setHeader("x-moh-cache", `publicProfile=${profileResult.cache}`);
     }
     if ((profile as { banned?: boolean }).banned === true) {
-      res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
+      res.setHeader(
+        "Cache-Control",
+        "public, max-age=300, stale-while-revalidate=600",
+      );
       return { data: { banned: true } };
     }
 
-    let relationship: { viewerFollowsUser: boolean; userFollowsViewer: boolean; viewerPostNotificationsEnabled: boolean; viewerNotificationPreference?: import('../../common/dto/user.dto').UserNotificationPreference } =
-      {
+    let relationship: {
+      viewerFollowsUser: boolean;
+      userFollowsViewer: boolean;
+      viewerPostNotificationsEnabled: boolean;
+      viewerNotificationPreference?: import("../../common/dto/user.dto").UserNotificationPreference;
+    } = {
       viewerFollowsUser: false,
       userFollowsViewer: false,
       viewerPostNotificationsEnabled: false,
@@ -789,7 +987,10 @@ export class UsersController {
     let followingCount: number | null = null;
 
     if (profile.username) {
-      const summary = await this.followsService.summary({ viewerUserId, username: profile.username });
+      const summary = await this.followsService.summary({
+        viewerUserId,
+        username: profile.username,
+      });
       relationship = {
         viewerFollowsUser: summary.viewerFollowsUser,
         userFollowsViewer: summary.userFollowsViewer,
@@ -808,7 +1009,8 @@ export class UsersController {
         viewerFollowsUser: rel.viewerFollows.has(profile.id),
         userFollowsViewer: rel.followsViewer.has(profile.id),
         viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(profile.id),
-        viewerNotificationPreference: rel.viewerNotificationPreferences.get(profile.id) ?? 'off',
+        viewerNotificationPreference:
+          rel.viewerNotificationPreferences.get(profile.id) ?? "off",
       };
     }
 
@@ -833,7 +1035,9 @@ export class UsersController {
       viewerUserId && profile.id && viewerUserId !== profile.id
         ? Boolean(
             await this.prisma.userMute.findUnique({
-              where: { muterId_mutedId: { muterId: viewerUserId, mutedId: profile.id } },
+              where: {
+                muterId_mutedId: { muterId: viewerUserId, mutedId: profile.id },
+              },
               select: { mutedId: true },
             }),
           )
@@ -847,13 +1051,20 @@ export class UsersController {
       premium: profile.premium,
       premiumPlus: profile.premiumPlus,
       isOrganization: Boolean((profile as any).isOrganization),
-      accountKind: (profile as any).accountKind === 'page' ? 'page' : 'person',
+      accountKind: (profile as any).accountKind === "page" ? "page" : "person",
       verifiedStatus: profile.verifiedStatus,
-      avatarUrl: profile.avatarUrl, avatarVideo: profile.avatarVideo ?? null,
+      avatarUrl: profile.avatarUrl,
+      avatarVideo: profile.avatarVideo ?? null,
       bannerUrl: profile.bannerUrl,
       lastOnlineAt: canSeeLastOnline ? (profile.lastOnlineAt ?? null) : null,
-      checkinStreakDays: Math.max(0, Math.floor(Number((profile as any).checkinStreakDays) || 0)),
-      longestStreakDays: Math.max(0, Math.floor(Number((profile as any).longestStreakDays) || 0)),
+      checkinStreakDays: Math.max(
+        0,
+        Math.floor(Number((profile as any).checkinStreakDays) || 0),
+      ),
+      longestStreakDays: Math.max(
+        0,
+        Math.floor(Number((profile as any).longestStreakDays) || 0),
+      ),
       relationship,
       nudge,
       followerCount,
@@ -869,35 +1080,42 @@ export class UsersController {
     // Preview includes viewer-specific relationship when authenticated.
     // Allow longer caching for anonymous reads; authenticated must be private.
     res.setHeader(
-      'Cache-Control',
-      viewerUserId ? 'private, max-age=60, stale-while-revalidate=120' : 'public, max-age=300, stale-while-revalidate=600',
+      "Cache-Control",
+      viewerUserId
+        ? "private, max-age=60, stale-while-revalidate=120"
+        : "public, max-age=300, stale-while-revalidate=600",
     );
-    res.setHeader('Vary', 'Cookie');
+    res.setHeader("Vary", "Cookie");
 
     const orgMap = await this.publicProfiles.batchOrgAffiliations([payload.id]);
-    return { data: { ...payload, orgAffiliations: orgMap.get(payload.id) ?? [] } };
+    return {
+      data: { ...payload, orgAffiliations: orgMap.get(payload.id) ?? [] },
+    };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 300),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 300),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
   @UseGuards(OptionalAuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 120),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 120),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
   @UseGuards(OptionalAuthGuard)
-  @Get(':username/affiliates')
+  @Get(":username/affiliates")
   async affiliates(
     @OptionalCurrentUserId() userId: string | undefined,
-    @Param('username') username: string,
+    @Param("username") username: string,
     @Query() query: unknown,
-  ): Promise<{ data: FollowListUser[]; pagination: { nextCursor: string | null } }> {
+  ): Promise<{
+    data: FollowListUser[];
+    pagination: { nextCursor: string | null };
+  }> {
     const parsed = affiliatesQuerySchema.parse(query);
     const result = await this.followsService.listOrgAffiliates({
       viewerUserId: userId ?? null,
@@ -905,13 +1123,16 @@ export class UsersController {
       limit: parsed.limit ?? 30,
       cursor: parsed.cursor ?? null,
     });
-    return { data: result.users, pagination: { nextCursor: result.nextCursor } };
+    return {
+      data: result.users,
+      pagination: { nextCursor: result.nextCursor },
+    };
   }
 
-  @Get(':username')
+  @Get(":username")
   async publicProfile(
     @OptionalCurrentUserId() userId: string | undefined,
-    @Param('username') username: string,
+    @Param("username") username: string,
     @Res({ passthrough: true }) res: Response,
   ) {
     const viewerUserId = userId ?? null;
@@ -919,26 +1140,42 @@ export class UsersController {
     const profileResult = await this.publicProfiles.getByUsernameOrId(username);
     const payload = profileResult.payload;
     if (!this.appConfig.isProd()) {
-      res.setHeader('x-moh-cache', `publicProfile=${profileResult.cache}`);
+      res.setHeader("x-moh-cache", `publicProfile=${profileResult.cache}`);
     }
 
     if ((payload as { banned?: boolean }).banned === true) {
-      res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
+      res.setHeader(
+        "Cache-Control",
+        "public, max-age=300, stale-while-revalidate=600",
+      );
       return { data: { banned: true } };
     }
 
     // lastOnlineAt is viewer-sensitive: only verified viewers can see it.
     // Anonymous reads can still be publicly cached since we always redact lastOnlineAt there.
     res.setHeader(
-      'Cache-Control',
-      viewerUserId ? 'private, max-age=60, stale-while-revalidate=120' : 'public, max-age=300, stale-while-revalidate=600',
+      "Cache-Control",
+      viewerUserId
+        ? "private, max-age=60, stale-while-revalidate=120"
+        : "public, max-age=300, stale-while-revalidate=600",
     );
-    if (viewerUserId) res.setHeader('Vary', 'Cookie');
+    if (viewerUserId) res.setHeader("Vary", "Cookie");
 
     const profileId = (payload as any).id as string | undefined;
-    const isOrg = Boolean((payload as { isOrganization?: boolean }).isOrganization);
-    const [orgMap, crewMember, postCount, articleCount, boardPoints, affiliateCount] = await Promise.all([
-      profileId ? this.publicProfiles.batchOrgAffiliations([profileId]) : Promise.resolve(new Map()),
+    const isOrg = Boolean(
+      (payload as { isOrganization?: boolean }).isOrganization,
+    );
+    const [
+      orgMap,
+      crewMember,
+      postCount,
+      articleCount,
+      boardPoints,
+      affiliateCount,
+    ] = await Promise.all([
+      profileId
+        ? this.publicProfiles.batchOrgAffiliations([profileId])
+        : Promise.resolve(new Map()),
       profileId
         ? this.prisma.crewMember.findFirst({
             where: { userId: profileId, crew: { deletedAt: null } },
@@ -953,17 +1190,22 @@ export class UsersController {
             where: totalUserArticlesWhere(profileId),
           })
         : Promise.resolve(0),
-      profileId ? totalUserBoardPoints(this.prisma, profileId) : Promise.resolve(0),
+      profileId
+        ? totalUserBoardPoints(this.prisma, profileId)
+        : Promise.resolve(0),
       // Only organizations have affiliates; everyone else gets null so clients can hide the count.
       profileId && isOrg
         ? this.prisma.userOrgMembership.count({
-            where: { orgId: profileId, user: { usernameIsSet: true, bannedAt: null } },
+            where: {
+              orgId: profileId,
+              user: { usernameIsSet: true, bannedAt: null },
+            },
           })
         : Promise.resolve(null),
     ]);
 
     if (viewerUserId && profileId) {
-      this.posthog.capture(viewerUserId, 'profile_viewed', {
+      this.posthog.capture(viewerUserId, "profile_viewed", {
         viewed_user_id: profileId,
         is_own_profile: viewerUserId === profileId,
       });
@@ -973,7 +1215,7 @@ export class UsersController {
       data: {
         ...(payload as any),
         lastOnlineAt: canSeeLastOnline ? (payload as any).lastOnlineAt : null,
-        orgAffiliations: orgMap.get(profileId ?? '') ?? [],
+        orgAffiliations: orgMap.get(profileId ?? "") ?? [],
         postCount,
         articleCount,
         boardPoints,
@@ -984,27 +1226,37 @@ export class UsersController {
   }
 
   @UseGuards(AuthGuard)
-  @Patch('me/profile')
-  async updateMyProfile(@Body() body: unknown, @CurrentUserId() userId: string) {
+  @Patch("me/profile")
+  async updateMyProfile(
+    @Body() body: unknown,
+    @CurrentUserId() userId: string,
+  ) {
     const parsed = profileSchema.parse(body);
 
     try {
       const existing = await this.prisma.user.findUnique({
         where: { id: userId },
-        select: { email: true, username: true, name: true, ...MEMBERS_MAP_SNAPSHOT_SELECT },
+        select: {
+          email: true,
+          username: true,
+          name: true,
+          ...MEMBERS_MAP_SNAPSHOT_SELECT,
+        },
       });
-      if (!existing) throw new NotFoundException('User not found.');
+      if (!existing) throw new NotFoundException("User not found.");
 
       const now = new Date();
       let nextEmail: string | null | undefined = undefined;
       let emailChanged = false;
 
       const update: Prisma.UserUpdateInput = {
-        name: parsed.name === undefined ? undefined : (parsed.name || null),
-        bio: parsed.bio === undefined ? undefined : (parsed.bio || null),
+        name: parsed.name === undefined ? undefined : parsed.name || null,
+        bio: parsed.bio === undefined ? undefined : parsed.bio || null,
       };
       if (parsed.email !== undefined) {
-        const cleaned = parsed.email.trim() ? parsed.email.trim().toLowerCase() : null;
+        const cleaned = parsed.email.trim()
+          ? parsed.email.trim().toLowerCase()
+          : null;
         nextEmail = cleaned;
         emailChanged = (existing.email ?? null) !== cleaned;
         (update as any).email = cleaned;
@@ -1014,13 +1266,21 @@ export class UsersController {
         }
       }
 
+      for (const [field, provider] of [
+        ["rumbleUrl", "rumble"],
+        ["linkedinUrl", "linkedin"],
+        ["youtubeUrl", "youtube"],
+      ] as const) {
+        if (parsed[field] !== undefined)
+          update[field] = normalizeSocialProfileUrl(parsed[field], provider);
+      }
       if (parsed.website !== undefined) {
-        const raw = (parsed.website ?? '').trim();
+        const raw = (parsed.website ?? "").trim();
         update.website = raw ? normalizeWebsite(raw) : null;
       }
 
       if (parsed.locationQuery !== undefined) {
-        const q = (parsed.locationQuery ?? '').trim();
+        const q = (parsed.locationQuery ?? "").trim();
         if (!q) {
           update.locationInput = null;
           update.locationDisplay = null;
@@ -1043,85 +1303,110 @@ export class UsersController {
 
       if (parsed.interests !== undefined) {
         const cleaned = Array.from(
-          new Set(
-            parsed.interests
-              .map((s) => s.trim())
-              .filter(Boolean),
-          ),
+          new Set(parsed.interests.map((s) => s.trim()).filter(Boolean)),
         ).slice(0, 30);
-        if (cleaned.length < 1) throw new BadRequestException('Select at least one interest.');
-        const mapped = cleaned.map((s) => canonicalizeTopicValue(s)).filter(Boolean) as string[];
+        if (cleaned.length < 1)
+          throw new BadRequestException("Select at least one interest.");
+        const mapped = cleaned
+          .map((s) => canonicalizeTopicValue(s))
+          .filter(Boolean) as string[];
         if (mapped.length !== cleaned.length) {
-          throw new BadRequestException('Interests must be selected from the curated list.');
+          throw new BadRequestException(
+            "Interests must be selected from the curated list.",
+          );
         }
         update.interests = mapped;
       }
 
-      const updated = await this.profileWrite.commit(userId, update, emailChanged);
+      const updated = await this.profileWrite.commit(
+        userId,
+        update,
+        emailChanged,
+      );
       this.presence.markSeenFromHttp(userId);
       this.membersMapRealtime.notifyChange(userId, existing, updated);
 
       if (emailChanged && nextEmail) {
-        const greetingName = (updated.name ?? updated.username ?? '').trim() || null;
+        const greetingName =
+          (updated.name ?? updated.username ?? "").trim() || null;
         // Best-effort: don't block profile updates on email send.
         void this.emailVerification
-          .requestVerification({ userId: updated.id, email: nextEmail, name: greetingName })
+          .requestVerification({
+            userId: updated.id,
+            email: nextEmail,
+            name: greetingName,
+          })
           .catch(() => undefined);
       }
       return {
-        data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) },
+        data: {
+          user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
+        },
       };
     } catch (err: unknown) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        throw new ConflictException('That email is already in use.');
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2002"
+      ) {
+        throw new ConflictException("That email is already in use.");
       }
       throw err;
     }
   }
 
   @UseGuards(AuthGuard)
-  @Put('me/pinned-post')
+  @Put("me/pinned-post")
   async setPinnedPost(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = z.object({ postId: z.string().min(1) }).parse(body);
-    const postId = (parsed.postId ?? '').trim();
-    if (!postId) throw new BadRequestException('postId is required.');
+    const postId = (parsed.postId ?? "").trim();
+    if (!postId) throw new BadRequestException("postId is required.");
 
     const post = await this.prisma.post.findFirst({
       where: { id: postId, deletedAt: null },
       select: { id: true, userId: true, visibility: true },
     });
-    if (!post) throw new NotFoundException('Post not found.');
-    if (post.userId !== userId) throw new NotFoundException('Post not found.');
-    if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be pinned.');
+    if (!post) throw new NotFoundException("Post not found.");
+    if (post.userId !== userId) throw new NotFoundException("Post not found.");
+    if (post.visibility === "onlyMe")
+      throw new BadRequestException("Only-me posts cannot be pinned.");
 
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { pinnedPostId: postId },
       select: { id: true, username: true },
     });
-    await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    await this.publicProfileCache.invalidateForUser({
+      id: updated.id,
+      username: updated.username ?? null,
+    });
     await this.emitUserSelfUpdated(updated.id);
-    void this.usersMeRealtime.emitMeUpdated(updated.id, 'pinned_post_changed');
+    void this.usersMeRealtime.emitMeUpdated(updated.id, "pinned_post_changed");
     return { data: { pinnedPostId: postId } };
   }
 
   @UseGuards(AuthGuard)
-  @Delete('me/pinned-post')
+  @Delete("me/pinned-post")
   async unpinPost(@CurrentUserId() userId: string) {
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { pinnedPostId: null },
       select: { id: true, username: true },
     });
-    await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    await this.publicProfileCache.invalidateForUser({
+      id: updated.id,
+      username: updated.username ?? null,
+    });
     await this.emitUserSelfUpdated(updated.id);
-    void this.usersMeRealtime.emitMeUpdated(updated.id, 'pinned_post_changed');
+    void this.usersMeRealtime.emitMeUpdated(updated.id, "pinned_post_changed");
     return { data: { pinnedPostId: null } };
   }
 
   @UseGuards(AuthGuard)
-  @Patch('me/settings')
-  async updateMySettings(@Body() body: unknown, @CurrentUserId() userId: string) {
+  @Patch("me/settings")
+  async updateMySettings(
+    @Body() body: unknown,
+    @CurrentUserId() userId: string,
+  ) {
     const parsed = settingsSchema.parse(body);
 
     const updated = await this.prisma.user.update({
@@ -1132,19 +1417,29 @@ export class UsersController {
       },
     });
 
-    await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+    await this.publicProfileCache.invalidateForUser({
+      id: updated.id,
+      username: updated.username ?? null,
+    });
     await this.emitUserSelfUpdated(updated.id);
-    this.usersMeRealtime.emitMeUpdatedFromUser(updated, 'settings_changed');
-    return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
+    this.usersMeRealtime.emitMeUpdatedFromUser(updated, "settings_changed");
+    return {
+      data: {
+        user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
+      },
+    };
   }
 
   @UseGuards(AuthGuard)
-  @Patch('me/onboarding')
-  async updateMyOnboarding(@Body() body: unknown, @CurrentUserId() userId: string) {
+  @Patch("me/onboarding")
+  async updateMyOnboarding(
+    @Body() body: unknown,
+    @CurrentUserId() userId: string,
+  ) {
     const parsed = onboardingSchema.parse(body);
 
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new NotFoundException('User not found.');
+    if (!user) throw new NotFoundException("User not found.");
 
     const data: Prisma.UserUpdateInput = {};
     const now = new Date();
@@ -1153,7 +1448,7 @@ export class UsersController {
     let usernameFirstSet = false;
 
     if (user.menOnlyConfirmed && parsed.menOnlyConfirmed === false) {
-      throw new BadRequestException('This confirmation cannot be removed.');
+      throw new BadRequestException("This confirmation cannot be removed.");
     }
     if (parsed.menOnlyConfirmed === true) {
       data.menOnlyConfirmed = true;
@@ -1164,7 +1459,9 @@ export class UsersController {
     }
 
     if (parsed.email !== undefined) {
-      const cleaned = parsed.email.trim() ? parsed.email.trim().toLowerCase() : null;
+      const cleaned = parsed.email.trim()
+        ? parsed.email.trim().toLowerCase()
+        : null;
       emailChanged = (user.email ?? null) !== cleaned;
       nextEmail = cleaned;
       (data as any).email = cleaned;
@@ -1179,32 +1476,36 @@ export class UsersController {
       if (user.birthdate) {
         const existing = user.birthdate.toISOString().slice(0, 10);
         if (existing !== parsed.birthdate) {
-          throw new BadRequestException('Birthday is locked once set.');
+          throw new BadRequestException("Birthday is locked once set.");
         }
         // If it matches, ignore.
       } else {
-      // Store as UTC midnight.
-      const d = new Date(`${parsed.birthdate}T00:00:00.000Z`);
-      if (Number.isNaN(d.getTime())) throw new BadRequestException('Invalid birthdate.');
-      if (!isAtLeast18(d)) {
-        throw new BadRequestException('You must be at least 18 years old to join Men of Hunger.');
-      }
-      data.birthdate = d;
+        // Store as UTC midnight.
+        const d = new Date(`${parsed.birthdate}T00:00:00.000Z`);
+        if (Number.isNaN(d.getTime()))
+          throw new BadRequestException("Invalid birthdate.");
+        if (!isAtLeast18(d)) {
+          throw new BadRequestException(
+            "You must be at least 18 years old to join Men of Hunger.",
+          );
+        }
+        data.birthdate = d;
       }
     }
 
     if (parsed.interests !== undefined) {
       const cleaned = Array.from(
-        new Set(
-          parsed.interests
-            .map((s) => s.trim())
-            .filter(Boolean),
-        ),
+        new Set(parsed.interests.map((s) => s.trim()).filter(Boolean)),
       ).slice(0, 30);
-      if (cleaned.length < 1) throw new BadRequestException('Select at least one interest.');
-      const mapped = cleaned.map((s) => canonicalizeTopicValue(s)).filter(Boolean) as string[];
+      if (cleaned.length < 1)
+        throw new BadRequestException("Select at least one interest.");
+      const mapped = cleaned
+        .map((s) => canonicalizeTopicValue(s))
+        .filter(Boolean) as string[];
       if (mapped.length !== cleaned.length) {
-        throw new BadRequestException('Interests must be selected from the curated list.');
+        throw new BadRequestException(
+          "Interests must be selected from the curated list.",
+        );
       }
       data.interests = mapped;
     }
@@ -1217,7 +1518,7 @@ export class UsersController {
       });
       if (resolved) {
         data.username = resolved.username;
-        if ('usernameIsSet' in resolved) {
+        if ("usernameIsSet" in resolved) {
           data.usernameIsSet = true;
           usernameFirstSet = true;
         }
@@ -1258,14 +1559,22 @@ export class UsersController {
       });
 
       if (usernameFirstSet && updated.username) {
-        await this.ensureStarterFollowsOnFirstUsernameSet(userId, updated.username);
+        await this.ensureStarterFollowsOnFirstUsernameSet(
+          userId,
+          updated.username,
+        );
       }
       this.membersMapRealtime.notifyChange(userId, user, updated);
 
       if (!wasComplete && isFullyOnboarded(updated) && updated.username) {
-        this.posthog.capture(userId, 'onboarding_completed', { username: updated.username });
+        this.posthog.capture(userId, "onboarding_completed", {
+          username: updated.username,
+        });
         const r2PublicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-        const avatarUrl = r2PublicBaseUrl && updated.avatarKey ? `${r2PublicBaseUrl}/${updated.avatarKey}` : null;
+        const avatarUrl =
+          r2PublicBaseUrl && updated.avatarKey
+            ? `${r2PublicBaseUrl}/${updated.avatarKey}`
+            : null;
         this.slack.notifyProfileComplete({
           userId,
           username: updated.username,
@@ -1277,28 +1586,45 @@ export class UsersController {
         });
       }
 
-      await this.publicProfileCache.invalidateForUser({ id: updated.id, username: updated.username ?? null });
+      await this.publicProfileCache.invalidateForUser({
+        id: updated.id,
+        username: updated.username ?? null,
+      });
       // Bust the Redis session cache so the next /auth/me SSR call reads fresh user data
       // instead of the 30-second stale cache (which would re-show the onboarding gate on refresh).
       void this.auth.bustSessionCachesForUser(userId);
       await this.emitUserSelfUpdated(updated.id);
-      this.usersMeRealtime.emitMeUpdatedFromUser(updated, emailChanged ? 'email_changed' : 'onboarding_changed');
+      this.usersMeRealtime.emitMeUpdatedFromUser(
+        updated,
+        emailChanged ? "email_changed" : "onboarding_changed",
+      );
       this.presence.markSeenFromHttp(userId);
 
       if (emailChanged && nextEmail) {
-        const greetingName = (updated.name ?? updated.username ?? '').trim() || null;
+        const greetingName =
+          (updated.name ?? updated.username ?? "").trim() || null;
         void this.emailVerification
-          .requestVerification({ userId: updated.id, email: nextEmail, name: greetingName })
+          .requestVerification({
+            userId: updated.id,
+            email: nextEmail,
+            name: greetingName,
+          })
           .catch(() => undefined);
       }
-      return { data: { user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null) } };
+      return {
+        data: {
+          user: toUserDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null),
+        },
+      };
     } catch (err: unknown) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2002"
+      ) {
         // Could be username or email unique violations; keep it generic here.
-        throw new ConflictException('That value is already in use.');
+        throw new ConflictException("That value is already in use.");
       }
       throw err;
     }
   }
 }
-

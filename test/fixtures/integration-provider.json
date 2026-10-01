@@ -1,0 +1,280 @@
+{
+  "/me/integrations/x/profiles/fixture": {
+    "id": "123",
+    "username": "fixture_man",
+    "name": "James Example",
+    "description": "Husband. Father. Building stronger men and stronger communities.",
+    "avatarUrl": null,
+    "bannerUrl": "https://fixtures.invalid/banner.png",
+    "websiteUrl": "https://example.com",
+    "verified": true,
+    "followers": 46900,
+    "following": 1807,
+    "fetchedAt": "2026-10-01T12:00:00Z",
+    "expiresAt": "2099-10-01T12:00:00Z"
+  },
+  "/me/integrations/x/profiles/fixture/context": {
+    "targetId": "123",
+    "following": true,
+    "followsYou": true,
+    "messageUrl": "https://x.com/messages/compose?recipient_id=123",
+    "expiresAt": "2099-10-01T12:00:00Z"
+  },
+  "/me/integrations/x/profiles/no-dm": {
+    "id": "123",
+    "username": "fixture_man",
+    "name": "James Example",
+    "description": "Husband. Father. Building stronger men and stronger communities.",
+    "avatarUrl": null,
+    "bannerUrl": "https://fixtures.invalid/banner.png",
+    "websiteUrl": "https://example.com",
+    "verified": true,
+    "followers": 46900,
+    "following": 1807,
+    "fetchedAt": "2026-10-01T12:00:00Z",
+    "expiresAt": "2099-10-01T12:00:00Z"
+  },
+  "/me/integrations/x/profiles/no-dm/context": null,
+  "/me/integrations/x/profiles/unavailable": null,
+  "/me/integrations/x/profiles/expired": {
+    "id": "123",
+    "username": "fixture_man",
+    "name": "James Example",
+    "description": "Husband. Father. Building stronger men and stronger communities.",
+    "avatarUrl": null,
+    "bannerUrl": "https://fixtures.invalid/banner.png",
+    "websiteUrl": "https://example.com",
+    "verified": true,
+    "followers": 46900,
+    "following": 1807,
+    "fetchedAt": "2026-10-01T12:00:00Z",
+    "expiresAt": "2000-01-01T00:00:00Z"
+  },
+  "/link-metadata": {
+    "url": "https://example.com",
+    "title": "Public creator profile",
+    "description": "A lightweight public link preview.",
+    "imageUrl": null,
+    "siteName": "Example"
+  },
+  "/users/by-location": {
+    "location": {
+      "state": "VA",
+      "stateDisplay": "Virginia"
+    },
+    "memberCount": 100,
+    "sections": [
+      {
+        "key": "sameState",
+        "label": "Virginia",
+        "users": [
+          {
+            "id": "0",
+            "name": "Member 1",
+            "username": "member1",
+            "avatarUrl": null,
+            "premium": false,
+            "premiumPlus": false,
+            "isOrganization": false,
+            "verifiedStatus": "verified"
+          },
+          {
+            "id": "1",
+            "name": "Member 2",
+            "username": "member2",
+            "avatarUrl": null,
+            "premium": false,
+            "premiumPlus": false,
+            "isOrganization": false,
+            "verifiedStatus": "verified"
+          },
+          {
+            "id": "2",
+            "name": "Member 3",
+            "username": "member3",
+            "avatarUrl": null,
+            "premium": false,
+            "premiumPlus": false,
+            "isOrganization": false,
+            "verifiedStatus": "verified"
+          },
+          {
+            "id": "3",
+            "name": "Member 4",
+            "username": "member4",
+            "avatarUrl": null,
+            "premium": false,
+            "premiumPlus": false,
+            "isOrganization": false,
+            "verifiedStatus": "verified"
+          },
+          {
+            "id": "4",
+            "name": "Member 5",
+            "username": "member5",
+            "avatarUrl": null,
+            "premium": false,
+            "premiumPlus": false,
+            "isOrganization": false,
+            "verifiedStatus": "verified"
+          },
+          {
+            "id": "5",
+            "name": "Member 6",
+            "username": "member6",
+            "avatarUrl": null,
+            "premium": false,
+            "premiumPlus": false,
+            "isOrganization": false,
+            "verifiedStatus": "verified"
+          }
+        ]
+      }
+    ]
+  },
+  "/admin/integrations/operations": {
+    "control": {
+      "revision": 0,
+      "paused": false,
+      "companyMonthlyMicros": null,
+      "companyDailyMicros": null,
+      "xMonthlyMicros": null,
+      "reserveMonthlyMicros": null
+    },
+    "alerts": [
+      {
+        "key": "reconciliation",
+        "severity": "warning",
+        "message": "One provider outcome needs review.",
+        "openedAt": "2026-10-01T12:00:00Z",
+        "observedAt": "2026-10-01T12:00:00Z"
+      }
+    ],
+    "changes": []
+  },
+  "/admin/integrations/spend": {
+    "month": "2026-10-01T00:00:00Z",
+    "groups": [],
+    "pending": [
+      {
+        "id": "fixture:uncertain:1",
+        "userId": "fixture",
+        "provider": "x",
+        "action": "create",
+        "bucket": "regular",
+        "status": "uncertain",
+        "reservedMicros": 15000,
+        "chargedMicros": null,
+        "createdAt": "2026-10-01T12:00:00Z",
+        "priceVersion": "fixture-only"
+      }
+    ],
+    "limits": {
+      "enabled": true,
+      "companyMonthlyMicros": 100000000,
+      "companyDailyMicros": 10000000,
+      "xMonthlyMicros": 80000000,
+      "fundedReserveMicros": 20000000,
+      "removalHeadroomMicros": 1000000
+    }
+  },
+  "/me/integrations/x/publishing/fixture": {
+    "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "text": "Stronger men. Stronger communities.",
+    "username": "fixture_man",
+    "available": true,
+    "reason": null,
+    "canQuote": true,
+    "canLongText": true,
+    "canEdit": false,
+    "postMaxMicros": 15000,
+    "mediaMaxMicros": 5000,
+    "mediaCount": 0,
+    "hasPoll": false,
+    "remoteUrl": null,
+    "confirmedUrls": [],
+    "needsAttention": false,
+    "allowance": {
+      "regular": {
+        "limitMicros": 8000000,
+        "remainingMicros": 7800000,
+        "committedMicros": 200000,
+        "pendingMicros": 15000
+      },
+      "expensive": {
+        "limitMicros": 10000000,
+        "remainingMicros": 10000000,
+        "committedMicros": 0,
+        "pendingMicros": 0
+      },
+      "resetsAt": "2099-10-01T12:00:00Z"
+    }
+  },
+  "/me/integrations/x/publishing/partial": {
+    "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "text": "Stronger men. Stronger communities.",
+    "username": "fixture_man",
+    "available": true,
+    "reason": null,
+    "canQuote": true,
+    "canLongText": true,
+    "canEdit": false,
+    "postMaxMicros": 15000,
+    "mediaMaxMicros": 5000,
+    "mediaCount": 0,
+    "hasPoll": false,
+    "remoteUrl": "https://x.com/i/status/123",
+    "confirmedUrls": [
+      "https://x.com/i/status/123",
+      "https://x.com/i/status/124"
+    ],
+    "needsAttention": true,
+    "allowance": {
+      "regular": {
+        "limitMicros": 8000000,
+        "remainingMicros": 7800000,
+        "committedMicros": 200000,
+        "pendingMicros": 15000
+      },
+      "expensive": {
+        "limitMicros": 10000000,
+        "remainingMicros": 10000000,
+        "committedMicros": 0,
+        "pendingMicros": 0
+      },
+      "resetsAt": "2099-10-01T12:00:00Z"
+    }
+  },
+  "/me/integrations/x/publishing/unavailable": {
+    "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "text": "Stronger men. Stronger communities.",
+    "username": "fixture_man",
+    "available": false,
+    "reason": "Advanced X publishing needs confirmed account access and pricing.",
+    "canQuote": true,
+    "canLongText": true,
+    "canEdit": false,
+    "postMaxMicros": 15000,
+    "mediaMaxMicros": 5000,
+    "mediaCount": 0,
+    "hasPoll": false,
+    "remoteUrl": null,
+    "confirmedUrls": [],
+    "needsAttention": false,
+    "allowance": {
+      "regular": {
+        "limitMicros": 8000000,
+        "remainingMicros": 7800000,
+        "committedMicros": 200000,
+        "pendingMicros": 15000
+      },
+      "expensive": {
+        "limitMicros": 10000000,
+        "remainingMicros": 10000000,
+        "committedMicros": 0,
+        "pendingMicros": 0
+      },
+      "resetsAt": "2099-10-01T12:00:00Z"
+    }
+  }
+}
