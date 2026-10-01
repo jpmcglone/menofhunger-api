@@ -3474,6 +3474,7 @@ export type ScheduledCommunityGroupDto = {
  * Carries the intended publish settings alongside the composed body/media/poll preview.
  */
 export type ScheduledPostDto = {
+  crosspost?: { pickax?: 'link' | 'native'; x?: 'link' | 'native' };
   id: string;
   createdAt: string;
   body: string;

@@ -1,8 +1,10 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
+import { PickaxOAuthService } from './pickax-oauth.service';
+import { ConnectionIdempotencyService } from '../outbound/connection-idempotency.service';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Post, UseGuards, Req, ForbiddenException } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
-import { AuthGuard } from '../auth/auth.guard';
+import { AuthGuard, type AuthedRequest } from '../auth/auth.guard';
 import { CurrentUserId } from '../users/users.decorator';
 import { PickaxConnectionService } from './pickax-connection.service';
 
@@ -16,7 +18,7 @@ const connectSchema = z.object({
 @Controller('me/integrations/pickax')
 @UseGuards(AuthGuard)
 export class PickaxController {
-  constructor(private readonly connections: PickaxConnectionService) {}
+  constructor(private readonly connections: PickaxConnectionService, private readonly idempotency: ConnectionIdempotencyService, private readonly oauth: PickaxOAuthService) {}
 
   @Get()
   async status(@CurrentUserId() userId: string) {
@@ -26,12 +28,26 @@ export class PickaxController {
   @Post()
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 8, ttl: 60_000 } })
-  async connect(@CurrentUserId() userId: string, @Body() body: unknown) {
+  async connect(@CurrentUserId() userId: string, @Body() body: unknown, @Req() req: AuthedRequest) {
+    if (req.user?.impersonatedByUserId) throw new ForbiddenException('End impersonation before connecting an account.');
     const input = connectSchema.parse(body);
-    const result = await this.connections.connect(userId, input);
+    const result = await this.idempotency.run(userId, req.path, req.get('Idempotency-Key'), input, () => this.connections.connect(userId, input, req.user?.operatedByUserId ?? userId));
     return {
       data: { ...result.status, needsUsername: result.needsUsername, verificationCode: result.verificationCode },
     };
+  }
+
+  @Post('authorize')
+  async authorizeOAuth(@CurrentUserId() userId: string, @Req() req: AuthedRequest, @Body() body: unknown) {
+    if (req.user?.impersonatedByUserId) throw new ForbiddenException();
+    const input = z.object({ continuation: z.string().regex(/^[A-Za-z0-9_-]{20,200}$/).optional() }).parse(body ?? {});
+    return { data: await this.oauth.authorize(userId, req.user?.operatedByUserId ?? userId, input.continuation) };
+  }
+  @Post('oauth/connect')
+  async finishOAuth(@CurrentUserId() userId: string, @Req() req: AuthedRequest, @Body() body: unknown) {
+    if (req.user?.impersonatedByUserId) throw new ForbiddenException();
+    const input = z.object({ code: z.string().min(1).max(2000), state: z.string().regex(/^[A-Za-z0-9_-]{20,200}$/) }).parse(body);
+    return { data: await this.idempotency.run(userId, req.path, req.get('Idempotency-Key'), input, () => this.oauth.connect(req.user?.operatedByUserId ?? userId, input.code, input.state)) };
   }
 
   @Delete()

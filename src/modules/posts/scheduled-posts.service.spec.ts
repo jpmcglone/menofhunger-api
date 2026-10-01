@@ -20,6 +20,8 @@ function makeHoldingRow(overrides: Partial<Record<string, any>> = {}) {
     scheduledVisibility: 'public',
     scheduledCommunityGroupId: null,
     scheduledPollJson: null,
+    scheduledRevision: 0,
+    scheduledPublishedPostId: null,
     scheduledError: null,
     scheduledFailedAt: null,
     deletedAt: null,
@@ -79,6 +81,7 @@ function makeService(prismaOverrides: Record<string, any> = {}, mutationOverride
     }),
     ...prismaOverrides,
   };
+  prisma.post.findUnique ??= jest.fn(async () => makeHoldingRow());
 
   const mutation: any = mutationOverride ?? {
     createPost: jest.fn(async () => ({
@@ -232,19 +235,20 @@ describe('ScheduledPostsService', () => {
   });
 
   describe('publishDue', () => {
-    it('skips a row if atomic claim returns count=0 (already claimed)', async () => {
+    it('does not restore a publication already consumed by the transaction', async () => {
       const duePost = makeHoldingRow({ id: 'sched-due', scheduledAt: new Date(Date.now() - 1000) });
       const { service, mutation } = makeService({
         post: {
           findMany: jest.fn(async () => [duePost]),
           updateMany: jest.fn(async () => ({ count: 0 })),
           update: jest.fn(async () => ({})),
+          findUnique: jest.fn(async () => ({ deletedAt: new Date(), scheduledPublishedPostId: 'live-post' })),
         },
-      });
+      }, { createPost: jest.fn(async () => { throw new Error('Already published'); }) });
 
       await service.publishDue(new Date());
 
-      expect(mutation.createPost).not.toHaveBeenCalled();
+      expect(mutation.createPost).toHaveBeenCalledWith(expect.objectContaining({ scheduledSource: { id: 'sched-due', revision: 0 } }));
     });
 
     it('calls createPost with stored body, visibility, and media when claim succeeds', async () => {
@@ -262,9 +266,7 @@ describe('ScheduledPostsService', () => {
       expect(mutation.createPost).toHaveBeenCalledWith(
         expect.objectContaining({ body: duePost.body, visibility: 'public' }),
       );
-      expect(prisma.post.update).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'sched-due' } }),
-      );
+      expect(prisma.post.update).not.toHaveBeenCalled(); // Draft consumption is inside createPost's transaction.
       expect(realtime.emitScheduledPostPublished).toHaveBeenCalledWith('user-1', expect.objectContaining({ scheduledId: 'sched-due' }));
     });
 
@@ -283,9 +285,9 @@ describe('ScheduledPostsService', () => {
 
       await service.publishDue(new Date());
 
-      expect(prisma.post.update).toHaveBeenCalledWith(
+      expect(prisma.post.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'sched-err' },
+          where: expect.objectContaining({ id: 'sched-err', deletedAt: null, scheduledPublishedPostId: null }),
           data: expect.objectContaining({ scheduledError: 'publish failed' }),
         }),
       );

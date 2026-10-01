@@ -1,3 +1,5 @@
+import { XUsageService } from './x-usage.service';
+import type { XMonthlyAllowanceDto } from '../partner/partner.dto';
 import { randomBytes } from 'crypto';
 import {
   BadRequestException,
@@ -19,7 +21,7 @@ import { RedisService } from '../redis/redis.service';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
-import { XApiClient, hasRequiredXScopes, isXUsername, pkceChallenge, pkceVerifier, type XTokenPair } from './x-api.client';
+import { XApiClient, XApiError, hasRequiredXScopes, isXUsername, pkceChallenge, pkceVerifier, type XTokenPair } from './x-api.client';
 
 export type XAllowance = {
   linkPostsLeft: number;
@@ -30,17 +32,17 @@ export type XConnectionStatus = {
   available: boolean;
   connected: boolean;
   username: string | null;
-  /** Premium members can spend the monthly allowance. Verified members can connect only. */
+  /** Actual verification is required to publish; connecting remains free. */
   canPost: boolean;
   needsAttention: boolean;
   lastError: string | null;
-  allowance: XAllowance;
+  allowance: XAllowance | XMonthlyAllowanceDto;
 };
 
 const EXPIRY_SKEW_MS = 90_000;
 const STATE_TTL_SECONDS = 10 * 60;
 
-type OAuthState = { userId: string; verifier: string };
+type OAuthState = { userId: string; operatorUserId: string; verifier: string };
 
 function stateKey(state: string): string {
   return `x:oauth:${state}`;
@@ -65,6 +67,7 @@ export class XConnectionService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly usage: XUsageService,
     private readonly appConfig: AppConfigService,
     private readonly api: XApiClient,
     private readonly redis: RedisService,
@@ -95,19 +98,19 @@ export class XConnectionService {
       available: this.isAvailable(),
       connected: Boolean(conn),
       username: conn?.username ?? null,
-      canPost: Boolean(user?.premium || user?.premiumPlus),
+      canPost: this.appConfig.partner().xCountAllowance ? Boolean(user && user.verifiedStatus !== 'none') : Boolean(user?.premium || user?.premiumPlus),
       needsAttention: conn?.status === 'error',
       lastError: conn?.lastError ?? null,
-      allowance: allowanceFromSpent(spent, budget),
+      allowance: this.appConfig.partner().xCountAllowance ? await this.usage.allowance(userId, conn?.xUserId) : allowanceFromSpent(spent, budget),
     };
   }
 
-  async authorize(userId: string): Promise<{ url: string }> {
+  async authorize(userId: string, operatorUserId = userId): Promise<{ url: string }> {
     const config = this.requireConfig();
     await this.assertCanConnect(userId);
     const state = randomBytes(24).toString('base64url');
     const verifier = pkceVerifier();
-    await this.redis.setJson(stateKey(state), { userId, verifier } satisfies OAuthState, { ttlSeconds: STATE_TTL_SECONDS });
+    await this.redis.setJson(stateKey(state), { userId, operatorUserId, verifier } satisfies OAuthState, { ttlSeconds: STATE_TTL_SECONDS });
     return {
       url: this.api.authorizeUrl({
         clientId: config.clientId,
@@ -118,11 +121,11 @@ export class XConnectionService {
     };
   }
 
-  async connect(userId: string, input: { code: string; state: string }): Promise<XConnectionStatus> {
+  async connect(userId: string, input: { code: string; state: string }, operatorUserId = userId): Promise<XConnectionStatus> {
     const config = this.requireConfig();
     await this.assertCanConnect(userId);
     const stored = await this.takeOAuthState(input.state);
-    if (!stored || stored.userId !== userId || !stored.verifier) {
+    if (!stored || stored.userId !== userId || stored.operatorUserId !== operatorUserId || !stored.verifier) {
       throw new BadRequestException('That X sign-in expired. Try again.');
     }
     const tokens = await this.api.exchangeCode({
@@ -143,12 +146,15 @@ export class XConnectionService {
     if (taken && taken.userId !== userId) {
       throw new ConflictException('That X account is already connected to another member.');
     }
+    const current = await this.prisma.xConnection.findUnique({ where: { userId } });
+    if (current && current.xUserId !== account.id) throw new ConflictException('Disconnect your current X account before connecting another.');
     const key = config.encryptionKey;
     await this.prisma.$transaction([
       this.prisma.xConnection.upsert({
         where: { userId },
         create: {
           userId,
+          authorizedByUserId: operatorUserId,
           xUserId: account.id,
           username: account.username,
           accessTokenEnc: sealSecret(tokens.accessToken, key),
@@ -159,6 +165,7 @@ export class XConnectionService {
           lastError: null,
         },
         update: {
+          authorizedByUserId: operatorUserId,
           xUserId: account.id,
           username: account.username,
           accessTokenEnc: sealSecret(tokens.accessToken, key),
@@ -178,6 +185,11 @@ export class XConnectionService {
   async disconnect(userId: string): Promise<XConnectionStatus> {
     const conn = await this.prisma.xConnection.findUnique({ where: { userId } });
     if (conn) {
+      await this.prisma.$transaction(async tx => {
+        const removed = await tx.xConnection.deleteMany({ where: { userId, generation: conn.generation } });
+        if (removed.count) await tx.user.update({ where: { id: userId }, data: { xUsername: null } });
+      });
+      await this.afterProfileChange(userId);
       const config = this.appConfig.x();
       if (config && conn.refreshTokenEnc) {
         try {
@@ -186,22 +198,18 @@ export class XConnectionService {
             clientSecret: config.clientSecret,
             token: openSecret(conn.refreshTokenEnc, config.encryptionKey),
           });
-        } catch (err) {
-          this.logger.warn(`X disconnect revoke skipped for ${userId}: ${String(err)}`);
+        } catch {
+          this.logger.warn('X token revocation was not confirmed; local access is disconnected.');
         }
       }
-      await this.prisma.$transaction([
-        this.prisma.xConnection.delete({ where: { userId } }),
-        this.prisma.user.update({ where: { id: userId }, data: { xUsername: null } }),
-      ]);
-      await this.afterProfileChange(userId);
+
     }
     return this.getStatus(userId);
   }
 
   async getActiveConnection(userId: string): Promise<XConnection | null> {
     const conn = await this.prisma.xConnection.findUnique({ where: { userId } });
-    return conn?.status === 'error' ? null : conn;
+    return conn?.status === 'active' ? conn : null;
   }
 
   async accessTokenFor(conn: XConnection): Promise<string> {
@@ -209,10 +217,10 @@ export class XConnectionService {
     if (conn.accessTokenEnc && conn.accessTokenExpiresAt && conn.accessTokenExpiresAt.getTime() - Date.now() > EXPIRY_SKEW_MS) {
       return openSecret(conn.accessTokenEnc, key);
     }
-    const existing = this.inflightTokens.get(conn.userId);
+    const existing = this.inflightTokens.get(conn.generation);
     if (existing) return existing;
-    const pending = this.renew(conn).finally(() => this.inflightTokens.delete(conn.userId));
-    this.inflightTokens.set(conn.userId, pending);
+    const pending = this.renewLocked(conn).finally(() => this.inflightTokens.delete(conn.generation));
+    this.inflightTokens.set(conn.generation, pending);
     return pending;
   }
 
@@ -245,6 +253,19 @@ export class XConnectionService {
     return sum._sum.costMicros ?? 0;
   }
 
+  private async renewLocked(conn: XConnection): Promise<string> {
+    const lockKey = `x:refresh:${conn.generation}`, lock = randomBytes(20).toString('hex');
+    if (!await this.redis.setString(lockKey, lock, { onlyIfAbsent: true, ttlSeconds: 60 })) throw new XApiError(429, 'refresh_in_progress', 'X connection is refreshing. Retry shortly.');
+    try {
+      const latest = await this.getActiveConnection(conn.userId);
+      if (!latest || latest.generation !== conn.generation) throw new ConflictException('This X connection was disconnected.');
+      if (latest.accessTokenEnc && latest.accessTokenExpiresAt && latest.accessTokenExpiresAt.getTime() - Date.now() > EXPIRY_SKEW_MS) return openSecret(latest.accessTokenEnc, this.requireConfig().encryptionKey);
+      return await this.renew(latest);
+    } finally {
+      await this.redis.raw().eval("if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) end return 0", 1, lockKey, lock);
+    }
+  }
+
   private async renew(conn: XConnection): Promise<string> {
     const config = this.requireConfig();
     if (!conn.refreshTokenEnc) {
@@ -262,8 +283,8 @@ export class XConnectionService {
       await this.markError(conn.userId, 'X needs to be connected again.', true);
       throw err;
     }
-    await this.prisma.xConnection.update({
-      where: { userId: conn.userId },
+    await this.prisma.xConnection.updateMany({
+      where: { userId: conn.userId, generation: conn.generation },
       data: {
         accessTokenEnc: sealSecret(tokens.accessToken, config.encryptionKey),
         refreshTokenEnc: tokens.refreshToken ? sealSecret(tokens.refreshToken, config.encryptionKey) : conn.refreshTokenEnc,
@@ -295,9 +316,7 @@ export class XConnectionService {
       where: { id: userId },
       select: { premium: true, premiumPlus: true, verifiedStatus: true },
     });
-    const verified = Boolean(user && user.verifiedStatus !== 'none');
-    const premium = Boolean(user?.premium || user?.premiumPlus);
-    if (!verified && !premium) {
+    if (!user) {
       throw new ForbiddenException('Verify your account, or join Premium, to connect X.');
     }
   }

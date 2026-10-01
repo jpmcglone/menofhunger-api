@@ -81,6 +81,7 @@ function harness(opts: { post?: Record<string, unknown>; premium?: boolean; spen
     }),
   };
   const appConfig = {
+    partner: () => ({ xCountAllowance: false }),
     x: () => ({ clientId: 'id', clientSecret: 'secret', encryptionKey: 'k'.repeat(32), monthlyBudgetCents: 300 }),
     frontendBaseUrl: () => 'https://menofhunger.com',
     r2: () => ({ publicBaseUrl: null }),
@@ -93,10 +94,11 @@ function harness(opts: { post?: Record<string, unknown>; premium?: boolean; spen
   };
   const service = new XCrosspostService(
     prisma as never,
+    { ensure: async () => sideEffects.dispatch('outbound.deliver') } as never,
+    { settle: jest.fn(), reserve: jest.fn(async () => true) } as never,
     appConfig as never,
     connections as never,
     api as never,
-    sideEffects as never,
     realtime as never,
   );
   return { service, prisma, api, connections, postUpdates, dispatched, realtime, row: () => row };
@@ -112,7 +114,7 @@ describe('X cross-post requests', () => {
     expect(h.prisma.xCrosspost.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ mode: 'native', costMicros: X_NATIVE_COST_MICROS }) }),
     );
-    expect(h.dispatched).toEqual(['x.post.sync']);
+    expect(h.dispatched).toEqual(['outbound.deliver']);
   });
 
   it('downgrades a poll to a link and bills the link rate', async () => {
@@ -167,17 +169,17 @@ describe('X cross-post worker', () => {
     expect(h.row()?.remoteId).toBe('99');
   });
 
-  it('refunds a timed-out create instead of retrying it', async () => {
+  it('holds the reservation for a timed-out create instead of retrying it', async () => {
     const h = harness();
     await h.service.requestPostCrosspost('user-1', 'post-1', 'native');
     h.api.createPost.mockRejectedValueOnce(new XApiError(0, 'network_error', 'timed out', true));
     await expect(h.service.syncPost('post-1')).resolves.toBeUndefined();
-    expect(h.row()?.refundedAt).toBeInstanceOf(Date);
-    expect(h.postUpdates.at(-1)).toEqual({ xError: 'timed out' });
+    expect(h.row()?.refundedAt).toBeNull();
+    expect(h.postUpdates.at(-1)).toEqual({ xError: 'Delivery is uncertain. Check X before retrying.' });
     expect(h.realtime.emitPostsLiveUpdated).not.toHaveBeenCalled();
     expect(h.realtime.emitPostsLiveUpdatedToUser).toHaveBeenCalledWith(
       'user-1',
-      expect.objectContaining({ patch: { xError: 'timed out' } }),
+      expect.objectContaining({ patch: { xError: 'Delivery is uncertain. Check X before retrying.' } }),
     );
   });
 
@@ -187,5 +189,23 @@ describe('X cross-post worker', () => {
     h.api.createPost.mockRejectedValueOnce(new XApiError(503, 'request_failed', 'unavailable'));
     await expect(h.service.syncPost('post-1')).rejects.toBeInstanceOf(XApiError);
     expect(h.row()?.refundedAt).toBeNull();
+  });
+});
+
+
+describe('X outbox recovery before request-path reservation', () => {
+  it.each([{ premium: false, spent: 0 }, { premium: true, spent: 3000000 }])('preserves the legacy allowance while count rollout is off (%j)', async options => {
+    const h = harness(options);
+    await h.prisma.xCrosspost.create({ data: { userId: 'user-1', kind: 'post', localId: 'post-1', mode: 'native', costMicros: 0 } });
+    await h.service.syncPost('post-1');
+    expect(h.api.createPost).not.toHaveBeenCalled();
+    expect(h.row()?.lastError).toContain('current allowance');
+  });
+  it('records the final payload cost for a recovered placeholder before publishing', async () => {
+    const h = harness();
+    await h.prisma.xCrosspost.create({ data: { userId: 'user-1', kind: 'post', localId: 'post-1', mode: 'native', costMicros: 0 } });
+    await h.service.syncPost('post-1');
+    expect(h.api.createPost).toHaveBeenCalledTimes(1);
+    expect(h.row()?.costMicros).toBe(X_NATIVE_COST_MICROS);
   });
 });

@@ -1,3 +1,6 @@
+import { PickaxOAuthClient } from './pickax-oauth.client';
+import { RedisService } from '../redis/redis.service';
+import { randomBytes } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
@@ -24,6 +27,7 @@ import { openSecret, sealSecret } from '../../common/crypto/secret-box';
 
 export type PickaxConnectionStatus = {
   available: boolean;
+  oauthAvailable: boolean;
   connected: boolean;
   username: string | null;
   needsAttention: boolean;
@@ -50,6 +54,8 @@ export class PickaxConnectionService {
     private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
     private readonly usersMeRealtime: UsersMeRealtimeService,
+    private readonly oauth: PickaxOAuthClient,
+    private readonly redis: RedisService,
   ) {}
 
   isAvailable(): boolean {
@@ -64,6 +70,7 @@ export class PickaxConnectionService {
   async connect(
     userId: string,
     input: { clientId: string; clientSecret: string; username?: string | null },
+    operatorUserId = userId,
   ): Promise<PickaxConnectResult> {
     const key = this.requireKey();
 
@@ -104,6 +111,10 @@ export class PickaxConnectionService {
       }
     }
 
+    const current = await this.prisma.pickaxConnection.findUnique({ where: { userId } });
+    if (current && (current.pickaxUserId ? current.pickaxUserId !== identity.userId : current.username.toLowerCase() !== handle.toLowerCase())) {
+      throw new ConflictException('Disconnect your current Pickax account before connecting another.');
+    }
     const taken = await this.prisma.pickaxConnection.findFirst({
       where: { username: { equals: handle, mode: 'insensitive' }, userId: { not: userId } },
       select: { id: true },
@@ -111,15 +122,17 @@ export class PickaxConnectionService {
     if (taken) throw new ConflictException(`@${handle} on Pickax is already connected to another account.`);
 
     const data = {
+      authKind: 'credentials',
       pickaxUserId: identity.userId,
       username: handle,
+      authorizedByUserId: operatorUserId,
       clientId: input.clientId,
       clientSecretEnc: sealSecret(input.clientSecret, key),
       accessTokenEnc: sealSecret(tokens.accessToken, key),
       refreshTokenEnc: tokens.refreshToken ? sealSecret(tokens.refreshToken, key) : null,
       accessTokenExpiresAt: new Date(Date.now() + tokens.expiresInSeconds * 1000),
-      status: 'active',
-      lastError: null,
+      status: identity.userId ? 'active' : 'identity_conflict',
+      lastError: identity.userId ? null : 'Pickax must confirm an immutable account ID before outward sharing can resume.',
     };
     const [conn] = await this.prisma.$transaction([
       this.prisma.pickaxConnection.upsert({ where: { userId }, create: { userId, ...data }, update: data }),
@@ -129,13 +142,36 @@ export class PickaxConnectionService {
     return { needsUsername: false, verificationCode: null, status: this.toStatus(conn) };
   }
 
-  async disconnect(userId: string): Promise<PickaxConnectionStatus> {
+  async saveOAuth(userId: string, operatorUserId: string, identity: { id: string; username: string }, tokens: PickaxTokenPair) {
+    const current = await this.prisma.pickaxConnection.findUnique({ where: { userId } });
+    if (current?.pickaxUserId && current.pickaxUserId !== identity.id) throw new ConflictException('Disconnect the existing Pickax account before switching identities.');
+    const key = this.requireKey();
+    const data = { username: identity.username, pickaxUserId: identity.id, authKind: 'oauth', authorizedByUserId: operatorUserId,
+      clientId: this.oauth.config().clientId, clientSecretEnc: '', accessTokenEnc: sealSecret(tokens.accessToken, key),
+      refreshTokenEnc: tokens.refreshToken ? sealSecret(tokens.refreshToken, key) : null,
+      accessTokenExpiresAt: new Date(Date.now() + tokens.expiresInSeconds * 1000), status: 'active', lastError: null };
     await this.prisma.$transaction([
-      this.prisma.pickaxConnection.deleteMany({ where: { userId } }),
-      this.prisma.user.update({ where: { id: userId }, data: { pickaxUsername: null }, select: { id: true } }),
+      this.prisma.pickaxConnection.upsert({ where: { userId }, create: { userId, ...data }, update: data }),
+      this.prisma.user.update({ where: { id: userId }, data: { pickaxUsername: identity.username } }),
     ]);
     await this.afterProfileChange(userId);
-    return this.toStatus(null);
+  }
+
+  async disconnect(userId: string): Promise<PickaxConnectionStatus> {
+    const connection = await this.prisma.pickaxConnection.findUnique({ where: { userId } });
+    const clients = await this.prisma.partnerClient.findMany({ where: { platform: 'pickax' }, select: { id: true } });
+    await this.prisma.$transaction(async tx => {
+      const removed = await tx.pickaxConnection.deleteMany({ where: { userId, generation: connection?.generation ?? 'no-connection-at-disconnect' } });
+      await tx.partnerGrant.updateMany({ where: { userId, clientId: { in: clients.map(c => c.id) }, revokedAt: null }, data: { revokedAt: new Date() } });
+      // A concurrent reconnect must not have its public handle cleared by an old disconnect.
+      if (removed.count) await tx.user.update({ where: { id: userId }, data: { pickaxUsername: null }, select: { id: true } });
+    });
+    await this.afterProfileChange(userId);
+    if (connection?.authKind === 'oauth' && connection.refreshTokenEnc) {
+      try { await this.oauth.revoke(openSecret(connection.refreshTokenEnc, this.requireKey())); }
+      catch { this.logger.warn('Pickax token revocation was not confirmed; local access is disconnected.'); }
+    }
+    return this.getStatus(userId);
   }
 
   /** Connection for cross-posting, or null when absent or in need of a new key. */
@@ -161,10 +197,10 @@ export class PickaxConnectionService {
     if (conn.accessTokenEnc && conn.accessTokenExpiresAt && conn.accessTokenExpiresAt.getTime() - EXPIRY_SKEW_MS > Date.now()) {
       return openSecret(conn.accessTokenEnc, key);
     }
-    const pending = this.inflightTokens.get(conn.userId);
+    const pending = this.inflightTokens.get(conn.generation);
     if (pending) return pending;
-    const next = this.renewTokens(conn, key).finally(() => this.inflightTokens.delete(conn.userId));
-    this.inflightTokens.set(conn.userId, next);
+    const next = this.renewLocked(conn, key).finally(() => this.inflightTokens.delete(conn.generation));
+    this.inflightTokens.set(conn.generation, next);
     return next;
   }
 
@@ -173,20 +209,34 @@ export class PickaxConnectionService {
     await this.prisma.pickaxConnection.updateMany({ where: { userId }, data: { accessTokenExpiresAt: null } });
   }
 
+  private async renewLocked(conn: PickaxConnection, key: string): Promise<string> {
+    const lockKey = `pickax:refresh:${conn.generation}`, lock = randomBytes(20).toString('hex');
+    if (!await this.redis.setString(lockKey, lock, { onlyIfAbsent: true, ttlSeconds: 60 })) throw new PickaxApiError(429, 'refresh_in_progress', 'Pickax connection is refreshing. Retry shortly.', 1);
+    try {
+      const latest = await this.getActiveConnection(conn.userId);
+      if (!latest || latest.generation !== conn.generation) throw new ConflictException('This Pickax connection was disconnected.');
+      if (latest.accessTokenEnc && latest.accessTokenExpiresAt && latest.accessTokenExpiresAt.getTime() - EXPIRY_SKEW_MS > Date.now()) return openSecret(latest.accessTokenEnc, key);
+      return await this.renewTokens(latest, key);
+    } finally {
+      await this.redis.raw().eval("if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) end return 0", 1, lockKey, lock);
+    }
+  }
+
   private async renewTokens(conn: PickaxConnection, key: string): Promise<string> {
     let tokens: PickaxTokenPair | null = null;
     if (conn.refreshTokenEnc) {
       try {
-        tokens = await this.api.refresh(openSecret(conn.refreshTokenEnc, key));
+        tokens = conn.authKind === 'oauth' ? await this.oauth.tokens({ grant_type: 'refresh_token', refresh_token: openSecret(conn.refreshTokenEnc, key) }) : await this.api.refresh(openSecret(conn.refreshTokenEnc, key));
       } catch (err) {
         this.logger.debug(`Pickax refresh failed for ${conn.userId}; re-exchanging stored key (${String(err)})`);
       }
     }
     if (!tokens) {
+      if (conn.authKind === 'oauth') throw new ServiceUnavailableException('Reconnect Pickax to renew outward sharing.');
       tokens = await this.api.exchangeCredentials(conn.clientId, openSecret(conn.clientSecretEnc, key));
     }
-    await this.prisma.pickaxConnection.update({
-      where: { userId: conn.userId },
+    await this.prisma.pickaxConnection.updateMany({
+      where: { userId: conn.userId, generation: conn.generation },
       data: {
         accessTokenEnc: sealSecret(tokens.accessToken, key),
         refreshTokenEnc: tokens.refreshToken ? sealSecret(tokens.refreshToken, key) : null,
@@ -205,9 +255,10 @@ export class PickaxConnectionService {
   private toStatus(conn: PickaxConnection | null): PickaxConnectionStatus {
     return {
       available: this.isAvailable(),
+      oauthAvailable: this.oauth.available(),
       connected: Boolean(conn),
       username: conn?.username ?? null,
-      needsAttention: conn?.status === 'error',
+      needsAttention: Boolean(conn && conn.status !== 'active'),
       lastError: conn?.lastError ?? null,
     };
   }

@@ -1,0 +1,59 @@
+import 'reflect-metadata';
+import assert = require('node:assert/strict');
+import { PrismaClient } from '@prisma/client';
+import { XUsageService } from '../../src/modules/x/x-usage.service';
+import { PartnerReadService } from '../../src/modules/partner/partner-read.service';
+
+async function main() {
+  const url = new URL(process.env.DATABASE_URL ?? '');
+  assert.equal(url.hostname, '127.0.0.1'); assert.equal(url.pathname, '/moh_partner_fixture');
+  const db = new PrismaClient();
+  try {
+    const owner = await db.user.create({ data: { username: 'syntheticowner', verifiedStatus: 'manual' } });
+    const other = await db.user.create({ data: { username: 'syntheticother', verifiedStatus: 'identity' } });
+    const connection = await db.xConnection.create({ data: { userId: owner.id, xUserId: 'synthetic-external', username: 'synthetic', accessTokenEnc: 'fixture', authorizedByUserId: owner.id } });
+    const post = await db.post.create({ data: { userId: owner.id, body: 'Synthetic public content', crosspostChoices: { x: 'native' }, visibility: 'public' } });
+    const delivery = await db.outboundDelivery.findUniqueOrThrow({ where: { platform_resourceKind_resourceId: { platform: 'x', resourceKind: 'post', resourceId: post.id } } });
+    assert.equal(delivery.connectionGeneration, connection.generation);
+    await db.post.update({ where: { id: post.id }, data: { visibility: 'onlyMe' } });
+    assert.equal((await db.outboundDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).action, 'remove');
+    assert.equal((await db.partnerEvent.findFirstOrThrow({ where: { resourceId: post.id }, orderBy: { version: 'desc' } })).type, 'post.removed');
+    await assert.rejects(() => db.xConnection.update({ where: { userId: owner.id }, data: { xUserId: 'different-external' } }));
+    const draft = await db.post.create({ data: { userId: owner.id, body: 'Synthetic draft', isDraft: true, visibility: 'onlyMe', crosspostChoices: { x: 'native' } } });
+    assert.equal(await db.outboundDelivery.count({ where: { resourceId: draft.id } }), 0);
+    const usage = new XUsageService(db as any);
+    const linkReservations = await Promise.all(Array.from({ length: 6 }, (_, index) => usage.reserve(`link-${index}`, owner.id, connection.xUserId, true)));
+    assert.equal(linkReservations.filter(Boolean).length, 3);
+    const plainReservations = await Promise.all(Array.from({ length: 55 }, (_, index) => usage.reserve(`plain-${index}`, owner.id, connection.xUserId, false)));
+    assert.equal(plainReservations.filter(Boolean).length, 47);
+    assert.equal((await usage.allowance(owner.id, connection.xUserId)).totalRemaining, 0);
+    assert.equal(await usage.reserve('link-0', owner.id, connection.xUserId, true), true);
+    await usage.settle('link-0', 'uncertain');
+    assert.equal((await usage.allowance(owner.id, connection.xUserId)).linkRemaining, 0);
+    await usage.settle('link-0', 'released');
+    assert.equal((await usage.allowance(owner.id, connection.xUserId)).totalRemaining, 1);
+    await db.xConnection.delete({ where: { userId: owner.id } });
+    await db.xConnection.create({ data: { userId: other.id, xUserId: connection.xUserId, username: 'synthetic', accessTokenEnc: 'fixture' } });
+    assert.equal((await usage.allowance(other.id, connection.xUserId)).totalRemaining, 1);
+    const article = await db.article.create({ data: { authorId: owner.id, title: 'Fixture', slug: 'fixture', isDraft: false, publishedAt: new Date(), body: '{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Public article"}]}]}' } });
+    const comment = await db.articleComment.create({ data: { authorId: other.id, articleId: article.id, body: 'Fixture comment' } });
+    assert.ok(await db.partnerEvent.findFirst({ where: { userId: owner.id, resourceKind: 'article_comment' } }));
+    const reads = new PartnerReadService(db as any, { frontendBaseUrl: () => 'https://menofhunger.example', r2: () => null } as any);
+    await assert.rejects(() => reads.post(other.id, post.id));
+    assert.equal((await reads.articleComments(other.id, article.id, { limit: 20 })).data.length, 1);
+    await db.articleComment.update({ where: { id: comment.id }, data: { deletedAt: new Date() } });
+    assert.equal((await db.partnerEvent.findFirstOrThrow({ where: { resourceId: comment.id }, orderBy: { version: 'desc' } })).type, 'comment.removed');
+    assert.equal((await reads.articleComments(other.id, article.id, { limit: 20 })).data.length, 0);
+    await db.articleComment.delete({ where: { id: comment.id } });
+    assert.equal((await db.partnerEvent.findFirstOrThrow({ where: { resourceId: comment.id }, orderBy: { version: 'desc' } })).type, 'comment.removed');
+    const replyParent = await db.post.create({ data: { userId: owner.id, body: 'Parent' } });
+    const reply = await db.post.create({ data: { userId: other.id, parentId: replyParent.id, body: 'Reply' } });
+    await db.post.delete({ where: { id: reply.id } });
+    assert.equal((await db.partnerEvent.findFirstOrThrow({ where: { resourceId: reply.id, userId: owner.id }, orderBy: { version: 'desc' } })).type, 'comment.removed');
+    await db.userBlock.create({ data: { blockerId: owner.id, blockedId: other.id } });
+    await assert.rejects(() => reads.article(other.id, article.id));
+    assert.equal((await reads.posts(other.id, { limit: 20 })).data.length, 0);
+    console.log('Partner database: transactional outbox, removal, pairing identity guard, draft exclusion, concurrent 50/3 quota, reservations, reconnect floor, comments, public visibility and blocks passed.');
+  } finally { await db.$disconnect(); }
+}
+void main().catch(error => { console.error(error); process.exitCode = 1; });

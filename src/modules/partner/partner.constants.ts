@@ -1,0 +1,14 @@
+export const PARTNER_SCOPES = ['openid', 'profile', 'offline_access', 'account:read', 'verification:read', 'content:read', 'social:read', 'webhooks:read'] as const;
+export const PARTNER_EVENTS = ['profile.updated', 'verification.updated', 'post.updated', 'post.removed', 'article.updated', 'article.removed', 'comment.updated', 'comment.removed', 'mention.created', 'follow.created', 'follow.removed', 'connection.revoked'] as const;
+export const PARTNER_PROFILE_SELECT = {
+  id: true, username: true, name: true, bio: true, avatarKey: true,
+  accountKind: true, createdAt: true,
+} as const;
+export const PARTNER_POST_SELECT = {
+  id: true, body: true, createdAt: true, editedAt: true, parentId: true, articleId: true,
+  userId: true, commentCount: true, boostCount: true, repostCount: true, viewerCount: true,
+  user: { select: PARTNER_PROFILE_SELECT },
+  media: { where: { deletedAt: null }, orderBy: { position: 'asc' as const }, select: {
+    kind: true, r2Key: true, url: true, alt: true, width: true, height: true, thumbnailR2Key: true,
+  } },
+} as const;

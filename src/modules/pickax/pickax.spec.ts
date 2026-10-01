@@ -115,11 +115,12 @@ describe('pickax post eligibility and payload', () => {
     expect(postCrosspostBlocker(post({ media: [{ ...image, kind: 'video' }] }))).toBe('unsupported_media');
   });
 
-  it('posts the words and photos without a link in full-post mode', () => {
+  it('preserves user links and adds attribution in full-copy mode', () => {
     const payload = buildPickaxPostPayload(post({ body: 'see https://example.com' }), {
-      publicBaseUrl: 'https://cdn.example.com',
+      publicBaseUrl: 'https://cdn.example.com', canonicalUrl: 'https://menofhunger.com/p/p1',
     });
-    expect(payload.content).toBe('see https://example.com');
+    expect(payload.content).toContain('see https://example.com');
+    expect(payload.content).toContain('Originally published on Men of Hunger\nhttps://menofhunger.com/p/p1');
     expect(payload.link).toBeUndefined();
   });
 

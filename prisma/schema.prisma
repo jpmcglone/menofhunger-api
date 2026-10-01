@@ -1512,6 +1512,9 @@ model Post {
    * endsAt is recomputed from durationHours at publish time.
    */
   scheduledPollJson         Json?
+  crosspostChoices          Json?
+  scheduledRevision        Int @default(0)
+  scheduledPublishedPostId  String? @unique
   /**
    * Human-readable error if the scheduled publish failed.
    */
@@ -2859,6 +2862,7 @@ model AffiliateEarning {
 // ─── Articles ────────────────────────────────────────────────────────────────
 
 model Article {
+  crosspostChoices Json?
   id          String    @id @default(cuid())
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -3335,6 +3339,9 @@ model PickaxConnection {
   username             String
   clientId             String
   clientSecretEnc      String
+  generation           String @default(cuid())
+  authorizedByUserId   String?
+  authKind             String @default("credentials")
   accessTokenEnc       String?
   refreshTokenEnc      String?
   accessTokenExpiresAt DateTime?
@@ -3379,6 +3386,8 @@ model XConnection {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
   userId               String    @unique
+  generation           String @default(cuid())
+  authorizedByUserId   String?
   xUserId              String    @unique
   username             String
   accessTokenEnc       String
@@ -3938,4 +3947,124 @@ model MarvinMemorySource {
   message   Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@index([scopeKey, learnedAt])
+}
+
+
+/// Registered server-side applications; secrets are encrypted, never returned after creation.
+model PartnerClient {
+  authorizationStartUrl String?
+  id String @id @default(cuid())
+  name String
+  platform String?
+  secretEnc String
+  redirectUris String[]
+  logoutRedirectUris String[] @default([])
+  scopes String[]
+  active Boolean @default(true)
+  accountReadLimit Int @default(120)
+  clientReadLimit Int @default(1200)
+  webhookUrl String?
+  webhookSecretEnc String?
+  previousWebhookSecretEnc String?
+  webhookEvents String[] @default([])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// The human authorizes exactly one resource account. This is not a product session.
+model PartnerGrant {
+  id String @id
+  clientId String
+  userId String
+  operatorUserId String
+  scopes String[]
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+  @@index([userId, clientId])
+  @@index([operatorUserId])
+}
+
+/// Encrypted oidc-provider state; consumedAt supports atomic authorization-code use.
+model PartnerOidcRecord {
+  key String @id
+  kind String
+  payloadEnc String
+  grantId String?
+  uid String?
+  userCode String?
+  expiresAt DateTime
+  consumedAt DateTime?
+  @@index([grantId])
+  @@index([uid])
+  @@index([userCode])
+  @@index([expiresAt])
+}
+
+/// Durable metadata-only event; never retains content or verification evidence.
+model PartnerEvent {
+  dispatchedAt DateTime?
+  id String @id @default(cuid())
+  type String
+  userId String
+  resourceKind String
+  resourceId String
+  version BigInt @default(autoincrement())
+  createdAt DateTime @default(now())
+  @@index([createdAt])
+}
+
+model PartnerWebhookDelivery {
+  id String @id @default(cuid())
+  eventId String
+  clientId String
+  grantId String
+  status String @default("pending")
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  leaseUntil DateTime?
+  lastStatus Int?
+  lastError String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([eventId, grantId])
+  @@index([status, nextAttemptAt])
+}
+
+/// One durable outbound intent per source and destination, independent of queue delivery.
+model OutboundDelivery {
+  id String @id @default(cuid())
+  userId String
+  platform String
+  resourceKind String
+  resourceId String
+  connectionGeneration String
+  externalAccountId String
+  mode String
+  action String @default("create")
+  version Int @default(1)
+  status String @default("pending")
+  remoteId String?
+  attempts Int @default(0)
+  leaseUntil DateTime?
+  nextAttemptAt DateTime @default(now())
+  lastError String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([platform, resourceKind, resourceId])
+  @@index([status, nextAttemptAt])
+  @@index([userId])
+}
+
+/// Persistent per-delivery quota reservations survive reconnects and account switches.
+model XUsageReservation {
+  id String @id
+  userId String
+  externalAccountId String
+  month DateTime
+  hasLink Boolean
+  status String @default("reserved")
+  createdAt DateTime @default(now())
+  @@index([userId, month, status])
+  @@index([externalAccountId, month, status])
 }

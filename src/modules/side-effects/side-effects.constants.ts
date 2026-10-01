@@ -23,6 +23,8 @@ export const MOH_SIDE_EFFECTS_QUEUE = 'moh_side_effects';
  * or switch statement to update.
  */
 export interface SideEffectPayloads {
+  'outbound.deliver': { deliveryId: string };
+  'partner.webhook.deliver': { deliveryId: string };
   // ─── Presence ─────────────────────────────────────────────────────────
   /** Someone just came online: tell followers who are online too (throttled, in-app only). */
   'presence.followed-online': {

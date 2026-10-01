@@ -1,7 +1,10 @@
+import { OutboundService } from '../outbound/outbound.service';
+import { XUsageService } from './x-usage.service';
 import { Injectable, Logger } from '@nestjs/common';
 import type { CrosspostMode, PickaxCrosspostKind } from '@prisma/client';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import {
+  X_NATIVE_COST_MICROS,
   X_POST_MAX_IMAGES,
   X_POST_MAX_WEIGHTED,
   buildShareText,
@@ -13,7 +16,6 @@ import {
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { SideEffectsService } from '../side-effects/side-effects.service';
 import { XApiClient, XApiError } from './x-api.client';
 import { XConnectionService, monthStartUtc } from './x-connection.service';
 
@@ -54,10 +56,11 @@ export class XCrosspostService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly outbound: OutboundService,
+    private readonly usage: XUsageService,
     private readonly appConfig: AppConfigService,
     private readonly connections: XConnectionService,
     private readonly api: XApiClient,
-    private readonly sideEffects: SideEffectsService,
     private readonly realtime: PresenceRealtimeService,
   ) {}
 
@@ -97,7 +100,7 @@ export class XCrosspostService {
     });
   }
 
-  async syncPost(postId: string): Promise<void> {
+  async syncPost(postId: string, generation?: string): Promise<void> {
     const post = await this.loadPost(postId);
     if (!post) return;
     const row = await this.prisma.xCrosspost.findUnique({ where: { kind_localId: { kind: 'post', localId: postId } } });
@@ -109,10 +112,10 @@ export class XCrosspostService {
       return;
     }
     const text = this.postText(post, row.mode, postId);
-    await this.publish(post.userId, 'post', postId, text, row.mode === 'native' ? post.media : []);
+    await this.publish(post.userId, 'post', postId, text, row.mode === 'native' ? post.media : [], generation);
   }
 
-  async syncArticle(articleId: string): Promise<void> {
+  async syncArticle(articleId: string, generation?: string): Promise<void> {
     const article = await this.prisma.article.findUnique({
       where: { id: articleId },
       select: { authorId: true, title: true, visibility: true, isDraft: true, publishedAt: true, deletedAt: true },
@@ -124,7 +127,7 @@ export class XCrosspostService {
       return;
     }
     const text = buildShareText(this.articleUrl(articleId));
-    await this.publish(article.authorId, 'article', articleId, text, []);
+    await this.publish(article.authorId, 'article', articleId, text, [], generation);
   }
 
   private async reserveAndQueue(input: {
@@ -138,9 +141,10 @@ export class XCrosspostService {
     if (!(await this.connections.getActiveConnection(input.userId))) return { status: 'skipped', reason: 'not_connected' };
     const user = await this.prisma.user.findUnique({
       where: { id: input.userId },
-      select: { premium: true, premiumPlus: true },
+      select: { premium: true, premiumPlus: true, verifiedStatus: true, bannedAt: true },
     });
-    if (!user?.premium && !user?.premiumPlus) return { status: 'skipped', reason: 'premium_required' };
+    if (!user || user.bannedAt || user.verifiedStatus === 'none') return { status: 'skipped', reason: 'verification_required' };
+    if (!this.appConfig.partner().xCountAllowance && !user.premium && !user.premiumPlus) return { status: 'skipped', reason: 'premium_required' };
     const config = this.appConfig.x();
     if (!config) return { status: 'skipped', reason: 'not_available' };
 
@@ -164,7 +168,7 @@ export class XCrosspostService {
         where: { userId: input.userId, refundedAt: null, createdAt: { gte: monthStartUtc() } },
         _sum: { costMicros: true },
       });
-      if ((spent._sum.costMicros ?? 0) + input.costMicros > budgetMicros) return 'monthly_limit' as const;
+      if (!this.appConfig.partner().xCountAllowance && (spent._sum.costMicros ?? 0) + input.costMicros > budgetMicros) return 'monthly_limit' as const;
       if (current) {
         await tx.xCrosspost.update({
           where: { id: current.id },
@@ -188,13 +192,24 @@ export class XCrosspostService {
     return { status: 'queued', mode: input.mode };
   }
 
-  private dispatch(input: { kind: PickaxCrosspostKind; localId: string; job: 'x.post.sync' | 'x.article.sync' }): void {
-    const stamp = Date.now();
-    if (input.job === 'x.post.sync') {
-      this.sideEffects.dispatch('x.post.sync', { postId: input.localId }, { jobId: `x-post-${input.localId}-${stamp}` });
-    } else {
-      this.sideEffects.dispatch('x.article.sync', { articleId: input.localId }, { jobId: `x-article-${input.localId}-${stamp}` });
-    }
+  private dispatch(input: { userId: string; mode: CrosspostMode; kind: PickaxCrosspostKind; localId: string; job: 'x.post.sync' | 'x.article.sync' }): void {
+    void this.outbound.ensure(input.userId, 'x', input.kind, input.localId, input.mode);
+  }
+
+  private async reserveLegacyDeliveryCost(userId: string, kind: PickaxCrosspostKind, localId: string, costMicros: number): Promise<boolean> {
+    const config = this.appConfig.x();
+    if (!config) return false;
+    return this.prisma.$transaction(async tx => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`x:${userId}`}))`;
+      const user = await tx.user.findUnique({ where: { id: userId }, select: { premium: true, premiumPlus: true, verifiedStatus: true, bannedAt: true } });
+      if (!user || user.bannedAt || user.verifiedStatus === 'none' || (!user.premium && !user.premiumPlus)) return false;
+      const spent = await tx.xCrosspost.aggregate({ where: { userId, refundedAt: null, createdAt: { gte: monthStartUtc() }, NOT: { kind, localId } }, _sum: { costMicros: true } });
+      if ((spent._sum.costMicros ?? 0) + costMicros > config.monthlyBudgetCents * 10_000) return false;
+      // Recovery may create the mapping before the request-path reservation runs.
+      // Charge the final payload under the same account lock before any network send.
+      const updated = await tx.xCrosspost.updateMany({ where: { userId, kind, localId, remoteId: null }, data: { costMicros, refundedAt: null } });
+      return updated.count > 0;
+    });
   }
 
   private async publish(
@@ -203,14 +218,32 @@ export class XCrosspostService {
     localId: string,
     text: string,
     media: LoadedPost['media'],
+    generation?: string,
   ): Promise<void> {
     const conn = await this.connections.getActiveConnection(userId);
-    if (!conn) {
+    if (!conn || (generation && conn.generation !== generation)) {
       await this.fail(kind, localId, userId, 'X is not connected.');
       return;
     }
+    const reservationId = `x:${kind}:${localId}`;
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { verifiedStatus: true, bannedAt: true } });
+    if (!user || user.bannedAt || user.verifiedStatus === 'none') {
+      await this.fail(kind, localId, userId, 'Verify your account before sharing to X.');
+      return;
+    }
+    const costMicros = xPostCostMicros(text);
+    if (this.appConfig.partner().xCountAllowance) {
+      if (!(await this.usage.reserve(reservationId, userId, conn.xUserId, costMicros > X_NATIVE_COST_MICROS))) {
+        await this.fail(kind, localId, userId, 'Your monthly X allowance for this kind of post is used up.');
+        return;
+      }
+      await this.prisma.xCrosspost.updateMany({ where: { kind, localId }, data: { costMicros } });
+    } else if (!(await this.reserveLegacyDeliveryCost(userId, kind, localId, costMicros))) {
+      await this.fail(kind, localId, userId, 'X sharing is unavailable under this account’s current allowance.');
+      return;
+    }
     try {
-      const token = await this.freshToken(userId);
+      const token = await this.freshToken(userId, conn.generation);
       const mediaIds = await this.uploadImages(token, media);
       const remoteId = await this.api.createPost(token, { text: text || ' ', mediaIds });
       const username = (await this.prisma.xConnection.findUnique({ where: { userId }, select: { username: true } }))?.username
@@ -225,6 +258,7 @@ export class XCrosspostService {
       } else {
         await this.prisma.article.updateMany({ where: { id: localId }, data: { xUrl, xError: null } });
       }
+      await this.usage.settle(reservationId, 'sent');
       this.announce(kind, localId, userId, { xUrl }, true);
       await this.connections.clearError(userId);
     } catch (err) {
@@ -233,6 +267,16 @@ export class XCrosspostService {
         this.logger.warn(`X ${kind} ${localId} will retry: ${message}`);
         throw err;
       }
+      if (err instanceof XApiError && err.duplicateRisk) {
+        await this.usage.settle(reservationId, 'uncertain');
+        const uncertain = 'Delivery is uncertain. Check X before retrying.';
+        await this.prisma.xCrosspost.updateMany({ where: { kind, localId }, data: { lastError: uncertain } });
+        if (kind === 'post') await this.prisma.post.updateMany({ where: { id: localId }, data: { xError: uncertain } });
+        else await this.prisma.article.updateMany({ where: { id: localId }, data: { xError: uncertain } });
+        this.announce(kind, localId, userId, { xError: uncertain }, false);
+        return;
+      }
+      await this.usage.settle(reservationId, 'released');
       const authFailure = err instanceof XApiError && err.isAuthFailure;
       if (authFailure) {
         await this.connections.markError(userId, 'X needs to be connected again.', true);
@@ -241,16 +285,16 @@ export class XCrosspostService {
     }
   }
 
-  private async freshToken(userId: string): Promise<string> {
+  private async freshToken(userId: string, generation?: string): Promise<string> {
     const conn = await this.connections.getActiveConnection(userId);
-    if (!conn) throw new XApiError(401, 'not_connected', 'X is not connected.');
+    if (!conn || (generation && conn.generation !== generation)) throw new XApiError(401, 'not_connected', 'X is not connected.');
     try {
       return await this.connections.accessTokenFor(conn);
     } catch (err) {
       if (!(err instanceof XApiError) || !err.isAuthFailure) throw err;
       await this.connections.invalidateAccessToken(userId);
       const fresh = await this.connections.getActiveConnection(userId);
-      if (!fresh) throw err;
+      if (!fresh || fresh.generation !== conn.generation) throw err;
       return this.connections.accessTokenFor(fresh);
     }
   }

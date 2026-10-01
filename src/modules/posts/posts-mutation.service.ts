@@ -39,6 +39,9 @@ import { PostsTopicsClassifyService } from './posts-topics-classify.service';
 import { postRateLimitFor, postRateLimitMessage, type PostRateLimit } from './posts-rate-limit';
 
 type CreatePostParams = {
+  /** Internal scheduler claim, consumed in the publication transaction. */
+  scheduledSource?: { id: string; revision: number };
+  crosspost?: { pickax?: 'link' | 'native'; x?: 'link' | 'native' };
   userId: string;
   body: string;
   visibility: PostVisibility;
@@ -1235,6 +1238,13 @@ export class PostsMutationService {
     const quotedPostInfoRef: { current: { quotedAuthorId: string; quotedPostId: string } | null } = { current: null };
     const post = await this.prisma
       .$transaction(async (tx) => {
+        if (params.scheduledSource) {
+          const claim = await tx.post.updateMany({ where: {
+            id: params.scheduledSource.id, userId, scheduledRevision: params.scheduledSource.revision,
+            isDraft: true, deletedAt: null, scheduledAt: { not: null, lte: now }, scheduledPublishedPostId: null,
+          }, data: { deletedAt: now, scheduledAt: null } });
+          if (!claim.count) throw new BadRequestException('Scheduled post changed or was already published.');
+        }
         const relatedTopics = Array.from(new Set([...(parentTopics ?? []), ...(rootTopics ?? [])])).filter(Boolean);
         const topics = inferTopicsFromText(body, { hashtags, relatedTopics });
 
@@ -1268,6 +1278,7 @@ export class PostsMutationService {
 
         const created = await tx.post.create({
           data: {
+            crosspostChoices: params.crosspost,
             ...(marvRequesterId && kind === 'board' && parentId ? { id: boardMarvReplyId(parentId) } : {}),
             body,
             topics,
@@ -1349,6 +1360,9 @@ export class PostsMutationService {
           },
         });
 
+        if (params.scheduledSource) {
+          await tx.post.update({ where: { id: params.scheduledSource.id }, data: { scheduledPublishedPostId: created.id } });
+        }
         if (quotedExists) {
           // Store for post-transaction notification (avoid sending inside the transaction).
           quotedPostInfoRef.current = { quotedAuthorId: quotedExists.userId, quotedPostId: quotedExists.id };

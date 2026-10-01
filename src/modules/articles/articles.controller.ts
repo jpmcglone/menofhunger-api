@@ -234,7 +234,7 @@ export class ArticlesController {
   async publish(@CurrentUserId() userId: string, @Param('id') id: string, @Body() body: unknown) {
     const parsed = publishSchema.parse(body ?? {});
     const { crossPostToPickax, crosspost, ...publishInput } = parsed;
-    const article = await this.articles.publish(userId, id, publishInput);
+    const article = await this.articles.publish(userId, id, { ...publishInput, crosspost: crosspost ?? (crossPostToPickax ? { pickax: 'native' } : undefined) });
     const pickaxMode: CrosspostMode | null = crosspost?.pickax ?? (crossPostToPickax ? 'native' : null);
     const pickax = pickaxMode
       ? await this.pickax.requestArticleCrosspost(userId, id, pickaxMode)

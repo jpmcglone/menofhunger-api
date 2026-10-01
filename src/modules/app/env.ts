@@ -677,6 +677,19 @@ export const envSchema = z.object({
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional().default('false'),
   ),
+  // Partner capabilities remain disabled until production credentials and rollout are ready.
+  PARTNER_API_ENABLED: z.string().optional().default('false'),
+  OUTBOUND_DELIVERY_PAUSED: z.enum(['true', 'false']).default('false'),
+  PARTNER_WEBHOOKS_ENABLED: z.string().optional().default('false'),
+  PARTNER_OIDC_JWKS: z.string().optional(),
+  PARTNER_ENCRYPTION_KEY: z.string().optional(),
+  PICKAX_PARTNER_CLIENT_ID: z.string().optional(),
+  PICKAX_OAUTH_ISSUER: z.string().url().optional(),
+  PICKAX_OAUTH_CLIENT_ID: z.string().optional(),
+  PICKAX_OAUTH_CLIENT_SECRET: z.string().optional(),
+  PICKAX_OAUTH_ENABLED: z.string().optional().default('false'),
+  PICKAX_REMOTE_DELETE_ENABLED: z.string().optional().default('false'),
+  X_COUNT_ALLOWANCE_ENABLED: z.string().optional().default('false'),
 }).superRefine((env, ctx) => {
   if (env.NODE_ENV !== 'production') return;
 

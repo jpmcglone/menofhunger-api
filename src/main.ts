@@ -1,3 +1,5 @@
+import { PartnerModule } from './modules/partner/partner.module';
+import { PartnerOAuthService } from './modules/partner/partner-oauth.service';
 import './instrument';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
@@ -242,6 +244,7 @@ async function bootstrap() {
 
   // MCP/OAuth uses bearer tokens and its own CSRF-protected consent flow. Mount
   // exact protocol paths before cookie-only CSRF and raw URL logging (OAuth codes).
+  app.use(app.get(PartnerOAuthService).middleware());
   app.use(createMcpMiddleware(appConfig, app.get(AuthService), app.get(RedisService)));
 
   // Request id (for tracing + debugging). Returned as `x-request-id`.
@@ -368,6 +371,14 @@ async function bootstrap() {
       return callback(null, false);
     },
   });
+
+  const partnerDocument = SwaggerModule.createDocument(app, new DocumentBuilder()
+    .setTitle('Men of Hunger Partner API').setVersion('1.0.0')
+    .setDescription('Read-only partner API. Success responses use { data, pagination? }. OAuth uses standard protocol responses. Publish at Men of Hunger; partners cannot create content.')
+    .addBearerAuth({ type: 'http', scheme: 'bearer' }, 'partner').build(), { include: [PartnerModule] });
+  partnerDocument.paths = Object.fromEntries(Object.entries(partnerDocument.paths).filter(([path]) => path.startsWith('/v1/partner/')));
+  http.get('/partner/openapi.json', (_req: Request, res: Response) => res.json(partnerDocument));
+  app.use('/partner/docs', apiReference({ content: partnerDocument, pageTitle: 'Men of Hunger Partner API' }));
 
   if (!appConfig.isProd()) {
     const documentConfig = new DocumentBuilder()

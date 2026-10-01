@@ -1313,6 +1313,7 @@ export class PostsController {
           })()
         : null;
     const { post: created, streakReward } = await this.posts.createPost({
+      crosspost: parsed.crosspost ?? (parsed.crossPostToPickax ? { pickax: 'native' } : undefined),
       userId,
       body: (parsed.body ?? '').trim(),
       visibility: parsed.visibility ?? 'public',

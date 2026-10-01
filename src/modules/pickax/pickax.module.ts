@@ -1,3 +1,5 @@
+import { PickaxOAuthService } from './pickax-oauth.service';
+import { PickaxOAuthClient } from './pickax-oauth.client';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -12,7 +14,7 @@ import { PickaxController } from './pickax.controller';
 @Module({
   imports: [AuthModule, PrismaModule, RealtimeModule, UsersModule],
   controllers: [PickaxController],
-  providers: [PickaxApiClient, PickaxConnectionService, PickaxCrosspostService, PickaxSideEffectsHandler],
+  providers: [PickaxOAuthClient, PickaxOAuthService, PickaxApiClient, PickaxConnectionService, PickaxCrosspostService, PickaxSideEffectsHandler],
   exports: [PickaxCrosspostService],
 })
 export class PickaxModule {}

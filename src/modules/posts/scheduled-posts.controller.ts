@@ -44,7 +44,9 @@ const pollSchema = z.object({
   durationHours: z.number().int().min(1).max(168),
 });
 
+const crosspostSchema = z.object({ pickax: z.enum(['link', 'native']).optional(), x: z.enum(['link', 'native']).optional() }).strict();
 const createSchema = z.object({
+  crosspost: crosspostSchema.optional(),
   body: z.string().trim().max(1000).default(''),
   visibility: z.enum(['public', 'verifiedOnly', 'premiumOnly']),
   scheduled_at: z
@@ -57,6 +59,7 @@ const createSchema = z.object({
 });
 
 const updateSchema = z.object({
+  crosspost: crosspostSchema.optional(),
   body: z.string().trim().max(1000).optional(),
   visibility: z.enum(['public', 'verifiedOnly', 'premiumOnly']).optional(),
   scheduled_at: z
@@ -85,6 +88,7 @@ export class ScheduledPostsController {
     const item = await this.scheduledPosts.createScheduled({
       userId,
       body: parsed.body,
+      crosspost: parsed.crosspost,
       visibility: parsed.visibility as PostVisibility,
       scheduledAt: parsed.scheduled_at,
       media: parsed.media?.map((m) => ({
@@ -128,6 +132,7 @@ export class ScheduledPostsController {
       userId,
       scheduledPostId: id,
       body: parsed.body,
+      crosspost: parsed.crosspost,
       visibility: parsed.visibility as PostVisibility | undefined,
       scheduledAt: parsed.scheduled_at,
       media:

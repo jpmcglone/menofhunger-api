@@ -33,6 +33,7 @@ function harness(opts: { post?: PostRow; connected?: boolean } = {}) {
   let crosspostRow: Record<string, unknown> | null = null;
 
   const prisma = {
+    user: { findUnique: jest.fn(async () => ({ verifiedStatus: 'identity', bannedAt: null })) },
     post: {
       findUnique: jest.fn(async () => opts.post ?? postRow()),
       updateMany: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
@@ -84,10 +85,10 @@ function harness(opts: { post?: PostRow; connected?: boolean } = {}) {
 
   const service = new PickaxCrosspostService(
     prisma as never,
+    { ensure: async (_user: string, _platform: string, kind: string, id: string) => sideEffects.dispatch('outbound.deliver', { kind, id }) } as never,
     appConfig as never,
     connections as never,
     api as never,
-    sideEffects as never,
     realtime as never,
   );
 
@@ -95,11 +96,11 @@ function harness(opts: { post?: PostRow; connected?: boolean } = {}) {
 }
 
 describe('Pickax cross-post requests', () => {
-  it('queues a public post when the author asked for it', async () => {
+  it('defaults an explicitly requested Pickax share to an excerpt', async () => {
     const h = harness();
-    await expect(h.service.requestPostCrosspost('user-1', 'post-1')).resolves.toEqual({ status: 'queued', mode: 'native' });
+    await expect(h.service.requestPostCrosspost('user-1', 'post-1')).resolves.toEqual({ status: 'queued', mode: 'link' });
     expect(h.dispatched).toEqual([
-      { name: 'pickax.post.sync', payload: { postId: 'post-1', create: true } },
+      { name: 'outbound.deliver', payload: { kind: 'post', id: 'post-1' } },
     ]);
   });
 

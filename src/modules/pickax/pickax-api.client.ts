@@ -87,6 +87,14 @@ export class PickaxApiClient {
     await this.request('PUT', `/articles/${encodeURIComponent(remoteId)}`, { accessToken, idempotencyKey, body: payload });
   }
 
+  async deleteContent(accessToken: string, kind: 'posts' | 'articles', id: string) {
+    try {
+      const result = await this.request('DELETE', `/${kind}/${encodeURIComponent(id)}`, { accessToken }) as { data?: { deleted?: boolean } } | null;
+      if (result?.data?.deleted !== true) throw new PickaxApiError(502, 'removal_unconfirmed', 'Pickax did not confirm removal.');
+    }
+    catch (e) { if (!(e instanceof PickaxApiError) || e.status !== 404) throw e; }
+  }
+
   private parseTokens(json: unknown): PickaxTokenPair {
     const o = (json && typeof json === 'object' ? json : {}) as Record<string, unknown>;
     const accessToken = typeof o.accessToken === 'string' ? o.accessToken : '';
@@ -101,9 +109,9 @@ export class PickaxApiClient {
   }
 
   private async request(
-    method: 'POST' | 'PUT',
+    method: 'POST' | 'PUT' | 'DELETE',
     path: string,
-    opts: { body: unknown; accessToken?: string; idempotencyKey?: string },
+    opts: { body?: unknown; accessToken?: string; idempotencyKey?: string },
   ): Promise<unknown> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (opts.accessToken) headers.Authorization = `Bearer ${opts.accessToken}`;
@@ -113,6 +121,7 @@ export class PickaxApiClient {
     try {
       res = await fetch(`${PICKAX_API_BASE}${path}`, {
         method,
+        redirect: 'error',
         headers,
         body: JSON.stringify(opts.body),
         signal: AbortSignal.timeout(20_000),
@@ -135,7 +144,7 @@ export class PickaxApiClient {
       // Log rejections too (never for /auth/, whose bodies carry tokens): a bare "Internal server
       // error" from Pickax is undiagnosable without the response body.
       if (!path.startsWith('/auth/')) {
-        this.logger.warn(`${method} ${path} -> ${res.status} ${text.slice(0, 400)}`);
+        this.logger.warn(`${method} ${path} -> ${res.status}`);
       }
       throw new PickaxApiError(
         res.status,
@@ -145,7 +154,8 @@ export class PickaxApiClient {
       );
     }
     // Auth responses carry tokens, so only content writes are logged.
-    if (!path.startsWith('/auth/')) this.logger.log(`${method} ${path} -> ${res.status} ${text.slice(0, 400)}`);
+    if (!path.startsWith('/auth/')) this.logger.log(`${method} ${path} -> ${res.status}`);
+    if (method === 'DELETE' && res.status === 204) return { data: { deleted: true } };
     return json;
   }
 }

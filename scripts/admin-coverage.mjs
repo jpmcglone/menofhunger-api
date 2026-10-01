@@ -17,7 +17,7 @@ const homes = {
   'admin-newsletters': 'newsletters',
   'admin-operations': 'assistant', 'admin-pages': 'users', 'admin-push': 'push',
   'admin-referral': 'affiliates', 'admin-reports': 'reports', 'admin-search': 'search',
-  'admin-site-config': 'site-settings', 'admin-users': 'users',
+  'admin-partners': 'diagnostics', 'admin-site-config': 'site-settings', 'admin-users': 'users',
   'admin-verification': 'verification', marvin: 'marv', taxonomy: 'jobs', health: 'diagnostics', metrics: 'analytics',
 };
 function files(dir) { return readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? files(join(dir, entry.name)) : [join(dir, entry.name)]); }

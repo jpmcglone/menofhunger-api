@@ -79,6 +79,7 @@ export class ScheduledPostsService {
     body: string;
     visibility: PostVisibility;
     scheduledAt: Date;
+    crosspost?: { pickax?: 'link' | 'native'; x?: 'link' | 'native' };
     media: ScheduledPostNewMediaInput[] | null;
     poll: ScheduledPollInput | null;
     communityGroupId: string | null;
@@ -175,6 +176,7 @@ export class ScheduledPostsService {
         visibility: 'onlyMe',
         isDraft: true,
         scheduledAt: params.scheduledAt,
+        crosspostChoices: params.crosspost,
         scheduledVisibility: resolvedGroupId ? 'verifiedOnly' : visibility,
         scheduledCommunityGroupId: resolvedGroupId,
         scheduledPollJson: scheduledPollJson ?? undefined,
@@ -249,6 +251,7 @@ export class ScheduledPostsService {
     body?: string;
     visibility?: PostVisibility;
     scheduledAt?: Date;
+    crosspost?: { pickax?: 'link' | 'native'; x?: 'link' | 'native' };
     media?: ScheduledPostMediaInput[] | null;
     poll?: ScheduledPollInput | null;
     communityGroupId?: string | null;
@@ -366,7 +369,9 @@ export class ScheduledPostsService {
         where: { id },
         data: {
           body: nextBody,
+          scheduledRevision: { increment: 1 },
           scheduledAt: nextScheduledAt,
+          crosspostChoices: params.crosspost,
           scheduledVisibility: resolvedGroupId ? 'verifiedOnly' : nextVisibility,
           scheduledCommunityGroupId: resolvedGroupId,
           scheduledPollJson: nextPollJson ?? undefined,
@@ -516,20 +521,6 @@ export class ScheduledPostsService {
       return;
     }
 
-    // Atomic claim: clear scheduledAt so concurrent sweeps skip this row.
-    const claimed = await this.prisma.post.updateMany({
-      where: {
-        id: scheduledId,
-        scheduledAt: { not: null },
-        deletedAt: null,
-      },
-      data: { scheduledAt: null },
-    });
-    if (claimed.count === 0) {
-      // Already claimed by another instance — idempotent no-op.
-      return;
-    }
-
     try {
       const visibility = (post.scheduledVisibility ?? 'public') as PostVisibility;
       const communityGroupId = post.scheduledCommunityGroupId ?? null;
@@ -547,6 +538,8 @@ export class ScheduledPostsService {
 
       // Replay createPost pipeline.
       const bundle = await this.mutation.createPost({
+        scheduledSource: { id: scheduledId, revision: post.scheduledRevision },
+        crosspost: (post.crosspostChoices ?? undefined) as { pickax?: 'link' | 'native'; x?: 'link' | 'native' } | undefined,
         userId,
         body: post.body,
         visibility,
@@ -570,23 +563,22 @@ export class ScheduledPostsService {
         poll,
       });
 
-      // Remove the holding row.
-      await this.prisma.post.update({ where: { id: scheduledId }, data: { deletedAt: now } });
-
       // Notify the author that the post went live.
       const postDto = toPostDto(bundle.post, this.r2BaseUrl());
       this.realtime.emitScheduledPostPublished(userId, { scheduledId, post: postDto });
 
       this.logger.log(`Scheduled post ${scheduledId} published as ${bundle.post.id}`);
     } catch (err) {
+      // A committed publication or another worker's claim must never be restored.
+      const current = await this.prisma.post.findUnique({ where: { id: scheduledId }, select: { deletedAt: true, scheduledPublishedPostId: true } });
+      if (!current || current.deletedAt || current.scheduledPublishedPostId) return;
       const errorMsg = err instanceof Error ? err.message : String(err);
       this.logger.error(`Failed to publish scheduled post ${scheduledId}: ${errorMsg}`);
 
-      // Restore scheduledAt so the row retries on the next sweep; mark the transient error.
-      await this.prisma.post.update({
-        where: { id: scheduledId },
+      // The atomic publication rolled back; retain its due date for recovery.
+      await this.prisma.post.updateMany({
+        where: { id: scheduledId, deletedAt: null, scheduledPublishedPostId: null, scheduledRevision: post.scheduledRevision },
         data: {
-          scheduledAt: post.scheduledAt,
           scheduledError: errorMsg.slice(0, 500),
           scheduledFailedAt: now,
         },

@@ -1,11 +1,11 @@
-FROM node:20-alpine AS deps
+FROM node:24-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY prisma ./prisma/
 COPY tools/mcp/package.json tools/mcp/package-lock.json ./tools/mcp/
 RUN npm ci
 
-FROM node:20-alpine AS dev
+FROM node:24-alpine AS dev
 RUN apk add --no-cache ffmpeg
 WORKDIR /app
 ENV NODE_ENV=development
@@ -15,7 +15,7 @@ COPY . .
 EXPOSE 3001
 CMD ["npm", "run", "dev"]
 
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/tools/mcp/node_modules ./tools/mcp/node_modules
@@ -23,7 +23,7 @@ COPY . .
 RUN npm run build
 
 # Runner: production deps only (smaller image, no devDependencies copy).
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 RUN apk add --no-cache ffmpeg
 WORKDIR /app
 ENV NODE_ENV=production

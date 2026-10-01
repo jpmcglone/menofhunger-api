@@ -1,3 +1,4 @@
+import { XUsageService } from './x-usage.service';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -12,7 +13,7 @@ import { XController } from './x.controller';
 @Module({
   imports: [AuthModule, PrismaModule, RealtimeModule, UsersModule],
   controllers: [XController],
-  providers: [XApiClient, XConnectionService, XCrosspostService, XSideEffectsHandler],
+  providers: [XUsageService, XApiClient, XConnectionService, XCrosspostService, XSideEffectsHandler],
   exports: [XCrosspostService],
 })
 export class XModule {}

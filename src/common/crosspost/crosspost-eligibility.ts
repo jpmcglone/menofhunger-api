@@ -85,7 +85,8 @@ export function xWeightedLength(text: string): number {
 }
 
 export function xPostCostMicros(text: string): number {
-  return /https?:\/\//i.test(text) ? X_LINK_COST_MICROS : X_NATIVE_COST_MICROS;
+  // Bare domains are linkified by X too. Conservatively reserve a link slot.
+  return /https?:\/\/|\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?:[/:?#]|\b)/i.test(text) ? X_LINK_COST_MICROS : X_NATIVE_COST_MICROS;
 }
 
 /** Link shares point at the original. They do not copy its words. */

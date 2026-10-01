@@ -5,7 +5,7 @@
   "description": "Men of Hunger API (NestJS + Prisma) intended for consumption by a Next.js app.",
   "type": "commonjs",
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "moh": "node tools/mcp/src/cli.mjs",
@@ -46,7 +46,13 @@
     "sync:contract-fixtures": "ts-node scripts/sync-contract-fixtures.ts",
     "check": "node scripts/check-local.mjs",
     "check:database": "bash scripts/check-database.sh",
-    "check:guidance": "python3 scripts/sync-agent-guidance_test.py && python3 scripts/sync-agent-guidance.py --check"
+    "check:guidance": "python3 scripts/sync-agent-guidance_test.py && python3 scripts/sync-agent-guidance.py --check",
+    "test:partner-protocol": "node -r ts-node/register/transpile-only test/partner/protocol.ts",
+    "check:partner-example": "tsc --noEmit --module nodenext --target es2022 --skipLibCheck examples/partner/client.mts",
+    "check:partner-database": "bash scripts/check-partner-database.sh",
+    "emit:partner-reference": "ts-node scripts/emit-partner-reference.ts",
+    "check:partner-reference": "ts-node scripts/emit-partner-reference.ts --check",
+    "check:partner-docs": "node scripts/sync-partner-docs.mjs --check"
   },
   "dependencies": {
     "@apple/app-store-server-library": "^3.1.0",
@@ -72,6 +78,7 @@
     "helmet": "^7.2.0",
     "image-size": "^2.0.2",
     "ioredis": "^5.9.3",
+    "oidc-provider": "9.12.2",
     "openai": "^6.37.0",
     "posthog-node": "^5.26.0",
     "reflect-metadata": "^0.2.2",
@@ -102,6 +109,7 @@
     "eslint": "^9.39.2",
     "eslint-config-prettier": "^9.1.2",
     "jest": "^29.7.0",
+    "openid-client": "6.8.8",
     "prettier": "^3.8.1",
     "prisma": "^6.19.2",
     "supertest": "^7.2.2",

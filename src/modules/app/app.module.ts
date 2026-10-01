@@ -1,3 +1,4 @@
+import { OutboundModule } from '../outbound/outbound.service';
 import { AvatarVideoModule, AvatarVideoConsumersModule } from '../uploads/avatar-video.module';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
@@ -73,6 +74,7 @@ import { PickaxModule } from '../pickax/pickax.module';
 import { XModule } from '../x/x.module';
 import { AnnouncementsModule } from '../announcements/announcements.module';
 import { NewslettersModule } from '../newsletters/newsletters.module';
+import { PartnerModule } from '../partner/partner.module';
 import { McpModule } from '../mcp/mcp.module';
 
 // Module wiring is static; use env flags as a pragmatic switch for which processes host consumers.
@@ -101,6 +103,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     }),
     JobsModule,
     SideEffectsModule,
+    OutboundModule,
     RedisModule,
     ThrottlerModule.forRootAsync({
       inject: [AppConfigService],
@@ -117,6 +120,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     UsersModule,
     VerificationModule,
     McpModule,
+    PartnerModule,
     AdminModule,
     UploadsModule,
     AvatarVideoModule,

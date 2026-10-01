@@ -663,7 +663,7 @@ export class ArticlesService {
 
   // ─── Publish ─────────────────────────────────────────────────────────────────
 
-  async publish(userId: string, articleId: string, opts: { postToBoard?: boolean; shareToFeed?: boolean } = {}) {
+  async publish(userId: string, articleId: string, opts: { postToBoard?: boolean; shareToFeed?: boolean; crosspost?: { pickax?: 'link' | 'native'; x?: 'link' | 'native' } } = {}) {
     const article = await this.prisma.article.findUnique({ where: { id: articleId } });
     if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
     if (article.authorId !== userId) throw new ForbiddenException('Not your article.');
@@ -706,6 +706,7 @@ export class ArticlesService {
         where: { id: articleId },
         data: {
           isDraft: false,
+          crosspostChoices: opts.crosspost,
           publishedAt: article.publishedAt ?? new Date(),
           editedAt: article.publishedAt ? new Date() : null,
           lastSavedAt: new Date(),

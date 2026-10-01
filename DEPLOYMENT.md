@@ -11,7 +11,8 @@ For native Node, use `npm ci && npm run build` as the build command and `npm run
 as the start command, preserving the existing pre-deploy migration command. The root
 postinstall generates Prisma and installs the shared MCP package from its own lockfile.
 Do not disable install lifecycle scripts without explicitly running `npm run postinstall`.
-Both runtimes need Node 20.19+. Startup failures exit immediately instead of leaving
+Both runtimes need Node 24 LTS (see `.nvmrc`); update any dashboard `NODE_VERSION`
+override before deploying the partner authorization server. Startup failures exit immediately instead of leaving
 background Redis connections alive while Render waits for an HTTP port.
 
 ### Zero-downtime deploys

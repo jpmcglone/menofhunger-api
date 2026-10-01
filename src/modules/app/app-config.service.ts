@@ -151,6 +151,24 @@ export type MarvLimitsConfig = {
 
 @Injectable()
 export class AppConfigService {
+  partner() {
+    return {
+      enabled: this.config.get<string>('PARTNER_API_ENABLED') === 'true',
+      webhooks: this.config.get<string>('PARTNER_WEBHOOKS_ENABLED') === 'true',
+      outboundPaused: this.config.get<string>('OUTBOUND_DELIVERY_PAUSED') === 'true',
+      jwks: this.config.get<string>('PARTNER_OIDC_JWKS') || '',
+      encryptionKey: this.config.get<string>('PARTNER_ENCRYPTION_KEY') || '',
+      issuer: `${new URL(this.browserHandoffBaseUrl()).origin}/oauth`,
+      pickaxPartnerClientId: this.config.get<string>('PICKAX_PARTNER_CLIENT_ID') || '',
+      pickaxOAuthIssuer: this.config.get<string>('PICKAX_OAUTH_ISSUER') || '',
+      pickaxOAuthClientId: this.config.get<string>('PICKAX_OAUTH_CLIENT_ID') || '',
+      pickaxOAuthClientSecret: this.config.get<string>('PICKAX_OAUTH_CLIENT_SECRET') || '',
+      pickaxOAuth: this.config.get<string>('PICKAX_OAUTH_ENABLED') === 'true',
+      pickaxDelete: this.config.get<string>('PICKAX_REMOTE_DELETE_ENABLED') === 'true',
+      xCountAllowance: this.config.get<string>('X_COUNT_ALLOWANCE_ENABLED') === 'true',
+    };
+  }
+
   private readonly logger = new Logger(AppConfigService.name);
 
   constructor(private readonly config: ConfigService) {}

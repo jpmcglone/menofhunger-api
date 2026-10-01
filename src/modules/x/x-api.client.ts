@@ -145,14 +145,22 @@ export class XApiClient {
     try {
       json = await this.request('POST', '/2/tweets', { accessToken, body });
     } catch (err) {
-      if (err instanceof XApiError && err.status === 0) {
+      if (err instanceof XApiError && (err.status === 0 || err.status >= 500)) {
         throw new XApiError(0, err.code, err.message, true);
       }
       throw err;
     }
     const id = (json as { data?: { id?: unknown } } | null)?.data?.id;
-    if (typeof id !== 'string' || !id) throw new XApiError(502, 'bad_response', 'X did not return a post id.');
+    if (typeof id !== 'string' || !id) throw new XApiError(502, 'bad_response', 'X did not return a post id.', true);
     return id;
+  }
+
+  async deletePost(accessToken: string, id: string) {
+    try {
+      const result = await this.request('DELETE', `/2/tweets/${encodeURIComponent(id)}`, { accessToken }) as { data?: { deleted?: boolean } } | null;
+      if (result?.data?.deleted !== true) throw new XApiError(502, 'removal_unconfirmed', 'X did not confirm removal.');
+    }
+    catch (e) { if (!(e instanceof XApiError) || e.status !== 404) throw e; }
   }
 
   private async tokenRequest(
@@ -182,7 +190,7 @@ export class XApiClient {
   }
 
   private async request(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'DELETE',
     path: string,
     opts: { accessToken?: string; basic?: string; body?: unknown; bodyEncoded?: string; form?: FormData },
   ): Promise<unknown> {
@@ -204,6 +212,7 @@ export class XApiClient {
     try {
       res = await fetch(`${X_API_BASE}${path}`, {
         method,
+        redirect: 'error',
         headers,
         body,
         signal: AbortSignal.timeout(20_000),
@@ -225,6 +234,7 @@ export class XApiClient {
       throw new XApiError(res.status, 'request_failed', message);
     }
     if (!path.startsWith('/2/oauth2/')) this.logger.log(`${method} ${path} -> ${res.status}`);
+    if (method === 'DELETE' && res.status === 204) return { data: { deleted: true } };
     return json;
   }
 }
