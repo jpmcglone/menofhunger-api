@@ -1,3 +1,9 @@
+import { fetchWebsiteMetadata } from "./website-profile-metadata";
+import {
+  fetchPickaxProfile,
+  pickaxProfileHandle,
+  type PublicProfileMetadata,
+} from "./pickax-profile-metadata";
 import { readLimitedResponse } from "../../common/http/read-limited-response";
 import { publicPreviewUrl } from "../../common/urls/public-preview-url";
 import { featurePageForPath } from "../../common/feature-pages";
@@ -47,6 +53,7 @@ import {
 } from "./youtube-link-metadata";
 
 export type LinkMetadataDto = {
+  profile?: PublicProfileMetadata | null;
   url: string;
   title: string | null;
   description: string | null;
@@ -218,6 +225,53 @@ export class LinkMetadataService {
     if (!normalized || (profilePreview && !publicPreviewUrl(normalized)))
       return null;
 
+    const pickaxHandle = profilePreview
+      ? pickaxProfileHandle(normalized)
+      : null;
+    if (pickaxHandle) {
+      const key = `pickax-profile:v1:${pickaxHandle}`;
+      const result = await this.cache.getOrSetJsonWithLock<{
+        meta: LinkMetadataDto | null;
+      }>({
+        enabled: true,
+        key,
+        lockKey: `${key}:lock`,
+        lockTtlMs: 12000,
+        lockWaitMs: 500,
+        ttlSeconds: (value) => (value.meta ? 86400 : 300),
+        computeAndSet: async () => {
+          const saved = await this.prisma.integrationPublicSnapshot.findUnique({
+            where: { key },
+          });
+          if (saved && saved.expiresAt > new Date())
+            return { meta: saved.payload as unknown as LinkMetadataDto };
+          try {
+            const meta = await fetchPickaxProfile(pickaxHandle);
+            if (meta) {
+              const data = {
+                kind: "pickax-profile",
+                identity: pickaxHandle,
+                handle: pickaxHandle,
+                payload: meta as unknown as Prisma.InputJsonValue,
+                fetchedAt: new Date(),
+                expiresAt: new Date(Date.now() + 86400000),
+              };
+              await this.prisma.integrationPublicSnapshot.upsert({
+                where: { key },
+                create: { key, ...data },
+                update: data,
+              });
+            }
+            return { meta };
+          } catch {
+            return { meta: null };
+          }
+        },
+        fallback: async () => ({ meta: null }),
+      });
+      if (result?.meta) return result.meta;
+    }
+
     // Keep canonical URLs in the existing metadata contract; no new persisted media fields.
     if (isSpotifyShareUrl(normalized)) {
       const identity = `${normalized}:spotify-share-v1`;
@@ -275,7 +329,7 @@ export class LinkMetadataService {
     const youtube = youtubeVideoId(normalized) != null;
     // Bypass old scraper/null results without flushing unrelated caches.
     const cacheIdentity = profilePreview
-      ? `${normalized}:profile-v1`
+      ? `${normalized}:profile-v2`
       : youtube
         ? `${normalized}:youtube-v1`
         : normalized;
@@ -300,6 +354,14 @@ export class LinkMetadataService {
       ) {
         return cachedMeta;
       }
+    }
+
+    if (profilePreview) {
+      const saved = await this.prisma.integrationPublicSnapshot.findUnique({
+        where: { key: cacheIdentity },
+      });
+      if (saved && saved.expiresAt > new Date())
+        return saved.payload as unknown as LinkMetadataDto;
     }
 
     const existing = await this.prisma.linkMetadata.findUnique({
@@ -330,6 +392,7 @@ export class LinkMetadataService {
       needsRumbleDimensionRefresh(this.toDto(existing));
 
     if (
+      !profilePreview &&
       existingIsFresh &&
       !existingNeedsPickaxEnrichment &&
       !existingNeedsXEnrichment &&
@@ -364,19 +427,35 @@ export class LinkMetadataService {
           ? CacheTtl.linkMetaFrontSeconds
           : CacheTtl.linkMetaNullSeconds,
       lockKey,
-      lockTtlMs: youtube
-        ? 6_000
-        : pickax
-          ? 12_000
-          : xPost
-            ? 10_000
-            : rumble
-              ? 8_000
-              : 4_000,
+      lockTtlMs: profilePreview
+        ? 16000
+        : youtube
+          ? 6_000
+          : pickax
+            ? 12_000
+            : xPost
+              ? 10_000
+              : rumble
+                ? 8_000
+                : 4_000,
       lockWaitMs: pickax || xPost || rumble ? 500 : 250,
       computeAndSet: async () => {
-        const fresh = await this.fetchAndUpsert(normalized);
+        const fresh = await this.fetchAndUpsert(normalized, profilePreview);
         const dto = fresh ? this.toDto(fresh) : null;
+        if (profilePreview && dto) {
+          const data = {
+            kind: "website-profile",
+            identity: normalized,
+            payload: dto as unknown as Prisma.InputJsonValue,
+            fetchedAt: new Date(),
+            expiresAt: new Date(Date.now() + 86400000),
+          };
+          await this.prisma.integrationPublicSnapshot.upsert({
+            where: { key: cacheIdentity },
+            create: { key: cacheIdentity, ...data },
+            update: data,
+          });
+        }
         // Cache nulls briefly to avoid repeated external fetches for bad URLs.
         await this.cache.setJson(
           cacheKey,
@@ -436,9 +515,7 @@ export class LinkMetadataService {
    * URL preview lookup for Marv. Extracts http(s) URLs from `text` and returns every one,
    * including a bare URL when metadata is not cached yet. Missing rows are fetched, with a cap.
    */
-  async previewLinks(
-    text: string,
-  ): Promise<
+  async previewLinks(text: string): Promise<
     Array<{
       url: string;
       title: string | null;
@@ -523,9 +600,12 @@ export class LinkMetadataService {
     );
   }
 
-  private async fetchAndUpsert(url: string) {
+  private async fetchAndUpsert(url: string, profilePreview = false) {
     try {
-      const meta = await this.fetchFromExternal(url);
+      const direct = profilePreview
+        ? await fetchWebsiteMetadata(url).catch(() => null)
+        : null;
+      const meta = direct ?? (await this.fetchFromExternal(url));
       if (!meta) return null;
 
       const upserted = await this.prisma.linkMetadata.upsert({

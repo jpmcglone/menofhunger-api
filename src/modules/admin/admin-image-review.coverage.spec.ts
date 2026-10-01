@@ -18,6 +18,7 @@ const reviewedMediaFields = new Set([
 ]);
 
 // Explicit JSON review for integrations: none introduces an owned R2 derivative.
+// Pickax profile images are constrained to img.pickax.com/user-*/ assets; no owned R2 media.
 // X images are constrained to pbs.twimg.com in XPublicSnapshotService; delivery
 // plans carry reviewed text/remote IDs/source hashes and retain media through PostMedia.
 // Admin control audit payloads contain numeric ceilings and a pause flag only.
