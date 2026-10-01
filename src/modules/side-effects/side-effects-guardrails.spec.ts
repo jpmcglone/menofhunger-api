@@ -123,7 +123,7 @@ describe('side-effect names and handlers stay in sync', () => {
   function declaredNames(): string[] {
     const src = readFileSync(join(__dirname, 'side-effects.constants.ts'), 'utf8');
     const body = src.slice(src.indexOf('export interface SideEffectPayloads'));
-    return [...body.matchAll(/^ {2}'([a-z0-9.\-]+)':/gm)].map((m) => m[1]);
+    return [...body.matchAll(/^ {2}['"]([a-z0-9.\-]+)['"]:/gm)].map((m) => m[1]);
   }
 
   function registeredNames(): string[] {
@@ -131,13 +131,14 @@ describe('side-effect names and handlers stay in sync', () => {
     for (const file of ALL_TS_FILES) {
       if (rel(file).endsWith('.spec.ts')) continue;
       const src = readFileSync(file, 'utf8');
-      for (const m of src.matchAll(/registry\.register\(\s*'([a-z0-9.\-]+)'/g)) names.add(m[1]);
+      for (const m of src.matchAll(/registry\.register\(\s*['"]([a-z0-9.\-]+)['"]/g)) names.add(m[1]);
     }
     return [...names];
   }
 
   it('registers a handler for every declared payload', () => {
     const registered = new Set(registeredNames());
+    expect(declaredNames().length).toBeGreaterThan(0);
     // A dispatch with no handler is the worst failure mode here: it enqueues, the processor
     // finds nothing, and the work silently never happens.
     const unhandled = declaredNames().filter((name) => !registered.has(name));

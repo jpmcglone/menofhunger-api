@@ -41,6 +41,8 @@ describe('UsersController.byLocation', () => {
         usernameIsSet: true,
         bannedAt: null,
         locationState: 'VA',
+        blocksInitiated: { none: { blockedId: 'viewer' } },
+        blocksReceived: { none: { blockerId: 'viewer' } },
       },
     });
     expect(result.data.location).toMatchObject({ state: 'VA', stateDisplay: 'Virginia' });

@@ -3077,7 +3077,7 @@ export type NotificationsNavUnreadPayloadDto = {
 
 /** Drop lock-screen APNs the user already saw in the matching in-app section. */
 export type NotificationsLockScreenClearPayloadDto = {
-  section: 'inbox' | 'groups';
+  section: "inbox" | "groups";
 };
 
 /** Cross-identity switcher badge. Emitted to the operator cluster when any identity's unread changes. */
@@ -3104,7 +3104,7 @@ export type FollowsChangedPayloadDto = {
   viewerNotificationPreference?: UserNotificationPreference;
 };
 
-export type PostInteractionKind = 'boost' | 'bookmark' | 'repost';
+export type PostInteractionKind = "boost" | "bookmark" | "repost";
 
 /** Post interaction updates (currently emitted to post author + actor). */
 export type PostsInteractionPayloadDto = {
@@ -3117,9 +3117,19 @@ export type PostsInteractionPayloadDto = {
   repostCount?: number;
 };
 
-export type AdminUpdateKind = 'reports' | 'verification' | 'feedback' | 'assistant';
+export type AdminUpdateKind =
+  | "reports"
+  | "verification"
+  | "feedback"
+  | "assistant";
 
-export type AdminUpdateAction = 'created' | 'updated' | 'deleted' | 'resolved' | 'reviewed' | 'other';
+export type AdminUpdateAction =
+  | "created"
+  | "updated"
+  | "deleted"
+  | "resolved"
+  | "reviewed"
+  | "other";
 
 /** Admin screen change hint for cross-tab sync (emitted to the acting admin's sockets). */
 export type AdminUpdatedPayloadDto = {
@@ -3155,7 +3165,8 @@ export type PublicProfileDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: VerifiedStatus;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   pinnedPostId: string | null;
   lastOnlineAt: string | null;
@@ -3230,13 +3241,15 @@ export type PresenceOfflinePayloadDto = {
 };
 
 export type PresenceOnlineFeedSnapshotPayloadDto = {
-  users: Array<UserListDto & {
-    lastConnectAt?: number | null;
-    idle?: boolean;
-    status?: UserStatusDto | null;
-    platforms?: string[];
-    inCall?: boolean;
-  }>;
+  users: Array<
+    UserListDto & {
+      lastConnectAt?: number | null;
+      idle?: boolean;
+      status?: UserStatusDto | null;
+      platforms?: string[];
+      inCall?: boolean;
+    }
+  >;
   totalOnline?: number;
   /** Unique logged-out visitors with a live socket. */
   anonymousOnline?: number;
@@ -3274,7 +3287,7 @@ export type PresencePlatformsChangedPayloadDto = {
 /** `board:new-thread`: identity and scope only; the list refetches to apply viewer access rules. */
 export type BoardNewThreadPayloadDto = {
   threadId: string;
-  visibility: 'public' | 'verifiedOnly' | 'premiumOnly';
+  visibility: "public" | "verifiedOnly" | "premiumOnly";
   tags: string[];
 };
 
@@ -3447,7 +3460,7 @@ export type PostsTypingPayloadDto = {
     isOrganization: boolean;
   };
   typing: boolean;
-  status?: 'thinking' | 'replying';
+  status?: "thinking" | "replying";
   /**
    * Board threads: typing is sent to the thread root room, and this names the comment being
    * answered (absent for a top-level comment) so clients can show it under that comment.
@@ -3495,7 +3508,8 @@ export type CheckinAnsweredTodayPayloadDto = {
     id: string;
     username: string | null;
     displayName: string | null;
-    avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+    avatarUrl: string | null;
+    avatarVideo?: AvatarVideoDto | null;
     isFollowed?: boolean;
   };
 };
@@ -3907,11 +3921,12 @@ export type OrgAffiliationDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
 };
 
 /** Relationship fields for list-user DTOs (follows, search). */
-export type UserNotificationPreference = 'all' | 'posts' | 'off';
+export type UserNotificationPreference = "all" | "posts" | "off";
 
 export type UserNotificationPreferencesDto = {
   preference: UserNotificationPreference;
@@ -3956,7 +3971,8 @@ export type UserListDto = {
   isOrganization: boolean;
   accountKind?: AccountKind;
   verifiedStatus: VerifiedStatus;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
   orgAffiliations: OrgAffiliationDto[];
   relationship?: UserListRelationship;
   createdAt?: string;
@@ -4009,7 +4025,8 @@ export type UserDto = {
   unverifiedAt: string | null;
   followVisibility: FollowVisibility;
   birthdayVisibility: BirthdayVisibility;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   pinnedPostId: string | null;
   // Private rewards (self-only surfaces).
@@ -4094,7 +4111,8 @@ export type UserPreviewDto = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: string;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
   bannerUrl: string | null;
   lastOnlineAt: string | null;
   relationship: UserListRelationship;
