@@ -10,6 +10,11 @@ import type { OutboundDelivery } from '@prisma/client';
 
 export class OutboundAttentionError extends Error {}
 
+export function outboundIdentity(connection: { generation: string; xUserId?: string; pickaxUserId?: string | null; authKind?: string }): string | null {
+  return connection.xUserId ?? connection.pickaxUserId
+    ?? (connection.authKind === 'credentials' ? `pickax-credentials:${connection.generation}` : null);
+}
+
 type Adapter = { send: (row: OutboundDelivery) => Promise<void>; remove: (row: OutboundDelivery) => Promise<void> };
 @Injectable()
 export class OutboundService implements OnModuleInit {
@@ -21,9 +26,8 @@ export class OutboundService implements OnModuleInit {
   async ensure(userId: string, platform: string, resourceKind: 'post' | 'article', resourceId: string, mode: string, update = false) {
     const connection = platform === 'x' ? await this.prisma.xConnection.findUnique({ where: { userId } }) : await this.prisma.pickaxConnection.findUnique({ where: { userId } });
     if (!connection) return;
-    const externalAccountId = 'xUserId' in connection ? connection.xUserId : connection.pickaxUserId;
-    // Legacy Pickax keys without a proven stable account ID must reconnect.
-    if (!externalAccountId) return;
+    const externalAccountId = outboundIdentity(connection);
+    if (!externalAccountId || connection.status !== 'active') return;
     const key = { platform, resourceKind, resourceId };
     const existing = await this.prisma.outboundDelivery.findUnique({ where: { platform_resourceKind_resourceId: key } });
     if (existing) {
@@ -71,7 +75,7 @@ export class OutboundService implements OnModuleInit {
       await this.prisma.outboundDelivery.updateMany({ where: { id, version: row.version }, data: { remoteId: row.remoteId } });
     }
     const connection = row.platform === 'x' ? await this.prisma.xConnection.findUnique({ where: { userId: row.userId } }) : await this.prisma.pickaxConnection.findUnique({ where: { userId: row.userId } });
-    if (!connection || connection.generation !== row.connectionGeneration || ('xUserId' in connection ? connection.xUserId : connection.pickaxUserId) !== row.externalAccountId) {
+    if (!connection || connection.generation !== row.connectionGeneration || outboundIdentity(connection) !== row.externalAccountId) {
       await this.prisma.outboundDelivery.updateMany({ where: { id, version: row.version }, data: { status: 'cancelled', lastError: 'The original connection was disconnected.' } });
       return;
     }

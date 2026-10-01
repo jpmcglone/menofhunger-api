@@ -15,6 +15,36 @@ describe('outbound lifecycle', () => {
     const send = jest.fn(), remove = jest.fn(); service.register('x', { send, remove });
     return { service, send, remove, prisma, get row() { return row; }, set row(next) { row = next; } };
   }
+  it('queues new delivery for an active verified key without an account ID', async () => {
+    const h = harness();
+    const connection = { generation: 'generation', pickaxUserId: null, authKind: 'credentials', status: 'active' };
+    h.prisma.pickaxConnection = { findUnique: jest.fn(async () => connection) };
+    h.prisma.outboundDelivery.findUnique.mockResolvedValue(null);
+    h.prisma.outboundDelivery.upsert = jest.fn(async ({ create }) => ({ ...create, id: 'new', version: 1 }));
+    await h.service.ensure('member', 'pickax', 'post', 'new-post', 'link');
+    expect(h.prisma.outboundDelivery.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ externalAccountId: 'pickax-credentials:generation', connectionGeneration: 'generation' }),
+    }));
+    h.prisma.outboundDelivery.upsert.mockClear();
+    connection.status = 'identity_conflict';
+    await h.service.ensure('member', 'pickax', 'post', 'other-post', 'link');
+    expect(h.prisma.outboundDelivery.upsert).not.toHaveBeenCalled();
+  });
+  it('delivers verified legacy Pickax keys but cancels work after key replacement', async () => {
+    const h = harness();
+    h.row = { ...h.row, platform: 'pickax', externalAccountId: 'pickax-credentials:generation' };
+    h.prisma.pickaxConnection = { findUnique: jest.fn(async () => ({ generation: 'generation', pickaxUserId: null, authKind: 'credentials' })) };
+    h.prisma.pickaxCrosspost = { findUnique: jest.fn(async () => ({ remoteId: 'remote', lastError: null })) };
+    h.service.register('pickax', { send: h.send, remove: h.remove });
+    await h.service.deliver('delivery');
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(h.row.status).toBe('sent');
+    h.row = { ...h.row, status: 'pending', leaseUntil: null };
+    h.prisma.pickaxConnection.findUnique.mockResolvedValue({ generation: 'replacement', pickaxUserId: null, authKind: 'credentials' });
+    await h.service.deliver('delivery');
+    expect(h.row.status).toBe('cancelled');
+    expect(h.send).toHaveBeenCalledTimes(1);
+  });
   it('claims once and duplicate jobs do not create more copies', async () => {
     const h = harness(); h.send.mockResolvedValue(undefined);
     await Promise.all([h.service.deliver('delivery'), h.service.deliver('delivery')]);

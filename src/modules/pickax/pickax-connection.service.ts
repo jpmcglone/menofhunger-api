@@ -131,8 +131,12 @@ export class PickaxConnectionService {
       accessTokenEnc: sealSecret(tokens.accessToken, key),
       refreshTokenEnc: tokens.refreshToken ? sealSecret(tokens.refreshToken, key) : null,
       accessTokenExpiresAt: new Date(Date.now() + tokens.expiresInSeconds * 1000),
-      status: identity.userId ? 'active' : 'identity_conflict',
-      lastError: identity.userId ? null : 'Pickax must confirm an immutable account ID before outward sharing can resume.',
+      // The credentials API does not currently assert an account ID. Bio verification
+      // above remains the supported ownership proof; do not require proposed OAuth.
+      // A fresh generation prevents existing deliveries from following replacement keys.
+      ...(!identity.userId && current?.clientId !== input.clientId ? { generation: randomBytes(20).toString('hex') } : {}),
+      status: 'active',
+      lastError: null,
     };
     const [conn] = await this.prisma.$transaction([
       this.prisma.pickaxConnection.upsert({ where: { userId }, create: { userId, ...data }, update: data }),
@@ -180,13 +184,13 @@ export class PickaxConnectionService {
     return conn && conn.status === 'active' ? conn : null;
   }
 
-  async clearError(userId: string): Promise<void> {
-    await this.prisma.pickaxConnection.updateMany({ where: { userId, lastError: { not: null } }, data: { lastError: null } });
+  async clearError(userId: string, generation: string): Promise<void> {
+    await this.prisma.pickaxConnection.updateMany({ where: { userId, generation, lastError: { not: null } }, data: { lastError: null } });
   }
 
-  async markError(userId: string, message: string, needsNewKey: boolean): Promise<void> {
+  async markError(userId: string, message: string, needsNewKey: boolean, generation: string): Promise<void> {
     await this.prisma.pickaxConnection.updateMany({
-      where: { userId },
+      where: { userId, generation },
       data: { lastError: message.slice(0, 500), ...(needsNewKey ? { status: 'error' } : {}) },
     });
   }
@@ -205,8 +209,8 @@ export class PickaxConnectionService {
   }
 
   /** Discard a token Pickax rejected so the next call renews it. */
-  async invalidateAccessToken(userId: string): Promise<void> {
-    await this.prisma.pickaxConnection.updateMany({ where: { userId }, data: { accessTokenExpiresAt: null } });
+  async invalidateAccessToken(userId: string, generation: string): Promise<void> {
+    await this.prisma.pickaxConnection.updateMany({ where: { userId, generation }, data: { accessTokenExpiresAt: null } });
   }
 
   private async renewLocked(conn: PickaxConnection, key: string): Promise<string> {

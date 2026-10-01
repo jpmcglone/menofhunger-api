@@ -250,7 +250,7 @@ export class PickaxCrosspostService {
         await fn(await this.connections.accessTokenFor(conn));
       } catch (err) {
         if (!(err instanceof PickaxApiError) || !err.isAuthFailure) throw err;
-        await this.connections.invalidateAccessToken(userId);
+        await this.connections.invalidateAccessToken(userId, conn.generation);
         const fresh = await this.connections.getActiveConnection(userId);
         if (!fresh || fresh.generation !== conn.generation) {
           await this.recordRowError(target, userId, 'Pickax is not connected.');
@@ -258,6 +258,7 @@ export class PickaxCrosspostService {
         }
         await fn(await this.connections.accessTokenFor(fresh));
       }
+      await this.connections.clearError(userId, conn.generation);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof PickaxApiError && err.isRetryable) {
@@ -270,6 +271,7 @@ export class PickaxCrosspostService {
         userId,
         authFailure ? 'Pickax no longer accepts this API key. Reconnect with a new key.' : message,
         authFailure,
+        conn.generation,
       );
       await this.prisma.pickaxCrosspost.updateMany({
         where: { kind: target.kind, localId: target.localId },
@@ -303,7 +305,6 @@ export class PickaxCrosspostService {
       }
       this.announce(kind, localId, userId, { pickaxUrl }, true);
     }
-    await this.connections.clearError(userId);
   }
 
   /** Author-facing failure note on the post/article itself, so the error is visible where they published. */
