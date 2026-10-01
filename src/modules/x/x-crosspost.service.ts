@@ -6,12 +6,10 @@ import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import {
   X_NATIVE_COST_MICROS,
   X_POST_MAX_IMAGES,
-  X_POST_MAX_WEIGHTED,
-  buildShareText,
-  linkBlocker,
-  resolveCrosspostMode,
+  xPostBlocker,
+  xBlockerMessage,
+  xContainsLink,
   xPostCostMicros,
-  type NativeLimits,
 } from '../../common/crosspost/crosspost-eligibility';
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
@@ -23,7 +21,6 @@ export type XQueueResult =
   | { status: 'queued'; mode: CrosspostMode }
   | { status: 'skipped'; reason: string };
 
-const X_LIMITS: NativeLimits = { maxChars: X_POST_MAX_WEIGHTED, weighted: true, maxImages: X_POST_MAX_IMAGES };
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 type LoadedPost = {
@@ -67,14 +64,14 @@ export class XCrosspostService {
   async requestPostCrosspost(userId: string, postId: string, requested: CrosspostMode): Promise<XQueueResult> {
     const post = await this.loadPost(postId);
     if (!post || post.userId !== userId) return { status: 'skipped', reason: 'not_found' };
-    const resolved = resolveCrosspostMode(post, requested, X_LIMITS);
-    if ('skip' in resolved) return { status: 'skipped', reason: resolved.skip };
-    const text = this.postText(post, resolved.mode, postId);
+    const reason = xPostBlocker(post, requested);
+    if (reason) return { status: 'skipped', reason };
+    const text = post.body.trim();
     return this.reserveAndQueue({
       userId,
       kind: 'post',
       localId: postId,
-      mode: resolved.mode,
+      mode: 'native',
       costMicros: xPostCostMicros(text),
       job: 'x.post.sync',
     });
@@ -88,16 +85,7 @@ export class XCrosspostService {
     if (!article || article.authorId !== userId) return { status: 'skipped', reason: 'not_found' };
     if (article.deletedAt || article.isDraft || !article.publishedAt) return { status: 'skipped', reason: 'not_published' };
     if (article.visibility !== 'public') return { status: 'skipped', reason: 'not_public' };
-    if (!article.title.trim()) return { status: 'skipped', reason: 'no_title' };
-    const text = buildShareText(this.articleUrl(articleId));
-    return this.reserveAndQueue({
-      userId,
-      kind: 'article',
-      localId: articleId,
-      mode: 'link',
-      costMicros: xPostCostMicros(text),
-      job: 'x.article.sync',
-    });
+    return { status: 'skipped', reason: 'link_sharing_unsupported' };
   }
 
   async syncPost(postId: string, generation?: string): Promise<void> {
@@ -105,29 +93,22 @@ export class XCrosspostService {
     if (!post) return;
     const row = await this.prisma.xCrosspost.findUnique({ where: { kind_localId: { kind: 'post', localId: postId } } });
     if (!row || row.remoteId || row.refundedAt || row.userId !== post.userId) return;
-    const native = resolveCrosspostMode(post, 'native', X_LIMITS);
-    const stillOk = row.mode === 'link' ? !linkBlocker(post) : !('skip' in native) && native.mode === 'native';
-    if (!stillOk) {
-      await this.fail('post', postId, post.userId, 'This post can no longer be shared to X.');
+    const reason = xPostBlocker(post, row.mode);
+    if (reason) {
+      await this.fail('post', postId, post.userId, xBlockerMessage(reason));
       return;
     }
-    const text = this.postText(post, row.mode, postId);
-    await this.publish(post.userId, 'post', postId, text, row.mode === 'native' ? post.media : [], generation);
+    await this.publish(post.userId, 'post', postId, post.body.trim(), post.media, generation);
   }
 
-  async syncArticle(articleId: string, generation?: string): Promise<void> {
+  async syncArticle(articleId: string, _generation?: string): Promise<void> {
     const article = await this.prisma.article.findUnique({
       where: { id: articleId },
       select: { authorId: true, title: true, visibility: true, isDraft: true, publishedAt: true, deletedAt: true },
     });
     const row = await this.prisma.xCrosspost.findUnique({ where: { kind_localId: { kind: 'article', localId: articleId } } });
     if (!article || !row || row.remoteId || row.refundedAt || row.userId !== article.authorId) return;
-    if (article.deletedAt || article.isDraft || !article.publishedAt || article.visibility !== 'public') {
-      await this.fail('article', articleId, article.authorId, 'This article can no longer be shared to X.');
-      return;
-    }
-    const text = buildShareText(this.articleUrl(articleId));
-    await this.publish(article.authorId, 'article', articleId, text, [], generation);
+    await this.fail('article', articleId, article.authorId, 'Articles cannot be posted to X because they require a link.');
   }
 
   private async reserveAndQueue(input: {
@@ -220,6 +201,10 @@ export class XCrosspostService {
     media: LoadedPost['media'],
     generation?: string,
   ): Promise<void> {
+    if (xContainsLink(text)) {
+      await this.fail(kind, localId, userId, xBlockerMessage('links_unsupported'));
+      return;
+    }
     const conn = await this.connections.getActiveConnection(userId);
     if (!conn || (generation && conn.generation !== generation)) {
       await this.fail(kind, localId, userId, 'X is not connected.');
@@ -355,6 +340,7 @@ export class XCrosspostService {
       where: { kind, localId, remoteId: null },
       data: { lastError: note, refundedAt: new Date() },
     });
+    await this.usage.settle(`x:${kind}:${localId}`, 'released');
     await this.writeError(kind, localId, note);
     this.announce(kind, localId, userId, { xError: note }, false);
   }
@@ -385,25 +371,6 @@ export class XCrosspostService {
     } else {
       await this.prisma.article.updateMany({ where: { id: localId }, data: { xError: message } });
     }
-  }
-
-  private postText(post: LoadedPost, mode: CrosspostMode, postId: string): string {
-    if (mode === 'link') {
-      return buildShareText(this.postUrl(postId));
-    }
-    return post.body.trim();
-  }
-
-  private postUrl(postId: string): string {
-    return `${this.siteBaseUrl()}/p/${encodeURIComponent(postId)}`;
-  }
-
-  private articleUrl(articleId: string): string {
-    return `${this.siteBaseUrl()}/a/${encodeURIComponent(articleId)}`;
-  }
-
-  private siteBaseUrl(): string {
-    return (this.appConfig.frontendBaseUrl() ?? 'https://menofhunger.com').replace(/\/+$/, '');
   }
 
   private async loadPost(postId: string): Promise<LoadedPost | null> {

@@ -437,3 +437,31 @@ describe('ScheduledPostsService', () => {
     });
   });
 });
+
+describe('scheduled X eligibility', () => {
+  it.each([
+    { body: 'see https://example.com', crosspost: { x: 'native' as const }, poll: null },
+    { body: 'vote', crosspost: { x: 'native' as const }, poll: { options: [{ text: 'A' }, { text: 'B' }], durationHours: 24 } },
+    { body: 'hello', crosspost: { x: 'link' as const }, poll: null },
+  ])('rejects unsupported scheduled X selections before writing', async input => {
+    const { service, prisma } = makeService();
+    await expect(service.createScheduled({ userId: 'user-1', visibility: 'public', scheduledAt: VALID_FUTURE, communityGroupId: null, media: null, ...input })).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.post.create).not.toHaveBeenCalled();
+  });
+  it('stores valid X and Pickax choices', async () => {
+    const { service, prisma } = makeService();
+    const crosspost = { x: 'native' as const, pickax: 'link' as const };
+    await service.createScheduled({ userId: 'user-1', body: 'hello', visibility: 'public', scheduledAt: VALID_FUTURE, communityGroupId: null, media: null, poll: null, crosspost });
+    expect(prisma.post.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ crosspostChoices: crosspost }) }));
+  });
+  it('rechecks saved X intent when an edit adds a link', async () => {
+    const { service, prisma } = makeService({ post: { findUnique: jest.fn(async () => makeHoldingRow({ crosspostChoices: { x: 'native', pickax: 'link' } })) } });
+    await expect(service.updateScheduled({ userId: 'user-1', scheduledPostId: 'sched-1', body: 'see example.com' })).rejects.toThrow('Remove any links');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+  it('allows a link edit after X is turned off and keeps Pickax', async () => {
+    const { service, prisma } = makeService({ post: { findUnique: jest.fn(async () => makeHoldingRow({ crosspostChoices: { x: 'native', pickax: 'link' } })) } });
+    await service.updateScheduled({ userId: 'user-1', scheduledPostId: 'sched-1', body: 'see example.com', crosspost: { pickax: 'link' } });
+    expect(prisma.$transaction).toHaveBeenCalled();
+  });
+});

@@ -64,7 +64,7 @@ const publishSchema = z.object({
   /** Per-destination choice. Articles on X are always a link. */
   crosspost: z.object({
     pickax: z.enum(['link', 'native']).optional(),
-    x: z.literal('link').optional(),
+    x: z.never().optional(),
   }).optional(),
 });
 

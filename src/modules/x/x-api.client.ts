@@ -1,3 +1,4 @@
+import { xContainsLink } from '../../common/crosspost/crosspost-eligibility';
 import { createHash, randomBytes } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 
@@ -139,6 +140,9 @@ export class XApiClient {
   }
 
   async createPost(accessToken: string, payload: { text: string; mediaIds?: string[] }): Promise<string> {
+    if (xContainsLink(payload.text)) {
+      throw new XApiError(400, 'links_unsupported', 'Remove any links to post to X.');
+    }
     const body: Record<string, unknown> = { text: payload.text };
     if (payload.mediaIds?.length) body.media = { media_ids: payload.mediaIds };
     let json: unknown;

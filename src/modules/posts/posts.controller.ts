@@ -187,7 +187,7 @@ const createSchema = z
     /** Per-destination choice. `crossPostToPickax: true` still means a full Pickax post. */
     crosspost: z.object({
       pickax: z.enum(['link', 'native']).optional(),
-      x: z.enum(['link', 'native']).optional(),
+      x: z.literal('native').optional(),
     }).optional(),
   })
   .superRefine((val, ctx) => {

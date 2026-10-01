@@ -1,4 +1,4 @@
-import { X_LINK_COST_MICROS, X_NATIVE_COST_MICROS } from '../../common/crosspost/crosspost-eligibility';
+import { X_NATIVE_COST_MICROS } from '../../common/crosspost/crosspost-eligibility';
 import { XApiError } from './x-api.client';
 import { XCrosspostService } from './x-crosspost.service';
 
@@ -117,20 +117,29 @@ describe('X cross-post requests', () => {
     expect(h.dispatched).toEqual(['outbound.deliver']);
   });
 
-  it('downgrades a poll to a link and bills the link rate', async () => {
-    const h = harness({ post: postRow({ poll: { id: 'poll' } }) });
-    await expect(h.service.requestPostCrosspost('user-1', 'post-1', 'native')).resolves.toEqual({
-      status: 'queued',
-      mode: 'link',
-    });
-    expect(h.prisma.xCrosspost.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ mode: 'link', costMicros: X_LINK_COST_MICROS }) }),
-    );
+  it.each([
+    [{ poll: { id: 'poll' } }, 'poll'],
+    [{ body: 'see https://example.com' }, 'links_unsupported'],
+    [{ body: 'example.com/path' }, 'links_unsupported'],
+    [{ body: 'a'.repeat(281) }, 'too_long'],
+    [{ media: [{ source: 'upload', kind: 'video', r2Key: 'video', deletedAt: null }] }, 'unsupported_media'],
+  ])('rejects unsupported X content without reserving or sending (%j)', async (overrides, reason) => {
+    const h = harness({ post: postRow(overrides as Record<string, unknown>) });
+    await expect(h.service.requestPostCrosspost('user-1', 'post-1', 'native')).resolves.toEqual({ status: 'skipped', reason });
+    expect(h.prisma.xCrosspost.create).not.toHaveBeenCalled();
+    expect(h.dispatched).toEqual([]);
+    expect(h.api.createPost).not.toHaveBeenCalled();
+  });
+
+  it('rejects explicit link shares', async () => {
+    const h = harness();
+    await expect(h.service.requestPostCrosspost('user-1', 'post-1', 'link')).resolves.toEqual({ status: 'skipped', reason: 'link_sharing_unsupported' });
+    expect(h.dispatched).toEqual([]);
   });
 
   it('skips members who are not Premium', async () => {
     const h = harness({ premium: false });
-    await expect(h.service.requestPostCrosspost('user-1', 'post-1', 'link')).resolves.toEqual({
+    await expect(h.service.requestPostCrosspost('user-1', 'post-1', 'native')).resolves.toEqual({
       status: 'skipped',
       reason: 'premium_required',
     });
@@ -139,7 +148,7 @@ describe('X cross-post requests', () => {
 
   it('skips when the month is already spent', async () => {
     const h = harness({ spent: 300 * 10_000 });
-    await expect(h.service.requestPostCrosspost('user-1', 'post-1', 'link')).resolves.toEqual({
+    await expect(h.service.requestPostCrosspost('user-1', 'post-1', 'native')).resolves.toEqual({
       status: 'skipped',
       reason: 'monthly_limit',
     });
@@ -207,5 +216,31 @@ describe('X outbox recovery before request-path reservation', () => {
     await h.service.syncPost('post-1');
     expect(h.api.createPost).toHaveBeenCalledTimes(1);
     expect(h.row()?.costMicros).toBe(X_NATIVE_COST_MICROS);
+  });
+});
+
+describe('previously queued X choices', () => {
+  it.each([
+    ['link', {}, 'Sharing links'],
+    ['native', { body: 'added https://example.com after scheduling' }, 'Remove any links'],
+    ['native', { poll: { id: 'poll' } }, 'Polls'],
+  ])('blocks old jobs at delivery (%s, %j)', async (mode, overrides, message) => {
+    const h = harness({ post: postRow(overrides as Record<string, unknown>) });
+    await h.prisma.xCrosspost.create({ data: { userId: 'user-1', kind: 'post', localId: 'post-1', mode, costMicros: 0 } });
+    await h.service.syncPost('post-1');
+    expect(h.api.createPost).not.toHaveBeenCalled();
+    expect(h.api.uploadImage).not.toHaveBeenCalled();
+    expect(h.row()?.lastError).toContain(message);
+    expect(h.row()?.refundedAt).toBeInstanceOf(Date);
+  });
+
+  it('blocks queued article shares', async () => {
+    const h = harness();
+    h.prisma.article.findUnique.mockResolvedValue({ authorId: 'user-1', title: 'Article', visibility: 'public', publishedAt: new Date() });
+    await expect(h.service.requestArticleCrosspost('user-1', 'a1')).resolves.toEqual({ status: 'skipped', reason: 'link_sharing_unsupported' });
+    await h.prisma.xCrosspost.create({ data: { userId: 'user-1', kind: 'article', localId: 'a1', mode: 'link' } });
+    await h.service.syncArticle('a1');
+    expect(h.api.createPost).not.toHaveBeenCalled();
+    expect(h.row()?.lastError).toContain('Articles cannot');
   });
 });

@@ -44,7 +44,7 @@ const pollSchema = z.object({
   durationHours: z.number().int().min(1).max(168),
 });
 
-const crosspostSchema = z.object({ pickax: z.enum(['link', 'native']).optional(), x: z.enum(['link', 'native']).optional() }).strict();
+const crosspostSchema = z.object({ pickax: z.enum(['link', 'native']).optional(), x: z.literal('native').optional() }).strict();
 const createSchema = z.object({
   crosspost: crosspostSchema.optional(),
   body: z.string().trim().max(1000).default(''),

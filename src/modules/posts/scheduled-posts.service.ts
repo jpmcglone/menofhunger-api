@@ -1,3 +1,4 @@
+import { assertXCrosspostInput } from '../../common/crosspost/x-crosspost-input';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -84,6 +85,7 @@ export class ScheduledPostsService {
     poll: ScheduledPollInput | null;
     communityGroupId: string | null;
   }): Promise<ScheduledPostDto> {
+    assertXCrosspostInput(params);
     const { userId } = params;
     const body = (params.body ?? '').trim();
     const now = new Date();
@@ -363,6 +365,12 @@ export class ScheduledPostsService {
     } else {
       nextPollJson = post.scheduledPollJson as { options: { text: string }[]; durationHours: number } | null;
     }
+
+    const crosspost = params.crosspost ?? post.crosspostChoices as { pickax?: 'link' | 'native'; x?: 'link' | 'native' } | undefined;
+    assertXCrosspostInput({
+      crosspost, body: nextBody, visibility: nextVisibility,
+      communityGroupId: resolvedGroupId, poll: nextPollJson, media: media ?? post.media,
+    });
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const next = await tx.post.update({

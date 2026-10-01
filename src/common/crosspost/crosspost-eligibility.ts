@@ -84,9 +84,13 @@ export function xWeightedLength(text: string): number {
   return weight;
 }
 
+export function xContainsLink(text: string): boolean {
+  // Include bare domains because X can turn them into links.
+  return /https?:\/\/|(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+(?:[\p{L}]{2,63}|xn--[a-z0-9-]+)(?![\p{L}\p{N}-])/iu.test(text);
+}
+
 export function xPostCostMicros(text: string): number {
-  // Bare domains are linkified by X too. Conservatively reserve a link slot.
-  return /https?:\/\/|\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?:[/:?#]|\b)/i.test(text) ? X_LINK_COST_MICROS : X_NATIVE_COST_MICROS;
+  return xContainsLink(text) ? X_LINK_COST_MICROS : X_NATIVE_COST_MICROS;
 }
 
 /** Link shares point at the original. They do not copy its words. */
@@ -138,4 +142,31 @@ export function resolveCrosspostMode(
   if (requested === 'link') return { mode: 'link' };
   if (nativeBlocker(post, limits)) return { mode: 'link' };
   return { mode: 'native' };
+}
+
+/** X never falls back to a link. Recheck both queued choices and the latest content. */
+export function xPostBlocker(post: CrosspostPost, requested: CrosspostMode): string | null {
+  if (requested !== 'native') return 'link_sharing_unsupported';
+  if (xContainsLink(post.body)) return 'links_unsupported';
+  return linkBlocker(post) ?? nativeBlocker(post, {
+    maxChars: X_POST_MAX_WEIGHTED, weighted: true, maxImages: X_POST_MAX_IMAGES,
+  });
+}
+
+export function xBlockerMessage(reason: string): string {
+  switch (reason) {
+    case 'links_unsupported': return 'Remove any links to post to X.';
+    case 'link_sharing_unsupported': return 'Sharing links to X is not supported.';
+    case 'poll': return 'Polls cannot be posted to X.';
+    case 'too_long': return 'Shorten this post to 280 characters to post to X.';
+    case 'unsupported_media': return 'Only uploaded photos can be posted to X. Remove videos and GIFs.';
+    case 'too_many_images': return 'Use no more than 4 photos to post to X.';
+    case 'not_public': return 'Make this post public to post to X.';
+    case 'group_post': return 'Group posts cannot be posted to X.';
+    case 'reply': return 'Replies cannot be posted to X.';
+    case 'quote_or_repost': return 'Quoted posts cannot be posted to X.';
+    case 'unsupported_kind': return 'This type of post cannot be posted to X.';
+    case 'empty': return 'Add text or a photo to post to X.';
+    default: return 'This post can no longer be posted to X.';
+  }
 }

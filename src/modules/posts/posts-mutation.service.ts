@@ -1,3 +1,4 @@
+import { assertXCrosspostInput } from '../../common/crosspost/x-crosspost-input';
 import { boardMarvReplyId } from '../marvin/services/board-marv-reply-id';
 import { captureMemberParticipation } from '../../common/posthog/member-participation';
 import { assertPublishableText } from '../../common/moderation/content-filter';
@@ -756,6 +757,8 @@ export class PostsMutationService {
   }
 
   async createPost(params: CreatePostParams) {
+    // Old scheduled selections still publish locally; the X worker rechecks the latest content.
+    if (!params.scheduledSource) assertXCrosspostInput(params);
     return this.writePost(params);
   }
 
