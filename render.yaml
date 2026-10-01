@@ -1,4 +1,5 @@
-# Intended Render settings for zero-downtime API deploys.
+# Docker alternative; the existing dashboard-managed API uses native Node.
+# Apply the trigger and filters to the existing service without changing runtime.
 #
 # If this service is already dashboard-managed (no Blueprint linked), do NOT
 # apply this file as a new Blueprint — that can create a second service.
@@ -9,6 +10,16 @@
 services:
   - type: web
     name: menofhunger-api
+    autoDeployTrigger: checksPass
+    buildFilter:
+      ignoredPaths:
+        - .agents/**
+        - .cursor/**
+        - .vscode/**
+        - AGENTS.md
+        - README.md
+        - DEPLOYMENT.md
+        - docs/engineering-policy.md
     runtime: docker
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health

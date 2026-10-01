@@ -7,13 +7,63 @@ also supports Docker (`Dockerfile`); `render.yaml` describes that alternative an
 not establish the existing service's runtime. Production health lives at the
 unversioned root: `GET /health` (not `/v1/health`).
 
-For native Node, use `npm ci && npm run build` as the build command and `npm run start`
-as the start command, preserving the existing pre-deploy migration command. The root
+For the existing native Node service, keep `npm ci --include=dev && npm run build:ci`
+as the build command, `npm run start` as the start command, and
+`npm run prisma:migrate:deploy` as the pre-deploy command. The root
 postinstall generates Prisma and installs the shared MCP package from its own lockfile.
 Do not disable install lifecycle scripts without explicitly running `npm run postinstall`.
 Both runtimes need Node 24 LTS (see `.nvmrc`); update any dashboard `NODE_VERSION`
 override before deploying the partner authorization server. Startup failures exit immediately instead of leaving
 background Redis connections alive while Render waits for an HTTP port.
+
+### CI-gated deployments
+
+Pushes to `main` run GitHub Actions first. Both MOH services use **After CI Checks
+Pass** (`autoDeployTrigger: checksPass`): failed checks block automatic deployment;
+passing checks allow Render to install, build, and deploy. Keep the existing lint,
+type, contract, and test jobs enabled on `main`. No detected checks also blocks an
+automatic deployment.
+
+Build filters have no included-path restrictions and ignore only:
+
+```text
+.agents/**
+.cursor/**
+.vscode/**
+AGENTS.md
+README.md
+DEPLOYMENT.md
+docs/engineering-policy.md
+```
+
+A change containing only these paths skips automatic deployment. A mixed change
+with application files still deploys after CI. Do not ignore all Markdown or all
+of `docs/`: web Markdown supplies published content, and API documentation is used
+by build checks. Dependencies, build scripts, content, and migrations remain eligible.
+
+Batch related changes before pushing when practical. Use `[skip render]` only for
+an individual commit that does not need deployment. Manual deployments bypass the
+automatic CI gate and build filters; configuration updates can also trigger a deploy.
+See [Render deploys](https://render.com/docs/deploys) and
+[build filters](https://render.com/docs/monorepo-support#setting-build-filters).
+
+Apply settings to the existing services; do not create a new Blueprint or change
+runtimes. Enable CI gating before removing duplicate web checks. Billing limits,
+service sizes, and disabled previews are unchanged.
+
+#### Rollback baseline (October 1, 2026)
+
+Before this change, both services tracked `main`, deployed **On Commit**, and had
+no included or ignored build paths. Restore those settings to reverse the gate
+and filters. The previous www build command was:
+
+```sh
+npm ci && npx nuxi typecheck && node scripts/validate-api-types.mjs && npm run build
+```
+
+The API build remains `npm ci --include=dev && npm run build:ci`, with
+`npm run prisma:migrate:deploy` before deployment. Both existing services start
+with `npm run start`. Rollback does not require runtime or billing changes.
 
 ### Zero-downtime deploys
 
