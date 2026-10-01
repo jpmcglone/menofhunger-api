@@ -34,7 +34,8 @@
     "lint": "eslint src --ext .ts",
     "format": "prettier --write .",
     "test": "jest",
-    "test:ci": "jest --ci --runInBand",
+    "test:ci": "jest --ci --runInBand --config jest.ci.config.js",
+    "test:media": "jest --runInBand --runTestsByPath src/modules/uploads/avatar-video-transcoder.spec.ts",
     "test:watch": "jest --watch --passWithNoTests",
     "test:e2e": "jest --runInBand --config ./test/jest-e2e.json",
     "prisma:generate": "prisma generate",
@@ -50,8 +51,8 @@
     "test:partner-protocol": "node -r ts-node/register/transpile-only test/partner/protocol.ts",
     "check:partner-example": "tsc --noEmit --module nodenext --target es2022 --skipLibCheck examples/partner/client.mts",
     "check:partner-database": "bash scripts/check-partner-database.sh",
-    "emit:partner-reference": "ts-node scripts/emit-partner-reference.ts",
-    "check:partner-reference": "ts-node scripts/emit-partner-reference.ts --check",
+    "emit:partner-reference": "ts-node --files scripts/emit-partner-reference.ts",
+    "check:partner-reference": "ts-node --files scripts/emit-partner-reference.ts --check",
     "check:partner-docs": "node scripts/sync-partner-docs.mjs --check"
   },
   "dependencies": {

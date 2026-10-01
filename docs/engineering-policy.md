@@ -144,6 +144,8 @@ This is the only task-to-check matrix. Rules and skills link here instead of res
 Run only the tests needed to verify the work just changed. Full test suites run separately
 when explicitly requested or scheduled by the user. Web `npm run check` explicitly runs lint, types, contracts, tests, and a build.
 GitHub Actions runs the hermetic subset: lint, API and web typecheck, contract drift, API `test:ci`, and web `npm test`.
+Real FFmpeg transcoding runs locally with API `npm run test:media` and is included in
+`check:local`; CI excludes that codec suite and does not install FFmpeg.
 Render builds only; its `prebuild` stamps the service-worker version. Reuse
 successful results when the relevant code has not changed. Do not rerun a suite or build
 without a new change, failure, or unresolved risk. Choose direct build commands when a
