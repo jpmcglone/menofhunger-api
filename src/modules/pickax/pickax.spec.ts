@@ -115,13 +115,17 @@ describe('pickax post eligibility and payload', () => {
     expect(postCrosspostBlocker(post({ media: [{ ...image, kind: 'video' }] }))).toBe('unsupported_media');
   });
 
-  it('preserves user links and adds attribution in full-copy mode', () => {
+  it('preserves user links without adding a backlink in native mode', () => {
     const payload = buildPickaxPostPayload(post({ body: 'see https://example.com' }), {
-      publicBaseUrl: 'https://cdn.example.com', canonicalUrl: 'https://menofhunger.com/p/p1',
+      publicBaseUrl: 'https://cdn.example.com',
     });
-    expect(payload.content).toContain('see https://example.com');
-    expect(payload.content).toContain('Originally published on Men of Hunger\nhttps://menofhunger.com/p/p1');
+    expect(payload.content).toBe('see https://example.com');
     expect(payload.link).toBeUndefined();
+  });
+
+  it('keeps a maximum-length native post within Pickax’s limit', () => {
+    const body = 'a'.repeat(1000);
+    expect(buildPickaxPostPayload(post({ body }), { publicBaseUrl: null }).content).toBe(body);
   });
 
   it('puts the Men of Hunger url in a link post', () => {
@@ -149,7 +153,7 @@ describe('pickax article translation', () => {
     expect(html).not.toContain('<iframe');
   });
 
-  it('appends the author footer and thumbnail', () => {
+  it('copies article content and thumbnail without adding a footer', () => {
     const article: PickaxArticleSource = {
       id: 'a1',
       title: ' Title ',
@@ -163,12 +167,10 @@ describe('pickax article translation', () => {
     expect(articleCrosspostBlocker(article)).toBeNull();
     const payload = buildPickaxArticlePayload(article, {
       publicBaseUrl: 'https://cdn.example.com',
-      author: { name: 'Al', username: 'al' },
-      siteBaseUrl: 'https://menofhunger.com',
     });
     expect(payload.title).toBe('Title');
     expect(payload.thumbnail).toContain('thumb.jpg');
-    expect(payload.content).toContain('<a href="https://menofhunger.com/u/al">Al</a> on Men of Hunger');
+    expect(payload.content).toBe(tiptapBodyToHtml(doc));
   });
 
   it('blocks drafts and non-public articles', () => {

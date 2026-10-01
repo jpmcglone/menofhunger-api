@@ -77,14 +77,14 @@ function pickaxAttachments(
     });
 }
 
-/** Full copy retains the original text, attribution, and canonical source. */
+/** Native posts contain only the author’s content and attachments. */
 export function buildPickaxPostPayload(
   post: PickaxPostSource,
-  ctx: { publicBaseUrl: string | null; canonicalUrl: string },
+  ctx: { publicBaseUrl: string | null },
 ): PickaxPostPayload {
   const attachments = pickaxAttachments(post, ctx.publicBaseUrl);
   return {
-    content: `${post.body.trim()}\n\nOriginally published on Men of Hunger\n${ctx.canonicalUrl}`,
+    content: post.body.trim(),
     ...(attachments.length ? { attachments } : {}),
   };
 }
@@ -223,21 +223,14 @@ export function tiptapBodyToHtml(bodyJson: string): string {
   }
 }
 
-export function articleFooterHtml(author: { name: string | null; username: string }, siteBaseUrl: string): string {
-  const label = (author.name ?? '').trim() || `@${author.username}`;
-  const href = `${siteBaseUrl.replace(/\/+$/, '')}/u/${encodeURIComponent(author.username)}`;
-  return `<hr><p>By <a href="${escapeHtml(href)}">${escapeHtml(label)}</a> on Men of Hunger</p>`;
-}
-
 export function buildPickaxArticlePayload(
   article: PickaxArticleSource,
-  ctx: { publicBaseUrl: string | null; author: { name: string | null; username: string }; siteBaseUrl: string },
+  ctx: { publicBaseUrl: string | null },
 ): PickaxArticlePayload {
   const thumbnail = publicAssetUrl({ publicBaseUrl: ctx.publicBaseUrl, key: article.thumbnailR2Key });
   return {
     title: article.title.trim(),
-    content: tiptapBodyToHtml(article.body) + articleFooterHtml(ctx.author, ctx.siteBaseUrl) +
-      `<p><a href="${escapeHtml(`${ctx.siteBaseUrl.replace(/\/+$/, '')}/a/${encodeURIComponent(article.id)}`)}">Read the original on Men of Hunger</a></p>`,
+    content: tiptapBodyToHtml(article.body),
     ...(thumbnail ? { thumbnail } : {}),
   };
 }

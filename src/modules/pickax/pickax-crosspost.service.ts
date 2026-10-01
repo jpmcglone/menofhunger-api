@@ -146,9 +146,9 @@ export class PickaxCrosspostService {
     const mohPostUrl = `${this.siteBaseUrl()}/p/${encodeURIComponent(postId)}`;
     const payload = mode === 'link'
       ? buildPickaxLinkPayload(mohPostUrl, loaded.source.body)
-      : buildPickaxPostPayload(loaded.source, { publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null, canonicalUrl: mohPostUrl });
+      : buildPickaxPostPayload(loaded.source, { publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null });
     if (payload.content.length > 1000) {
-      await this.recordRowError({ kind: 'post', localId: postId }, userId, 'The full copy and attribution exceed Pickax’s limit. Choose an excerpt instead.');
+      await this.recordRowError({ kind: 'post', localId: postId }, userId, 'This post exceeds Pickax’s limit. Shorten it or share a link instead.');
       return;
     }
     const hash = contentHash(mode, JSON.stringify(payload));
@@ -192,8 +192,6 @@ export class PickaxCrosspostService {
     const linkPayload = buildPickaxLinkPayload(articleUrl, loaded.source.title);
     const articlePayload = buildPickaxArticlePayload(loaded.source, {
       publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
-      author: loaded.author,
-      siteBaseUrl,
     });
     const hash = mode === 'link'
       ? contentHash('link', linkPayload.content)
