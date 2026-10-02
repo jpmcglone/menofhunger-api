@@ -719,7 +719,7 @@ describe('MarvinPublicReplyProcessor', () => {
       const m = makeProcessor();
       m.prisma.post.findFirst
         .mockResolvedValueOnce({
-          id: 'p-1', body: 'Check this', visibility: 'public', rootId: 'r-1', userId: 'u-requester',
+          id: 'p-1', body: '@marv Check this', visibility: 'public', rootId: 'r-1', userId: 'u-requester',
           user: { id: 'u-requester', username: 'alice', name: 'Alice', premium: true, premiumPlus: false, bannedAt: null },
           mentions: [],
           media: [{ id: 'med-1', kind: 'image', source: 'upload', r2Key: 'images/x.jpg', url: null, position: 0 }],
@@ -732,6 +732,7 @@ describe('MarvinPublicReplyProcessor', () => {
       m.prisma.post.findMany.mockResolvedValueOnce([]);
       await m.processor.process({ postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester' });
       const aiCall = m.ai.respond.mock.calls[0]?.[0];
+      expect(m.ai.respond).toHaveBeenCalledTimes(1);
       expect(aiCall?.imageUrls).toBeUndefined();
     });
   });
