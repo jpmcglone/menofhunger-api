@@ -33,6 +33,23 @@ describe('Men of Hunger feature previews', () => {
     expect(prisma.linkMetadata.findUnique).not.toHaveBeenCalled();
   });
 
+  it.each([
+    'https://menofhunger.com',
+    'https://menofhunger.com/',
+    'https://menofhunger.com/?utm_source=invite',
+    'https://www.menofhunger.com/',
+  ])('uses the homepage invitation for %s without scraping or stale cached metadata', async (url) => {
+    const { service, cache, prisma } = setup();
+    const fetcher = jest.spyOn(global, 'fetch');
+    const metadata = await service.getMetadata(url);
+    expect(metadata?.title).toBe('Men of Hunger — Join men who show up.');
+    expect(metadata?.description).toBe('Join a trusted community for men who want real conversation, not more noise. Bring your friends, find your people, and show up together.');
+    expect(metadata?.imageUrl).toBe('https://menofhunger.com/images/social/home-v1.png');
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(cache.getJson).not.toHaveBeenCalled();
+    expect(prisma.linkMetadata.findUnique).not.toHaveBeenCalled();
+  });
+
   it('keeps unknown routes and profiles free of unrelated feature covers', async () => {
     const { service } = setup();
     const metadata = await service.getMetadata('https://menofhunger.com/u/john');

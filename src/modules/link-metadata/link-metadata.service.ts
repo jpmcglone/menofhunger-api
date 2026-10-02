@@ -135,7 +135,15 @@ function getMohPageTitle(pathname: string): string {
 function buildMohSyntheticMeta(url: string): LinkMetadataDto {
   try {
     const u = new URL(url);
-    const feature = featurePageForPath(u.pathname + u.search);
+    // Keep the public homepage invitation aligned with web config/site.ts.
+    // This is repository-owned web artwork, not an uploaded R2 object.
+    const feature = u.pathname === "/"
+      ? {
+          title: "Men of Hunger — Join men who show up.",
+          description: "Join a trusted community for men who want real conversation, not more noise. Bring your friends, find your people, and show up together.",
+          image: "/images/social/home-v1.png",
+        }
+      : featurePageForPath(u.pathname + u.search);
     return {
       url,
       title: feature?.title ?? getMohPageTitle(u.pathname),
