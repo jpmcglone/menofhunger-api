@@ -208,3 +208,18 @@ export function renderMemberBackgroundLines(
 /** Appended to thread replies when pre-fetched context is already injected. */
 export const MARV_THREAD_TOOL_OPTIONAL =
   'If you need more thread context, call get_post_thread_recent_messages. ';
+
+/** Public threads may mention Marv while directing the actual question elsewhere. */
+export const MARV_NO_REPLY = '[MARV_NO_REPLY]';
+export const MARV_THREAD_ADDRESSEE =
+  'Determine who each question or request in the triggering message is addressed to before answering. ' +
+  'Use explicit handles and names, sentence structure, and the conversation context. ' +
+  'Being the parent author or a prior participant does not make you the addressee. ' +
+  'A mention of you as a topic, in a quote, or as an observer is not a request for your answer. ' +
+  'For example, "Is this sufficient @benwisdom?" asks Ben, even under your own reply. ' +
+  '"@benwisdom, is @marv right?" also asks Ben; do not answer for him. ' +
+  '"@marv, is @benwisdom right?" asks you and you may answer. ' +
+  'If a message has requests for multiple people, answer only the part addressed to you. ' +
+  'Treat ancestors, descendants, and quoted messages as context, not new requests to you. ' +
+  'If no request is clearly addressed to you, return exactly ' + MARV_NO_REPLY +
+  ' and nothing else. Do not acknowledge, explain your silence, or answer on another member’s behalf.';

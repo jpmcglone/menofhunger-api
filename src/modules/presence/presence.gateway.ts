@@ -391,7 +391,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   @SubscribeMessage(WsEventNames.callsJoin)
-  handleCallsJoin(client: Socket, payload: { callId?: string; sessionId?: string; sfuCapable?: boolean }): Promise<CallsAckDto> {
+  handleCallsJoin(client: Socket, payload: { callId?: string; sessionId?: string; sfuCapable?: boolean; resumeSessionId?: string }): Promise<CallsAckDto> {
     return this.callsHandler.handleCallsJoin(client, payload);
   }
 
@@ -415,11 +415,4 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     return this.callsHandler.handleCallsState(client, payload);
   }
 
-  @SubscribeMessage(WsEventNames.rtcSignal)
-  handleRtcSignal(
-    client: Socket,
-    payload: { callId?: string; toUserId?: string; description?: unknown; candidate?: unknown },
-  ): Promise<void> {
-    return this.callsHandler.handleRtcSignal(client, payload);
-  }
 }

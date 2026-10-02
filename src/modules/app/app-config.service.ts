@@ -438,6 +438,12 @@ export class AppConfigService {
     return this.config.get<string>("CALLS_SFU_ENABLED") === "true";
   }
 
+  /** Conservative application reservation estimate; not a provider-enforced invoice cap. */
+  callsBudgetBytesPerSecond(): number | null {
+    const rate = Number(this.config.get<string>('CALLS_BUDGET_BYTES_PER_SECOND'));
+    return Number.isSafeInteger(rate) && rate > 0 ? rate : null;
+  }
+
   cloudflareSfu(): { appId: string; secret: string } | null {
     const appId =
       this.config.get<string>("CLOUDFLARE_SFU_APP_ID")?.trim() ?? "";
@@ -452,44 +458,6 @@ export class AppConfigService {
     const apiToken = this.config.get<string>("CF_TURN_API_TOKEN")?.trim() ?? "";
     if (!keyId || !apiToken) return null;
     return { keyId, apiToken };
-  }
-
-  /**
-   * Static ICE servers when Cloudflare TURN is unset or minting fails. STUN is always
-   * present (Google's public servers unless `RTC_STUN_URLS` overrides). Static TURN is
-   * appended only when all three `RTC_TURN_*` vars are set.
-   */
-  rtcIceServers(): Array<{
-    urls: string[];
-    username?: string;
-    credential?: string;
-  }> {
-    const split = (raw: string | undefined): string[] =>
-      (raw ?? "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-    const stun = split(this.config.get<string>("RTC_STUN_URLS"));
-    const servers: Array<{
-      urls: string[];
-      username?: string;
-      credential?: string;
-    }> = [
-      {
-        urls:
-          stun.length > 0
-            ? stun
-            : ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"],
-      },
-    ];
-    const turnUrls = split(this.config.get<string>("RTC_TURN_URLS"));
-    const username = this.config.get<string>("RTC_TURN_USERNAME")?.trim() ?? "";
-    const credential =
-      this.config.get<string>("RTC_TURN_CREDENTIAL")?.trim() ?? "";
-    if (turnUrls.length > 0 && username && credential) {
-      servers.push({ urls: turnUrls, username, credential });
-    }
-    return servers;
   }
 
   r2(): R2Config | null {

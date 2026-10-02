@@ -24,7 +24,11 @@ export type CallParticipantRecord = {
 };
 
 export type CallSessionRecord = {
-  mediaTransport?: 'p2p' | 'sfu';
+  mediaTransport?: 'sfu';
+  budgetReservedUntil?: string;
+  budgetFailureReason?: 'budget_exhausted' | 'calling_unavailable';
+  budgetWarningDeadline?: string;
+  endReason?: 'budget_exhausted' | 'calling_unavailable';
   id: string;
   conversationId: string;
   conversationType: 'direct' | 'group' | 'crew_wall';
@@ -191,7 +195,9 @@ export class CallSessionStore {
   static toDto(record: CallSessionRecord): CallSessionDto {
     return {
       id: record.id,
-      mediaTransport: record.mediaTransport ?? 'p2p',
+      mediaTransport: record.mediaTransport,
+      budgetWarningDeadline: record.budgetWarningDeadline ?? null,
+      endReason: record.endReason ?? null,
       conversationId: record.conversationId,
       type: record.type,
       status: record.status,

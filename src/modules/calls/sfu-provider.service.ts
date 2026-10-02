@@ -55,9 +55,15 @@ export class SfuProviderService {
 
   async close(sessionId: string, mids: string[]): Promise<void> {
     if (!mids.length) return;
-    await this.request('PUT', `/sessions/${encodeURIComponent(sessionId)}/tracks/close`, {
+    const result = await this.request('PUT', `/sessions/${encodeURIComponent(sessionId)}/tracks/close`, {
       tracks: mids.map((mid) => ({ mid })),
       force: true,
     });
+    if (result.tracks?.some((track) => track.errorCode)) {
+      const current = await this.request('GET', `/sessions/${encodeURIComponent(sessionId)}`);
+      if (current.tracks?.some((track) => track.mid && mids.includes(track.mid) && track.status !== 'inactive')) {
+        throw new Error('SFU cleanup incomplete');
+      }
+    }
   }
 }

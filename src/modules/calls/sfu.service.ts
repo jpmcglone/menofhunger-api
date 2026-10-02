@@ -1,3 +1,4 @@
+import { CallBudgetService } from './call-budget.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import { AppConfigService } from '../app/app-config.service';
@@ -65,6 +66,7 @@ export class SfuService {
     private readonly messages: MessagesService,
     private readonly realtime: PresenceRealtimeService,
     private readonly config: AppConfigService,
+    private readonly budget: CallBudgetService,
   ) {}
 
   enabled(): boolean {
@@ -78,6 +80,9 @@ export class SfuService {
     try {
       const record = await this.authorize(userId, socketId, request.callId);
       if (!record) return failure('not_allowed', 'This call is no longer available.');
+      if (['open', 'publish', 'subscribe'].includes(request.action) && !(await this.budget.allowsAllocation(record.id))) {
+        return failure('calling_unavailable', 'Calling is temporarily unavailable. Please try again later.');
+      }
       if (request.action === 'data') {
         if (!request.data) return failure('invalid_payload', 'Invalid call reaction.');
         const bucket = `call:sfu:reaction:${userId}:${Math.floor(Date.now() / 1000)}`;
@@ -171,6 +176,13 @@ export class SfuService {
         } catch (error) {
           connection.invalid = true;
           await this.save(call.id, userId, state);
+          // A failed batch can still allocate tracks. Close the whole known provider session,
+          // retaining its invalid record until confirmed cleanup so the sweep can retry.
+          try {
+            await this.provider.closeAll(connection.sessionId);
+            delete state[slot];
+            await this.save(call.id, userId, state);
+          } catch { /* Durable-to-Redis cleanup intent remains for the sweep. */ }
           throw error;
         }
         if (!(await this.sameSeat(userId, socketId, call.id, seatId))) {

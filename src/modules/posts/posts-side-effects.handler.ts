@@ -641,7 +641,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
 
       if (args.mentionsOnly) {
         await this.maybeEnqueueMarvReply({ post, actorUserId, bodySnippet, visibility,
-          requestedMarvMode, parentAuthorUserId, addedMentionIds: bodyMentionIds });
+          requestedMarvMode, addedMentionIds: bodyMentionIds });
         return;
       }
 
@@ -873,7 +873,6 @@ export class PostsSideEffectsHandler implements OnModuleInit {
         bodySnippet,
         visibility,
         requestedMarvMode,
-        parentAuthorUserId,
       });
     } catch (err) {
       this.logger.warn(
@@ -984,13 +983,8 @@ export class PostsSideEffectsHandler implements OnModuleInit {
    * configured Marv username so the queueing surface stays dumb and the processor handles all
    * gating (premium, credits, rate limits, the AI call).
    *
-   * Summon Marv when:
-   *  - the body explicitly tags `@marv`, or
-   *  - this post is a **direct** reply to a Marv post/reply (parent author is Marv).
-   *
-   * Being in the ancestor / "Replying to" chain is not enough. A reply to Alice
-   * under a Marv thread stays silent unless the body tags him — otherwise one
-   * tag keeps him talking for the rest of the thread.
+   * Summon Marv only when this post body explicitly tags his configured username.
+   * Reply ancestry and participant mentions never substitute for a body mention.
    */
   private async maybeEnqueueMarvReply(args: {
     post: PostWithRelations;
@@ -998,7 +992,6 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     bodySnippet: string;
     visibility: PostVisibility;
     requestedMarvMode: 'fast' | 'regular' | 'smart' | null;
-    parentAuthorUserId?: string | null;
     addedMentionIds?: string[];
   }): Promise<void> {
     const { post, actorUserId, bodySnippet, visibility, requestedMarvMode } = args;
@@ -1022,30 +1015,9 @@ export class PostsSideEffectsHandler implements OnModuleInit {
             (args.addedMentionIds && !args.addedMentionIds.includes(resolvedMarvId))) return;
       }
 
-      let parentAuthorUserId = args.parentAuthorUserId ?? null;
       if (!mentionsMarv) {
-        if (!post.parentId) {
-          this.logger.log(
-            `[marv] mention-detect post=${post.id} skip reason=no_mention mentions=[${bodyMentions.join(',') || '-'}] expected=@${marvUsernameLower}`,
-          );
-          return;
-        }
-        if (!resolvedMarvId) {
-          resolvedMarvId = await this.marvIdentity.getMarvUserId().catch(() => null);
-        }
-        if (!parentAuthorUserId) {
-          const parent = await this.prisma.post.findFirst({
-            where: { id: post.parentId, deletedAt: null },
-            select: { userId: true },
-          });
-          parentAuthorUserId = parent?.userId ?? null;
-        }
-        if (!resolvedMarvId || parentAuthorUserId !== resolvedMarvId) {
-          this.logger.log(
-            `[marv] mention-detect post=${post.id} skip reason=no_mention mentions=[${bodyMentions.join(',') || '-'}] expected=@${marvUsernameLower} parent=${parentAuthorUserId ?? '-'}`,
-          );
-          return;
-        }
+        this.logger.log(`[marv] mention-detect post=${post.id} skip reason=no_mention`);
+        return;
       }
 
       const actorIsMarv = Boolean(resolvedMarvId && actorUserId === resolvedMarvId);

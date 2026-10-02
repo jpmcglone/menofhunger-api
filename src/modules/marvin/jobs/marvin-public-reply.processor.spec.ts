@@ -1,3 +1,4 @@
+import { MARV_NO_REPLY } from '../marvin-prompt-instructions';
 import { Prisma } from '@prisma/client';
 import { MarvinPublicReplyProcessor } from './marvin-public-reply.processor';
 import { MarvinThreadContextService } from '../services/marvin-thread-context.service';
@@ -268,6 +269,25 @@ function makeProcessor(opts?: {
 }
 
 describe('MarvinPublicReplyProcessor', () => {
+  it.each(['Is this sufficient @benwisdom?', 'Thanks', 'email@marv.com'])('ignores queued posts without a current body mention: %s', async (body) => {
+    const m = makeProcessor();
+    const post = await m.prisma.post.findFirst();
+    m.prisma.post.findFirst.mockResolvedValue({ ...post, body, mentions: [{ user: { id: 'marv-id', username: 'marv' } }] });
+    await m.processor.process({ postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester' });
+    expect(m.routing.resolve).not.toHaveBeenCalled();
+    expect(m.credits.reserve).not.toHaveBeenCalled();
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
+  });
+
+  it.each([MARV_NO_REPLY, ` ${MARV_NO_REPLY}\n`, `That question is for Ben. ${MARV_NO_REPLY}`])('silently refunds a request addressed to another member: %j', async (aiText) => {
+    const m = makeProcessor({ aiText });
+    await m.processor.process({ postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester' });
+    expect(m.credits.refund).toHaveBeenCalled();
+    expect(m.credits.settle).not.toHaveBeenCalled();
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
+    expect(m.canned.sendTransientErrorThreadReply).not.toHaveBeenCalled();
+  });
+
   it('fits a long generated reply into a post without depending on the bot tier', async () => {
     const m = makeProcessor({ aiText: 'A useful answer. '.repeat(100) });
     await m.processor.process({ postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester' });
@@ -665,7 +685,7 @@ describe('MarvinPublicReplyProcessor', () => {
       // triggering post has one upload image
       m.prisma.post.findFirst.mockResolvedValueOnce({
         id: 'p-1',
-        body: 'Check this photo',
+        body: '@marv check this photo',
         visibility: 'public',
         rootId: 'r-1',
         userId: 'u-requester',

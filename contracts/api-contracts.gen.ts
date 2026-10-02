@@ -1117,7 +1117,7 @@ export type BoardThreadRowFields = {
 
 export type CallType = 'audio' | 'video';
 
-export type CallMediaTransport = 'p2p' | 'sfu';
+export type CallMediaTransport = 'sfu';
 
 export type SfuTrackKind = 'audio' | 'video' | 'screen';
 
@@ -1168,8 +1168,11 @@ export type CallParticipantDto = {
 };
 
 export type CallSessionDto = {
-  /** Absent on legacy calls means p2p. Fixed for the lifetime of a call. */
+  /** Fixed for the lifetime of a call. Absent on legacy calls is unsupported. */
   mediaTransport?: CallMediaTransport;
+  /** Server deadline for the reserved allowance; clients display but do not enforce spending. */
+  budgetWarningDeadline?: string | null;
+  endReason?: 'budget_exhausted' | 'calling_unavailable' | null;
   id: string;
   conversationId: string;
   type: CallType;
@@ -1212,13 +1215,6 @@ export type RtcSessionDescriptionDto = {
   sdp?: string;
 };
 
-export type RtcIceCandidateDto = {
-  candidate: string;
-  sdpMid: string | null;
-  sdpMLineIndex: number | null;
-  usernameFragment?: string | null;
-};
-
 export type CallsAckErrorCode =
   | 'not_authenticated'
   | 'not_member'
@@ -1231,6 +1227,8 @@ export type CallsAckErrorCode =
   | 'call_ended'
   | 'call_full'
   | 'invalid_payload'
+  | 'calling_unavailable'
+  | 'budget_exhausted'
   | 'client_update_required';
 
 export type CallsAckErrorDto = {
@@ -1304,7 +1302,7 @@ export type PresenceCallChangedPayloadDto = {
   inCall: boolean;
 };
 
-/** Relayed SDP / ICE between two current participants. Exactly one of description/candidate is set. */
+/** Server-authored SFU publication changes or authenticated participant reactions. */
 export type RtcSignalPayloadDto = {
   /** Server-originated invalidation: resubscribe to this participant’s SFU publication. */
   sfuChanged?: boolean;
@@ -1313,8 +1311,6 @@ export type RtcSignalPayloadDto = {
   fromUserId: string;
   /** The sender seat's `sessionId`, so a receiver can tell a new device's signals from the old one's. */
   fromSessionId?: string;
-  description?: RtcSessionDescriptionDto;
-  candidate?: RtcIceCandidateDto;
 };
 
 // ─── src/common/dto/cashtag.dto.ts ─────────────────────────────────────────────

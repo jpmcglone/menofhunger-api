@@ -1,5 +1,6 @@
 import { MarvinPromptBuilderService } from './marvin-prompt-builder.service';
 import type { MarvThreadPost, MarvLinkPreview } from './marvin-prompt-builder.service';
+import { MARV_NO_REPLY, MARV_THREAD_ADDRESSEE } from '../marvin-prompt-instructions';
 
 function makeService(): MarvinPromptBuilderService {
   return new MarvinPromptBuilderService();
@@ -14,6 +15,12 @@ const baseInput = {
 };
 
 describe('MarvinPromptBuilderService', () => {
+  it('tells public-thread Marv to stay silent when the request is addressed to someone else', () => {
+    const { developerNote } = makeService().build(baseInput);
+    expect(developerNote).toContain(MARV_THREAD_ADDRESSEE);
+    expect(developerNote).toContain(MARV_NO_REPLY);
+  });
+
   describe('poll rendering', () => {
     it('includes poll text after post body in thread context', () => {
       const svc = makeService();

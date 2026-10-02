@@ -20,12 +20,10 @@ const CF_BODY = {
   ],
 };
 
-const STUN_FALLBACK = [{ urls: ['stun:stun.example.com'] }];
 
 function makeService(opts: { turn?: { keyId: string; apiToken: string } | null } = {}) {
   const appConfig = {
     cloudflareTurn: jest.fn(() => opts.turn ?? null),
-    rtcIceServers: jest.fn(() => STUN_FALLBACK),
   };
   return {
     svc: new RtcIceServersService(appConfig as any),
@@ -76,10 +74,9 @@ describe('RtcIceServersService', () => {
     jest.restoreAllMocks();
   });
 
-  it('uses static STUN when Cloudflare TURN is unset', async () => {
-    const { svc, appConfig } = makeService();
-    await expect(svc.resolve()).resolves.toEqual(STUN_FALLBACK);
-    expect(appConfig.rtcIceServers).toHaveBeenCalled();
+  it('fails closed when Cloudflare TURN is unset', async () => {
+    const { svc } = makeService();
+    await expect(svc.resolve()).rejects.toThrow('connectivity is unavailable');
   });
 
   it('returns minted Cloudflare ICE servers when the key is set', async () => {
@@ -99,11 +96,10 @@ describe('RtcIceServersService', () => {
     );
   });
 
-  it('falls back to static STUN when minting fails', async () => {
-    const { svc, appConfig } = makeService({ turn: { keyId: 'key', apiToken: 'tok' } });
+  it('fails closed when minting fails', async () => {
+    const { svc } = makeService({ turn: { keyId: 'key', apiToken: 'tok' } });
     global.fetch = jest.fn(async () => ({ ok: false, status: 401 })) as unknown as typeof fetch;
-    await expect(svc.resolve()).resolves.toEqual(STUN_FALLBACK);
-    expect(appConfig.rtcIceServers).toHaveBeenCalled();
+    await expect(svc.resolve()).rejects.toThrow('connectivity is unavailable');
   });
 
   it('reuses a successful mint within the process cache', async () => {
@@ -128,6 +124,6 @@ describe('RtcIceServersService', () => {
     await expect(svc.resolve()).resolves.toEqual(minted);
 
     now.mockReturnValue(1_000_000 + 21 * 60 * 60 * 1000);
-    await expect(svc.resolve()).resolves.toEqual(STUN_FALLBACK);
+    await expect(svc.resolve()).rejects.toThrow('connectivity is unavailable');
   });
 });

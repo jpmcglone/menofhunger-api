@@ -1,3 +1,4 @@
+import { MARV_NO_REPLY } from '../marvin-prompt-instructions';
 import { parseMentionsFromBody } from '../../../common/mentions/mention-regex';
 import { boardMarvReplyId } from '../services/board-marv-reply-id';
 import { marvinFailureReason, fitMarvinPost } from '../services/marvin-failure';
@@ -192,9 +193,10 @@ export class MarvinPublicReplyProcessor {
       this.logger.log(`[marv] public-reply EXIT reason=post_missing post=${postId}`);
       return;
     }
+    const explicit = parseMentionsFromBody(post.body ?? '').some(name => name.toLowerCase() === cfg.username.trim().toLowerCase());
+    if (!explicit) return;
     if (post.kind === 'board') {
-      const explicit = parseMentionsFromBody(post.body ?? '').some(name => name.toLowerCase() === cfg.username.trim().toLowerCase());
-      if (!explicit || !marvUserIdForTyping || post.userId === marvUserIdForTyping ||
+      if (!marvUserIdForTyping || post.userId === marvUserIdForTyping ||
           !post.mentions.some(mention => mention.user.id === marvUserIdForTyping)) return;
       // A delivery may have committed before the worker lost its connection.
       const existing = await this.prisma.post.findUnique({ where: { id: boardMarvReplyId(postId) }, select: { id: true } });
@@ -619,6 +621,14 @@ export class MarvinPublicReplyProcessor {
         latencyMs: Date.now() - startedAt,
       });
       if (!isNotConfigured && post.kind === 'board') throw err;
+      return;
+    }
+
+    // Any sentinel output is an opt-out; it must never be posted publicly.
+    if (aiResult.text?.includes(MARV_NO_REPLY)) {
+      stopTyping();
+      await refundHeld();
+      this.logger.log(`[marv] public-reply EXIT reason=not_addressed_to_marv post=${postId}`);
       return;
     }
 

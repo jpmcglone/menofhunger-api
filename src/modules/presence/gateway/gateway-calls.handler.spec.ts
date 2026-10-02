@@ -71,24 +71,14 @@ describe('CallsGatewayHandler', () => {
     expect(handler.isSocketBound('s1')).toBe(false);
   });
 
-  it('drops rtc:signal and calls:state from sockets that have not joined the call', async () => {
+  it('drops calls:state from sockets that have not joined the call', async () => {
     const { handler, calls } = makeHandler({ s1: 'u1' });
-    await handler.handleRtcSignal(socket('s1'), { callId: 'call-1', toUserId: 'u2', description: { type: 'offer' } });
     await handler.handleCallsState(socket('s1'), { callId: 'call-1', micEnabled: false });
     expect(calls.relaySignal).not.toHaveBeenCalled();
     expect(calls.updateParticipantState).not.toHaveBeenCalled();
 
     await handler.handleCallsJoin(socket('s1'), { callId: 'call-1' });
-    await handler.handleRtcSignal(socket('s1'), { callId: 'call-1', toUserId: 'u2', description: { type: 'offer' } });
     await handler.handleCallsState(socket('s1'), { callId: 'call-1', micEnabled: false });
-    expect(calls.relaySignal).toHaveBeenCalledWith({
-      fromUserId: 'u1',
-      callId: 'call-1',
-      toUserId: 'u2',
-      fromSocketId: 's1',
-      description: { type: 'offer' },
-      candidate: undefined,
-    });
     expect(calls.updateParticipantState).toHaveBeenCalledWith({ userId: 'u1', callId: 'call-1', socketId: 's1', micEnabled: false });
   });
 

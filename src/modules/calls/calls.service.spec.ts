@@ -109,6 +109,11 @@ function makeService(conversations: Record<string, CallConversationContext>) {
   const presenceRedis = {
     liveSocketIdsForUser: jest.fn(async (userId: string) => new Set(liveSockets.get(userId) ?? [])),
   };
+  const sfu = { enabled: jest.fn(() => true), revokeStale: jest.fn() };
+  const budget = {
+    reserve: jest.fn(async () => ({ expiresAt: new Date(Date.now() + 10_000_000).toISOString() })),
+    allowsAllocation: jest.fn(async () => true),
+  };
   const svc = new CallsService(
     store as unknown as CallSessionStore,
     messages as any,
@@ -117,8 +122,10 @@ function makeService(conversations: Record<string, CallConversationContext>) {
     iceServers as any,
     sideEffects as any,
     presenceRedis as any,
+    sfu as any,
+    budget as any,
   );
-  return { svc, store, messages, realtime, jobs, sideEffects, liveSockets };
+  return { svc, store, messages, realtime, jobs, sideEffects, liveSockets, sfu, budget, iceServers };
 }
 
 const DIRECT: CallConversationContext = {
@@ -142,7 +149,7 @@ describe('CallsService gating', () => {
     const { svc } = makeService({
       c: { id: 'c', type: 'direct', participants: [member('alice', { verified: false }), member('bob')], relationship: null },
     });
-    const ack = await svc.start({ userId: 'alice', socketId: 's1', conversationId: 'c', type: 'video' });
+    const ack = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: 'c', type: 'video' });
     expect(ack.error?.code).toBe('not_allowed_to_start');
     expect(ack.call).toBeNull();
   });
@@ -156,11 +163,11 @@ describe('CallsService gating', () => {
       accepted: { id: 'accepted', type: 'direct', participants: [member('alice'), member('bob')], relationship: null },
     });
 
-    const denied = await svc.start({ userId: 'alice', socketId: 's1', conversationId: 'none', type: 'audio' });
+    const denied = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: 'none', type: 'audio' });
     expect(denied.error?.code).toBe('conversation_not_accepted');
 
     for (const conversationId of ['mutual', 'group', 'accepted']) {
-      const ack = await svc.start({ userId: 'alice', socketId: 's1', conversationId, type: 'audio' });
+      const ack = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId, type: 'audio' });
       expect(ack.error).toBeUndefined();
       expect(ack.call?.status).toBe('ringing');
       await svc.leave({ userId: 'alice', callId: ack.call!.id });
@@ -177,7 +184,7 @@ describe('CallsService gating', () => {
         relationship: { mutualFollow: false, sharedGroupConversation: false },
       },
     });
-    const ack = await svc.start({ userId: 'admin', socketId: 's1', conversationId: 'a', type: 'audio' });
+    const ack = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'admin', socketId: 's1', conversationId: 'a', type: 'audio' });
     expect(ack.error).toBeUndefined();
     expect(ack.call?.startedByAdmin).toBe(true);
   });
@@ -187,10 +194,10 @@ describe('CallsService gating', () => {
       c: { id: 'c', type: 'direct', participants: [member('alice'), member('bob', { verified: false })], relationship: null },
       a: { id: 'a', type: 'direct', participants: [member('admin', { siteAdmin: true }), member('bob', { verified: false })], relationship: null },
     });
-    const denied = await svc.start({ userId: 'alice', socketId: 's1', conversationId: 'c', type: 'audio' });
+    const denied = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: 'c', type: 'audio' });
     expect(denied.error?.code).toBe('callee_not_verified');
 
-    const allowed = await svc.start({ userId: 'admin', socketId: 's2', conversationId: 'a', type: 'audio' });
+    const allowed = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'admin', socketId: 's2', conversationId: 'a', type: 'audio' });
     expect(allowed.error).toBeUndefined();
     expect(allowed.call?.startedByAdmin).toBe(true);
   });
@@ -199,8 +206,8 @@ describe('CallsService gating', () => {
     const { svc } = makeService({
       c: { id: 'c', type: 'direct', participants: [member('alice'), member('marv', { isBot: true })], relationship: null },
     });
-    expect((await svc.start({ userId: 'zed', socketId: 's', conversationId: 'c', type: 'video' })).error?.code).toBe('not_member');
-    expect((await svc.start({ userId: 'alice', socketId: 's', conversationId: 'c', type: 'video' })).error?.code).toBe('callee_unavailable');
+    expect((await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'zed', socketId: 's', conversationId: 'c', type: 'video' })).error?.code).toBe('not_member');
+    expect((await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's', conversationId: 'c', type: 'video' })).error?.code).toBe('callee_unavailable');
   });
 
   it('lets an unverified member join only when an admin started the call', async () => {
@@ -212,14 +219,14 @@ describe('CallsService gating', () => {
     };
     const { svc } = makeService({ g: ctx });
 
-    const byAlice = await svc.start({ userId: 'alice', socketId: 's1', conversationId: 'g', type: 'video' });
-    const denied = await svc.join({ userId: 'newbie', socketId: 's2', callId: byAlice.call!.id });
+    const byAlice = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: 'g', type: 'video' });
+    const denied = await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'newbie', socketId: 's2', callId: byAlice.call!.id });
     expect(denied.error?.code).toBe('not_verified');
     await svc.leave({ userId: 'alice', callId: byAlice.call!.id });
     await svc.onEmptyGraceExpired(byAlice.call!.id);
 
-    const byAdmin = await svc.start({ userId: 'admin', socketId: 's3', conversationId: 'g', type: 'video' });
-    const ok = await svc.join({ userId: 'newbie', socketId: 's4', callId: byAdmin.call!.id });
+    const byAdmin = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'admin', socketId: 's3', conversationId: 'g', type: 'video' });
+    const ok = await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'newbie', socketId: 's4', callId: byAdmin.call!.id });
     expect(ok.error).toBeUndefined();
     expect(ok.call?.participants.map((p) => p.userId).sort()).toEqual(['admin', 'newbie']);
   });
@@ -228,7 +235,7 @@ describe('CallsService gating', () => {
 describe('CallsService direct call lifecycle', () => {
   it('rings the callee, records the timeline row, and schedules the ring timeout', async () => {
     const { svc, messages, realtime, jobs, sideEffects } = makeService({ [DIRECT.id]: DIRECT });
-    const ack = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
+    const ack = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
 
     expect(ack.error).toBeUndefined();
     expect(ack.iceServers).toEqual([{ urls: ['stun:stun.example.com'] }]);
@@ -262,10 +269,10 @@ describe('CallsService direct call lifecycle', () => {
 
   it('accept → active, cancels the ring timer, edits the same row (no duplicate messages)', async () => {
     const { svc, messages, jobs } = makeService({ [DIRECT.id]: DIRECT });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
     const callId = started.call!.id;
 
-    const joined = await svc.join({ userId: 'bob', socketId: 's2', callId });
+    const joined = await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', callId });
     expect(joined.call?.status).toBe('active');
     expect(joined.reconnectGraceMs).toBe(30_000);
     expect(joined.call?.participants.map((p) => p.userId).sort()).toEqual(['alice', 'bob']);
@@ -280,7 +287,7 @@ describe('CallsService direct call lifecycle', () => {
 
   it('ring timeout → missed call, session removed', async () => {
     const { svc, store, messages } = makeService({ [DIRECT.id]: DIRECT });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'audio' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'audio' });
     await svc.onRingTimeout(started.call!.id);
     expect(store.byConversation.size).toBe(0);
     expect(messages.updateCallMessage).toHaveBeenLastCalledWith(
@@ -293,7 +300,7 @@ describe('CallsService direct call lifecycle', () => {
 
   it('decline by the callee ends the call as declined; anyone else cannot decline', async () => {
     const { svc, messages } = makeService({ [DIRECT.id]: DIRECT });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
     const wrong = await svc.decline({ userId: 'alice', callId: started.call!.id });
     expect(wrong.error?.code).toBe('invalid_payload');
     const ok = await svc.decline({ userId: 'bob', callId: started.call!.id });
@@ -303,12 +310,12 @@ describe('CallsService direct call lifecycle', () => {
 
   it('status lets a ringing phone catch up: answered elsewhere, ended, and never for outsiders', async () => {
     const { svc } = makeService({ [DIRECT.id]: DIRECT });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
     const callId = started.call!.id;
     expect((await svc.status({ userId: 'bob', callId })).call?.status).toBe('ringing');
 
     // Bob picks up in the browser; his phone asks after its socket reconnects.
-    await svc.join({ userId: 'bob', socketId: 'browser', callId });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 'browser', callId });
     const answered = await svc.status({ userId: 'bob', callId });
     expect(answered.call?.status).toBe('active');
     expect(answered.call?.participants.some((p) => p.userId === 'bob')).toBe(true);
@@ -322,7 +329,7 @@ describe('CallsService direct call lifecycle', () => {
 
   it('caller hanging up while ringing → cancelled', async () => {
     const { svc, messages } = makeService({ [DIRECT.id]: DIRECT });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
     const left = await svc.leave({ userId: 'alice', callId: started.call!.id });
     expect(left.call?.status).toBe('ended');
     expect(messages.updateCallMessage).toHaveBeenLastCalledWith(expect.objectContaining({ body: 'Video call cancelled' }));
@@ -330,8 +337,8 @@ describe('CallsService direct call lifecycle', () => {
 
   it('either side hanging up an active 1:1 call ends it for both (no empty grace)', async () => {
     const { svc, store, messages, jobs } = makeService({ [DIRECT.id]: DIRECT });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
-    await svc.join({ userId: 'bob', socketId: 's2', callId: started.call!.id });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', callId: started.call!.id });
 
     const left = await svc.leave({ userId: 'alice', callId: started.call!.id });
     expect(left.call?.status).toBe('ended');
@@ -344,8 +351,8 @@ describe('CallsService direct call lifecycle', () => {
 
   it('a second start on the same conversation joins the existing call', async () => {
     const { svc } = makeService({ [DIRECT.id]: DIRECT });
-    const a = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
-    const b = await svc.start({ userId: 'bob', socketId: 's2', conversationId: DIRECT.id, type: 'video' });
+    const a = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
+    const b = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', conversationId: DIRECT.id, type: 'video' });
     expect(b.call?.id).toBe(a.call!.id);
     expect(b.call?.status).toBe('active');
   });
@@ -354,7 +361,7 @@ describe('CallsService direct call lifecycle', () => {
 describe('CallsService group calls and capacity', () => {
   it('starts active (no ring) and caps at 4 participants', async () => {
     const { svc, realtime, jobs, sideEffects, messages } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
     expect(started.call?.status).toBe('active');
     expect(started.call?.capacity).toBe(4);
     expect(realtime.emitCallsIncoming).not.toHaveBeenCalled();
@@ -364,27 +371,27 @@ describe('CallsService group calls and capacity', () => {
     expect(jobs.enqueue).not.toHaveBeenCalledWith('calls.ringTimeout', expect.anything(), expect.anything());
 
     const callId = started.call!.id;
-    expect((await svc.join({ userId: 'bob', socketId: 's2', callId })).error).toBeUndefined();
-    expect((await svc.join({ userId: 'carol', socketId: 's3', callId })).error).toBeUndefined();
-    expect((await svc.join({ userId: 'dave', socketId: 's4', callId })).error).toBeUndefined();
-    const full = await svc.join({ userId: 'erin', socketId: 's5', callId });
+    expect((await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', callId })).error).toBeUndefined();
+    expect((await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'carol', socketId: 's3', callId })).error).toBeUndefined();
+    expect((await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'dave', socketId: 's4', callId })).error).toBeUndefined();
+    const full = await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'erin', socketId: 's5', callId });
     expect(full.error?.code).toBe('call_full');
 
     // Someone leaves → a seat frees up.
     await svc.leave({ userId: 'dave', callId });
-    expect((await svc.join({ userId: 'erin', socketId: 's5', callId })).error).toBeUndefined();
+    expect((await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'erin', socketId: 's5', callId })).error).toBeUndefined();
   });
 
   it('last leaver → empty grace, then ended with duration; rejoin during grace resumes', async () => {
     const { svc, jobs, messages, store } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'audio' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'audio' });
     const callId = started.call!.id;
 
     const left = await svc.leave({ userId: 'alice', callId });
     expect(left.call?.status).toBe('empty');
     expect(jobs.enqueue).toHaveBeenCalledWith('calls.emptyGrace', { callId }, expect.objectContaining({ jobId: `call-empty-${callId}`, delay: 30_000 }));
 
-    const back = await svc.join({ userId: 'bob', socketId: 's2', callId });
+    const back = await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', callId });
     expect(back.call?.status).toBe('active');
     expect(jobs.removeById).toHaveBeenCalledWith('calls.emptyGrace', `call-empty-${callId}`);
     // A stale grace job firing now must not end a live call.
@@ -405,9 +412,9 @@ describe('CallsService group calls and capacity', () => {
 describe('CallsService reconnect grace and multi-tab', () => {
   it('socket drop → reconnecting + grace job; rejoin from a new socket cancels it', async () => {
     const { svc, jobs, realtime } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
     const callId = started.call!.id;
-    await svc.join({ userId: 'bob', socketId: 's2', callId });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', callId });
 
     await svc.markParticipantReconnecting({ userId: 'bob', callId, socketId: 's2' });
     const afterDrop = realtime.emitCallsUpdated.mock.calls.at(-1)![1].call;
@@ -418,7 +425,7 @@ describe('CallsService reconnect grace and multi-tab', () => {
       expect.objectContaining({ jobId: `call-pgrace-${callId}-bob`, delay: 30_000 }),
     );
 
-    const rejoined = await svc.join({ userId: 'bob', socketId: 's3', callId });
+    const rejoined = await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's3', callId });
     expect(rejoined.call?.participants.find((p) => p.userId === 'bob')?.connectionState).toBe('connected');
     expect(jobs.removeById).toHaveBeenCalledWith('calls.participantGrace', `call-pgrace-${callId}-bob`);
 
@@ -429,9 +436,9 @@ describe('CallsService reconnect grace and multi-tab', () => {
 
   it('grace expiry removes a participant who never came back', async () => {
     const { svc, realtime } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
     const callId = started.call!.id;
-    await svc.join({ userId: 'bob', socketId: 's2', callId });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', callId });
     await svc.markParticipantReconnecting({ userId: 'bob', callId, socketId: 's2' });
     await svc.onParticipantGraceExpired(callId, 'bob');
     expect(realtime.emitCallsUpdated.mock.calls.at(-1)![1].call.participants.map((p: any) => p.userId)).toEqual(['alice']);
@@ -439,7 +446,7 @@ describe('CallsService reconnect grace and multi-tab', () => {
 
   it('a stale socket disconnect does not disturb a seat already taken by a newer socket', async () => {
     const { svc, jobs } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
     await svc.markParticipantReconnecting({ userId: 'alice', callId: started.call!.id, socketId: 'old-socket' });
     expect(jobs.enqueue).not.toHaveBeenCalledWith('calls.participantGrace', expect.anything(), expect.anything());
   });
@@ -457,8 +464,8 @@ describe('CallsService liveness sweep', () => {
 
   it('leaves a healthy call alone', async () => {
     const { svc, liveSockets, store } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
-    await svc.join({ userId: 'bob', socketId: 's2', callId: started.call!.id });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', callId: started.call!.id });
     liveSockets.set('alice', new Set(['s1']));
     liveSockets.set('bob', new Set(['s2']));
 
@@ -468,9 +475,9 @@ describe('CallsService liveness sweep', () => {
 
   it('a seat whose socket is gone (no disconnect event ever ran) enters reconnecting, then is removed after grace', async () => {
     const { svc, liveSockets, store, jobs } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
     const callId = started.call!.id;
-    await svc.join({ userId: 'bob', socketId: 's2', callId });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', callId });
     liveSockets.set('alice', new Set(['s1']));
     // Bob's process died: presence has no proof his socket exists anymore.
     liveSockets.set('bob', new Set());
@@ -492,9 +499,9 @@ describe('CallsService liveness sweep', () => {
 
   it('when every participant is gone the call itself ends', async () => {
     const { svc, liveSockets, store, messages, realtime } = makeService({ [DIRECT.id]: DIRECT });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'audio' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'audio' });
     const callId = started.call!.id;
-    await svc.join({ userId: 'bob', socketId: 's2', callId });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', callId });
     liveSockets.set('alice', new Set());
     liveSockets.set('bob', new Set());
 
@@ -514,11 +521,11 @@ describe('CallsService liveness sweep', () => {
 
   it('ends an empty call whose grace job never fired, and a ringing call nobody answered', async () => {
     const { svc, store, liveSockets } = makeService({ [GROUP.id]: GROUP, [DIRECT.id]: DIRECT });
-    const group = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'audio' });
+    const group = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'audio' });
     await svc.leave({ userId: 'alice', callId: group.call!.id });
     expect(store.byConversation.get(GROUP.id)!.status).toBe('empty');
 
-    const direct = await svc.start({ userId: 'bob', socketId: 's2', conversationId: DIRECT.id, type: 'audio' });
+    const direct = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', conversationId: DIRECT.id, type: 'audio' });
     liveSockets.set('bob', new Set(['s2']));
     expect(store.byConversation.get(DIRECT.id)!.status).toBe('ringing');
 
@@ -547,9 +554,9 @@ describe('CallsService liveness sweep', () => {
 describe('CallsService one seat per member', () => {
   it('a newer tab joining the same call takes the seat and the displaced socket is told', async () => {
     const { svc, store, realtime } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
     const callId = started.call!.id;
-    const second = await svc.join({ userId: 'alice', socketId: 's2', callId });
+    const second = await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's2', callId });
     expect(second.error).toBeUndefined();
     expect(second.call?.participants).toHaveLength(1);
     expect(store.byConversation.get(GROUP.id)!.participants[0]!.socketId).toBe('s2');
@@ -569,7 +576,7 @@ describe('CallsService one seat per member', () => {
 
   it('records handRaised on the bound participant and surfaces it on the DTO', async () => {
     const { svc, store } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
     const callId = started.call!.id;
     await svc.updateParticipantState({ userId: 'alice', callId, socketId: 's1', handRaised: true });
     expect(store.byConversation.get(GROUP.id)!.participants[0]!.handRaised).toBe(true);
@@ -578,10 +585,10 @@ describe('CallsService one seat per member', () => {
 
   it('clears raised hands when a group call drops to two people', async () => {
     const { svc, store } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'audio' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'audio' });
     const callId = started.call!.id;
-    await svc.join({ userId: 'bob', socketId: 's2', callId });
-    await svc.join({ userId: 'carol', socketId: 's3', callId });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', callId });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'carol', socketId: 's3', callId });
     await svc.updateParticipantState({ userId: 'alice', callId, socketId: 's1', handRaised: true });
     await svc.updateParticipantState({ userId: 'bob', callId, socketId: 's2', handRaised: true });
     expect(store.byConversation.get(GROUP.id)!.participants).toHaveLength(3);
@@ -594,7 +601,7 @@ describe('CallsService one seat per member', () => {
 
   it('records screenSharing on the bound participant and surfaces it on the DTO', async () => {
     const { svc, store } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
     const callId = started.call!.id;
     await svc.updateParticipantState({ userId: 'alice', callId, socketId: 's1', screenSharing: true });
     expect(store.byConversation.get(GROUP.id)!.participants[0]!.screenSharing).toBe(true);
@@ -604,9 +611,9 @@ describe('CallsService one seat per member', () => {
 
   it('keeps only one presenter when a second participant starts sharing', async () => {
     const { svc, store } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
     const callId = started.call!.id;
-    await svc.join({ userId: 'bob', socketId: 's2', callId });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', callId });
     await svc.updateParticipantState({ userId: 'alice', callId, socketId: 's1', screenSharing: true });
     await svc.updateParticipantState({ userId: 'bob', callId, socketId: 's2', screenSharing: true });
     const parts = store.byConversation.get(GROUP.id)!.participants;
@@ -616,8 +623,8 @@ describe('CallsService one seat per member', () => {
 
   it('rejoining from the same socket is not a takeover', async () => {
     const { svc, realtime } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
-    await svc.join({ userId: 'alice', socketId: 's1', callId: started.call!.id });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', callId: started.call!.id });
     expect(realtime.emitCallsSeatTaken).not.toHaveBeenCalled();
   });
 
@@ -629,11 +636,11 @@ describe('CallsService one seat per member', () => {
       relationship: null,
     };
     const { svc, store, realtime } = makeService({ [GROUP.id]: GROUP, [OTHER.id]: OTHER });
-    const first = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
-    await svc.join({ userId: 'bob', socketId: 's2', callId: first.call!.id });
+    const first = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', callId: first.call!.id });
     expect(await store.getCallIdForUser('alice')).toBe(first.call!.id);
 
-    const second = await svc.start({ userId: 'alice', socketId: 's3', conversationId: OTHER.id, type: 'audio' });
+    const second = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's3', conversationId: OTHER.id, type: 'audio' });
     expect(second.error).toBeUndefined();
     expect(await store.getCallIdForUser('alice')).toBe(second.call!.id);
     // The first call carries on without her; her old tab sees itself gone from `participants`.
@@ -644,10 +651,10 @@ describe('CallsService one seat per member', () => {
 
   it('starting a second call while in a 1:1 hangs the 1:1 up for both', async () => {
     const { svc, store, messages } = makeService({ [DIRECT.id]: DIRECT, [GROUP.id]: GROUP });
-    const dm = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'audio' });
-    await svc.join({ userId: 'bob', socketId: 's2', callId: dm.call!.id });
+    const dm = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'audio' });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', callId: dm.call!.id });
 
-    await svc.start({ userId: 'alice', socketId: 's3', conversationId: GROUP.id, type: 'audio' });
+    await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's3', conversationId: GROUP.id, type: 'audio' });
     expect(store.byConversation.has(DIRECT.id)).toBe(false);
     expect(messages.updateCallMessage).toHaveBeenLastCalledWith(expect.objectContaining({ call: expect.objectContaining({ outcome: 'ended' }) }));
     expect(await store.getCallIdForUser('bob')).toBeNull();
@@ -655,18 +662,18 @@ describe('CallsService one seat per member', () => {
 
   it('publishes the in-call flag for presence on seat changes only', async () => {
     const { svc, realtime } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
+    const started = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
     const callId = started.call!.id;
     expect(realtime.emitPresenceCallChanged).toHaveBeenCalledWith('alice', { userId: 'alice', inCall: true });
 
-    await svc.join({ userId: 'bob', socketId: 's2', callId });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's2', callId });
     expect(realtime.emitPresenceCallChanged).toHaveBeenCalledWith('bob', { userId: 'bob', inCall: true });
     realtime.emitPresenceCallChanged.mockClear();
 
     // Reconnect + rejoin and a same-user takeover don't change the flag.
     await svc.markParticipantReconnecting({ userId: 'bob', callId, socketId: 's2' });
-    await svc.join({ userId: 'bob', socketId: 's3', callId });
-    await svc.join({ userId: 'alice', socketId: 's4', callId });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'bob', socketId: 's3', callId });
+    await svc.join({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's4', callId });
     expect(realtime.emitPresenceCallChanged).not.toHaveBeenCalled();
 
     await svc.leave({ userId: 'bob', callId, socketId: 's3' });
@@ -683,85 +690,21 @@ describe('CallsService one seat per member', () => {
   });
 });
 
-describe('CallsService signaling relay', () => {
-  it('relays only between two current participants and strips unknown fields', async () => {
-    const { svc, realtime } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video' });
-    const callId = started.call!.id;
-    await svc.join({ userId: 'bob', socketId: 's2', callId });
-
-    await svc.relaySignal({ fromUserId: 'alice', callId, toUserId: 'carol', description: { type: 'offer', sdp: 'v=0' } });
-    expect(realtime.emitRtcSignal).not.toHaveBeenCalled();
-
-    await svc.relaySignal({ fromUserId: 'carol', callId, toUserId: 'alice', description: { type: 'offer', sdp: 'v=0' } });
-    expect(realtime.emitRtcSignal).not.toHaveBeenCalled();
-
-    await svc.relaySignal({
-      fromUserId: 'alice',
-      callId,
-      toUserId: 'bob',
-      description: { type: 'offer', sdp: 'v=0', evil: 'x' },
-    });
-    expect(realtime.emitRtcSignal).toHaveBeenCalledWith('bob', { callId, fromUserId: 'alice', description: { type: 'offer', sdp: 'v=0' } });
-
-    await svc.relaySignal({
-      fromUserId: 'bob',
-      callId,
-      toUserId: 'alice',
-      candidate: { candidate: 'candidate:1 1 udp 1 1.2.3.4 5 typ host', sdpMid: '0', sdpMLineIndex: 0 },
-    });
-    expect(realtime.emitRtcSignal).toHaveBeenLastCalledWith('alice', {
-      callId,
-      fromUserId: 'bob',
-      candidate: { candidate: 'candidate:1 1 udp 1 1.2.3.4 5 typ host', sdpMid: '0', sdpMLineIndex: 0 },
-    });
-  });
-
-  it('moving the call to another device exposes the new session and silences the old device', async () => {
-    const { svc, realtime } = makeService({ [DIRECT.id]: DIRECT });
-    const started = await svc.start({
-      userId: 'alice', socketId: 'phone', conversationId: DIRECT.id, type: 'video', sessionId: 'phone-session-1',
-    });
-    const callId = started.call!.id;
-    await svc.join({ userId: 'bob', socketId: 'bob-s', callId, sessionId: 'bob-session-1' });
-    expect(started.call!.participants[0]!.sessionId).toBe('phone-session-1');
-
-    const moved = await svc.join({ userId: 'alice', socketId: 'browser', callId, sessionId: 'browser-session' });
-    expect(moved.call!.participants.find((p) => p.userId === 'alice')!.sessionId).toBe('browser-session');
-
-    // The phone's late ICE restart never reaches Bob; the browser's offer does, tagged with its session.
-    await svc.relaySignal({ fromUserId: 'alice', callId, toUserId: 'bob', fromSocketId: 'phone', description: { type: 'offer', sdp: 'v=0' } });
-    expect(realtime.emitRtcSignal).not.toHaveBeenCalled();
-    await svc.relaySignal({ fromUserId: 'alice', callId, toUserId: 'bob', fromSocketId: 'browser', description: { type: 'offer', sdp: 'v=0' } });
-    expect(realtime.emitRtcSignal).toHaveBeenCalledWith('bob', {
-      callId,
-      fromUserId: 'alice',
-      fromSessionId: 'browser-session',
-      description: { type: 'offer', sdp: 'v=0' },
-    });
-  });
-
+describe('CallsService seat sessions', () => {
   it('a new tab or device joins without the old one’s screen share; a same-tab reconnect keeps it', async () => {
     const { svc, store } = makeService({ [GROUP.id]: GROUP });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video', sessionId: 'tab-one-1234' });
+    const started = await svc.start({ sfuCapable: true,  userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'video', sessionId: 'tab-one-1234' });
     const callId = started.call!.id;
     await svc.updateParticipantState({ userId: 'alice', callId, socketId: 's1', screenSharing: true });
 
-    await svc.join({ userId: 'alice', socketId: 's2', callId, sessionId: 'tab-one-1234' });
+    await svc.join({ sfuCapable: true,  userId: 'alice', socketId: 's2', callId, sessionId: 'tab-one-1234' });
     expect(store.byConversation.get(GROUP.id)!.participants[0]!.screenSharing).toBe(true);
 
-    await svc.join({ userId: 'alice', socketId: 's3', callId, sessionId: 'tab-two-5678' });
+    await svc.join({ sfuCapable: true,  userId: 'alice', socketId: 's3', callId, sessionId: 'tab-two-5678' });
     expect(store.byConversation.get(GROUP.id)!.participants[0]!.screenSharing).toBe(false);
   });
 
-  it('drops malformed descriptions', async () => {
-    const { svc, realtime } = makeService({ [DIRECT.id]: DIRECT });
-    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
-    await svc.join({ userId: 'bob', socketId: 's2', callId: started.call!.id });
-    await svc.relaySignal({ fromUserId: 'alice', callId: started.call!.id, toUserId: 'bob', description: { type: 'bogus' } });
-    await svc.relaySignal({ fromUserId: 'alice', callId: started.call!.id, toUserId: 'bob', candidate: { sdpMid: '0' } });
-    expect(realtime.emitRtcSignal).not.toHaveBeenCalled();
-  });
+
 });
 
 describe('call message copy', () => {
@@ -776,5 +719,104 @@ describe('call message copy', () => {
     expect(callMessageBody('video', 'ended', 2520)).toBe('Video call ended · 42 min');
     expect(callMessageBody('audio', 'missed', null)).toBe('Missed voice call');
     expect(callMessageBody('audio', 'started', null)).toBe('Started a voice call');
+  });
+});
+
+
+describe('SFU-only admission and budget deadline', () => {
+  it.each(['budget_exhausted', 'calling_unavailable'] as const)('preserves %s when rejecting joins during a warning', async (reason) => {
+    const { svc, store } = makeService({ [GROUP.id]: GROUP });
+    const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'audio', sfuCapable: true, sessionId: 'client-session' });
+    const record = store.byConversation.get(GROUP.id)!;
+    record.budgetWarningDeadline = record.budgetReservedUntil;
+    record.budgetFailureReason = reason;
+    const result = await svc.join({ userId: 'bob', socketId: 's2', callId: started.call!.id, sfuCapable: true, sessionId: 'other-session' });
+    expect(result.error?.code).toBe(reason);
+    expect(record.participants).toHaveLength(1);
+  });
+  it.each([DIRECT, GROUP])('routes $type calls to SFU with the existing capacity', async (conversation) => {
+    const { svc } = makeService({ [conversation.id]: conversation });
+    const result = await svc.start({ userId: 'alice', socketId: 's1', conversationId: conversation.id, type: 'audio', sfuCapable: true, sessionId: 'client-session' });
+    expect(result.call?.mediaTransport).toBe('sfu');
+    expect(result.call?.capacity).toBe(conversation.type === 'direct' ? 2 : 4);
+  });
+  it('rejects unsupported clients and missing SFU without creating a call', async () => {
+    const { svc, sfu, store } = makeService({ [DIRECT.id]: DIRECT });
+    const request = { userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'audio' as const };
+    expect((await svc.start(request)).error?.code).toBe('client_update_required');
+    sfu.enabled.mockReturnValue(false);
+    expect((await svc.start({ ...request, sfuCapable: true, sessionId: 'client-session' })).error?.code).toBe('calling_unavailable');
+    expect(store.byConversation.size).toBe(0);
+  });
+  it('does not admit a seat when TURN minting fails', async () => {
+    const { svc, iceServers, store } = makeService({ [DIRECT.id]: DIRECT });
+    iceServers.resolve.mockRejectedValueOnce(new Error('unavailable'));
+    const result = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'audio', sfuCapable: true, sessionId: 'client-session' });
+    expect(result.error?.code).toBe('calling_unavailable');
+    expect(store.byConversation.size).toBe(0);
+  });
+  it('warns within the reserved allowance and ends server-side without extending the deadline', async () => {
+    const { svc, store, budget, realtime, sfu, liveSockets } = makeService({ [GROUP.id]: GROUP });
+    const result = await svc.start({ userId: 'alice', socketId: 's1', conversationId: GROUP.id, type: 'audio', sfuCapable: true, sessionId: 'client-session' });
+    const record = store.byConversation.get(GROUP.id)!;
+    const now = new Date();
+    record.budgetReservedUntil = new Date(now.getTime() + 75_000).toISOString();
+    liveSockets.set('alice', new Set(['s1']));
+    budget.reserve.mockResolvedValueOnce({ error: 'budget_exhausted' } as any);
+    await svc.sweepStaleSessions(now);
+    const warning = store.byConversation.get(GROUP.id)!.budgetWarningDeadline;
+    expect(warning).toBe(record.budgetReservedUntil);
+    await svc.sweepStaleSessions(new Date(now.getTime() + 15_000));
+    expect(store.byConversation.get(GROUP.id)!.budgetWarningDeadline).toBe(warning);
+    await svc.sweepStaleSessions(new Date(now.getTime() + 75_000));
+    expect(store.byConversation.size).toBe(0);
+    expect(sfu.revokeStale).toHaveBeenCalledWith(result.call!.id, 'alice');
+    expect(realtime.emitCallsUpdated).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ call: expect.objectContaining({ status: 'ended', endReason: 'budget_exhausted' }) }));
+  });
+});
+
+
+describe('same-tab reload recovery', () => {
+  it('keeps a direct call active with the other member alone while a refreshed tab rejoins', async () => {
+    const { svc, realtime } = makeService({ [DIRECT.id]: DIRECT });
+    const started = await svc.start({ sfuCapable: true, sessionId: 'alice-original', userId: 'alice', socketId: 'a1', conversationId: DIRECT.id, type: 'video' });
+    const callId = started.call!.id;
+    await svc.join({ sfuCapable: true, sessionId: 'bob-original', userId: 'bob', socketId: 'b1', callId });
+    await svc.markParticipantReconnecting({ userId: 'bob', socketId: 'b1', callId });
+    expect(realtime.emitCallsUpdated.mock.calls.at(-1)![1].call.status).toBe('active');
+    const rejoined = await svc.join({ sfuCapable: true, sessionId: 'bob-reloaded', resumeSessionId: 'bob-original', userId: 'bob', socketId: 'b2', callId });
+    expect(rejoined.call?.participants).toHaveLength(2);
+    expect(rejoined.call?.participants.find(p => p.userId === 'bob')?.sessionId).toBe('bob-reloaded');
+    await svc.onParticipantGraceExpired(callId, 'bob');
+    expect((await svc.status({ userId: 'alice', callId })).call?.status).toBe('active');
+  });
+
+  it('does not reclaim a seat transferred to another device', async () => {
+    const { svc } = makeService({ [GROUP.id]: GROUP });
+    const started = await svc.start({ sfuCapable: true, sessionId: 'alice-original', userId: 'alice', socketId: 'a1', conversationId: GROUP.id, type: 'audio' });
+    const callId = started.call!.id;
+    await svc.join({ sfuCapable: true, sessionId: 'alice-phone', userId: 'alice', socketId: 'a2', callId });
+    const ack = await svc.join({ sfuCapable: true, sessionId: 'alice-reloaded', resumeSessionId: 'alice-original', userId: 'alice', socketId: 'a3', callId });
+    expect(ack.error?.code).toBe('call_ended');
+    expect((await svc.status({ userId: 'alice', callId })).call?.participants[0]?.sessionId).toBe('alice-phone');
+  });
+
+  it('does not resurrect an expired group seat with a reload marker', async () => {
+    const { svc } = makeService({ [GROUP.id]: GROUP });
+    const started = await svc.start({ sfuCapable: true, sessionId: 'alice-original', userId: 'alice', socketId: 'a1', conversationId: GROUP.id, type: 'audio' });
+    const callId = started.call!.id;
+    await svc.join({ sfuCapable: true, sessionId: 'bob-original', userId: 'bob', socketId: 'b1', callId });
+    await svc.markParticipantReconnecting({ userId: 'bob', socketId: 'b1', callId });
+    await svc.onParticipantGraceExpired(callId, 'bob');
+    const ack = await svc.join({ sfuCapable: true, sessionId: 'bob-reloaded', resumeSessionId: 'bob-original', userId: 'bob', socketId: 'b2', callId });
+    expect(ack.error?.code).toBe('call_ended');
+    expect((await svc.status({ userId: 'alice', callId })).call?.participants).toHaveLength(1);
+  });
+
+  it('does not answer its own outgoing ring on reload', async () => {
+    const { svc } = makeService({ [DIRECT.id]: DIRECT });
+    const started = await svc.start({ sfuCapable: true, sessionId: 'alice-original', userId: 'alice', socketId: 'a1', conversationId: DIRECT.id, type: 'audio' });
+    const ack = await svc.join({ sfuCapable: true, sessionId: 'alice-reloaded', resumeSessionId: 'alice-original', userId: 'alice', socketId: 'a2', callId: started.call!.id });
+    expect(ack.call?.status).toBe('ringing');
   });
 });

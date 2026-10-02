@@ -1,66 +1,91 @@
-# Cloudflare SFU rollout (in progress)
+# SFU-only calling rollout
 
-The rollout flag defaults off. This work has not been deployed or validated against a live
-SFU application yet. Keep `CALLS_SFU_ENABLED=false` until the remaining gates pass.
+## Product decision — October 2, 2026
 
-## Paused at user request — September 28, 2026
+The owner approved a **best-effort $50 monthly application allowance**, accepting possible
+provider overage. This replaces the earlier requirement for a provider-enforced hard cap.
+`CALLS_BUDGET_BOUND_VERIFIED` is removed: do not set it or represent this ledger as a
+Cloudflare billing limit. SFU and TURN share Cloudflare's free allowance and billing.
 
-- Cloudflare OAuth now works. Production app `menofhunger-production` was created:
-  `8a55305f3b447f7a97918b6929a9b437` in account `ebd808e5f3739461ff68e4229b7eb6f3`.
-- API host credentials have NOT been configured. Secret was retained only in the tool session;
-  do not print it. Confirm availability or securely recover/rotate it when resuming.
-- User confirmed Render workspace **JP McGlone LLC**, `tea-cspqdel6l47c73c4mprg`.
-- User chose **$50/month combined SFU/TURN, end active paid calls after a warning**.
-  Enforcement and warning implementation remain pending; this is not an active provider cap.
-- Latest API source/seat race and cleanup regression suite: **14 tests passed**.
-  Changed-file lint and API typecheck were launched before the pause; retrieve their results
-  before treating them as passed.
-- No SFU commits, pushes, releases, deployment or enablement have occurred.
+## Architecture
 
-## Current implementation
+All direct and group calls use Cloudflare SFU. Direct capacity remains two, group capacity
+four. Each participant has one publisher and a receiver for each remote participant.
+Authenticated socket events own ringing, seats, reactions, device takeover, and call state.
+Client-to-client SDP/ICE forwarding, mesh media, data-channel reactions, Google STUN defaults,
+static TURN providers, and manual relay switching are removed. There is no P2P fallback.
 
-- Cloudflare SFU signaling is proxied through the authenticated `calls:sfu` socket action.
-  The App ID and secret stay in API configuration.
-- New SFU-capable group calls select SFU when explicitly enabled. Direct calls remain P2P
-  with the existing STUN/TURN configuration. Legacy calls remain P2P for their lifetime.
-- Old clients receive an update-required response when joining an SFU call.
-- Each participant uploads once. Separate receiving connections isolate peer recovery.
-- Publish, subscribe, answer, unpublish, readiness and cleanup operations are serialized.
-- Provider session identifiers are resolved from server-owned call-seat state; subscription
-  requests identify MOH participants, not arbitrary provider sessions.
-- Expired/moved seats are revoked, with a sweep retrying provider cleanup failures.
-- Web uses the existing adaptive encoder manager. Native currently retains its video cap.
-- Camera reactivation republishes tracks, rather than assuming an inactive publication survives.
-- SFU reactions use authenticated, rate-limited socket signaling.
+Cloudflare TURN credentials are minted server-side. Valid cached credentials survive mint
+outages; no valid credential means no admission. Long-lived provider secrets stay on the API.
+Old clients without SFU capability/session identity get `client_update_required`.
+Missing infrastructure gets `calling_unavailable`.
 
-## Configuration
+Both clients keep recovery deadlines outside replaceable media connections and retry within
+30 seconds. Native video uses the web quality ladder, preserving audio as video degrades.
+Replacing a receiver may briefly interrupt media; overlapping seamless replacement is not implemented.
 
-- `CLOUDFLARE_SFU_APP_ID`: the production SFU app ID.
-- `CLOUDFLARE_SFU_APP_SECRET`: server-only provider secret, configured through the host.
-- `CALLS_SFU_ENABLED`: default false. Credentials alone do not activate routing.
+## Browser refresh and reconnect
 
-Use a separate Cloudflare app for nonproduction integration tests. Do not put secrets in
-repository files, logs, clients, or screenshots.
+Page lifecycle events never emit `calls:leave`: browsers cannot reliably distinguish refresh,
+close, and suspension. Explicit Hang Up still leaves immediately. A disconnected participant
+keeps a reconnecting seat for 30 seconds; the other person stays in the call while they return.
 
-## Remaining work before rollout
+The tab stores a short-lived resume marker in sessionStorage on page exit. Only a reload
+may consume it, after authentication and signaling reconnect. The client verifies the original
+server seat and passes `resumeSessionId` on `calls:join`. The API checks it under the conversation
+lock, so reload cannot take a newer device's seat or resurrect an expired participant. A fresh
+media-session identity rebuilds the SFU publication. Mic/camera choices are preserved; screen
+sharing requires a fresh explicit action. An outgoing caller's reload does not answer its own ring.
 
-1. Configure the created production SFU app credentials securely on the confirmed Render API
-   service, keeping the rollout disabled. Create a separate test app for live validation.
-2. Finish native adaptive quality, server spend reservations/usage controls, and the agreed
-   monthly budget/exhaustion behavior: $50/month, warn then end active paid calls. Cloudflare
-   alerts do not enforce a hard bill cap; client-reported traffic must not authorize spending.
-3. Review seamless P2P-to-SFU migration for growing groups. Current selection happens at call
-   creation; there is no mid-call topology migration yet.
-4. Review receive-side quality, publication/subscription replacement continuity, bounded
-   recovery, provider timeout/partial-success handling and multi-instance cleanup.
-5. Exercise actual browser↔browser, native↔browser and native↔native calls through Cloudflare:
-   audio, camera off/on after 30+ seconds, screen share, reactions, join/leave, device takeover,
-   Wi-Fi/cellular changes, restrictive networks, reconnect, and budget exhaustion.
-6. Finish the API/web/native completion gates, then commit, push, configure deployment,
-   upload the native build, and enable the rollout only after live verification.
+## Best-effort budget reservations
 
-References:
-- https://developers.cloudflare.com/realtime/sfu/api/
-- https://developers.cloudflare.com/realtime/sfu/concepts/negotiation/
-- https://developers.cloudflare.com/realtime/sfu/platform/limits/
-- https://developers.cloudflare.com/realtime/sfu/platform/pricing/
+`CallBudgetMonth` and `CallBudgetLease` in PostgreSQL are the cross-instance authority.
+Reservations use a transaction advisory lock and the database clock. Clients cannot authorize
+spending through traffic reports. There are no refunds based on estimated usage.
+
+- Allowance: 1 TB/month, equivalent to $50 at $0.05/GB. Shared provider free usage is not credited.
+- Default reservation estimate: 1,000,000 bytes/sec per capacity-squared unit. This includes
+  generous headroom above normal encoder rates for simultaneous tracks, retries, TURN and overhead.
+  It is **not** a provider-enforced traffic bound or a prediction of the final bill.
+- Reserve 120 seconds plus 60 seconds of cleanup/reporting allowance before call admission.
+  Renewal begins with 90 seconds remaining and conservatively reserves another full interval.
+- Every new provider allocation checks the durable lease. Database errors block new allocations.
+- The 15-second sweep warns callers and ends calls at their reserved deadline. Failed provider
+  cleanup is retried. Scheduler outages, reused TURN credentials, and provider cleanup/reporting
+  delays can exceed estimates; operational availability remains necessary.
+- Intervals crossing UTC month boundaries are reserved in both months. New months do not erase
+  existing reservations. Conservative accounting can stop calls before $50 is actually billed.
+
+## Configuration and deployment
+
+- `CLOUDFLARE_SFU_APP_ID`, `CLOUDFLARE_SFU_APP_SECRET`
+- Existing `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN`
+- `CALLS_SFU_ENABLED`: operational admission switch, defaults false.
+- `CALLS_BUDGET_BYTES_PER_SECOND`: positive reservation estimate, defaults 1,000,000.
+- `RUN_SCHEDULERS=true` and Redis cleanup state must remain available.
+
+Apply `20261002140000_call_budget` through the API's configured Render pre-deploy command.
+The migration only adds two accounting tables and an index. API and web track main and deploy
+when CI passes. Older iOS clients need the SFU-capable release; publish the native update too.
+Rollback should disable new calling, not reintroduce P2P. Existing P2P calls cannot migrate in
+place and should be ended/restarted during the cutover.
+
+Cloudflare app `menofhunger-production-sfu` was created for this rollout because the existing
+app's creation-time secret was not configured on Render and cannot be retrieved through the
+management API. Its secret is delivered only to Render environment configuration.
+
+## Validation and remaining live checks
+
+Local gates cover API calls/provider/gateway regressions, isolated PostgreSQL reservation
+concurrency and rollover, web lifecycle/transport tests, contract checks, builds, and native
+SFU recovery/decoding/quality tests. See the release report for final counts.
+
+These checks do not prove physical-device or adverse-network compatibility. Follow up with
+browser↔browser, browser↔iOS, and iOS↔iOS calls on Wi-Fi, cellular, handover, and TURN-only
+networks. Exercise refresh, camera off/on, screen sharing, explicit Hang Up, device takeover,
+and exhausted grace. Review actual Cloudflare usage against the conservative application ledger.
+
+Figma: [calling warning and availability states](https://www.figma.com/design/YnuRSJB7p90n9jEY4mb4RN?node-id=1080-169).
+
+Provider references: [SFU pricing](https://developers.cloudflare.com/realtime/sfu/platform/pricing/),
+[TURN FAQ](https://developers.cloudflare.com/realtime/turn/faq/).

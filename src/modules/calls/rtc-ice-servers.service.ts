@@ -36,12 +36,12 @@ export function parseCloudflareIceServers(body: unknown): RtcIceServerDto[] | nu
     if (typeof credential === 'string' && credential) server.credential = credential;
     servers.push(server);
   }
-  return servers.length > 0 ? servers : null;
+  return servers.some((server) => server.username && server.credential && server.urls.some((url) => /^turns?:/.test(url))) ? servers : null;
 }
 
 /**
- * ICE servers for call start/join. Prefers Cloudflare Realtime TURN (short-lived
- * credentials). Falls back to static STUN / `RTC_TURN_*` if minting is unset or fails.
+ * Cloudflare ICE servers for call start/join. Valid cached credentials survive mint outages.
+ * Without authenticated TURN, admission fails rather than reducing network compatibility.
  */
 @Injectable()
 export class RtcIceServersService {
@@ -75,13 +75,13 @@ export class RtcIceServersService {
     }
     if (this.cached && this.cached.credentialsExpireAt > now) return this.cached.servers;
     this.cached = null;
-    return this.appConfig.rtcIceServers();
+    throw new Error('Cloudflare call connectivity is unavailable');
   }
 
   private async mintCloudflare(): Promise<RtcIceServerDto[] | null> {
     const cfg = this.appConfig.cloudflareTurn();
     if (!cfg) {
-      this.logger.warn('[calls] Cloudflare TURN is not configured; calls get STUN only');
+      this.logger.warn('[calls] Cloudflare TURN is not configured; calling unavailable');
       return null;
     }
     const controller = new AbortController();

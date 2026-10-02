@@ -4164,3 +4164,17 @@ model IntegrationOperationalAlert {
   resolvedAt DateTime?
   @@index([resolvedAt, openedAt])
 }
+
+// Conservative SFU/TURN reservations. Estimated traffic is never refunded.
+model CallBudgetMonth {
+  month         String @id
+  reservedBytes BigInt @default(0)
+}
+
+model CallBudgetLease {
+  callId    String   @id
+  capacity  Int
+  expiresAt DateTime @db.Timestamptz(6)
+
+  @@index([expiresAt])
+}

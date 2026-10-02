@@ -1,6 +1,6 @@
 import type { MessageConversationType } from '@prisma/client';
 
-/** Peer-to-peer mesh: every participant uploads to every other. 4 is the hard ceiling. */
+/** Product capacity: direct calls have two seats; group calls have four. */
 export const CALL_CAPACITY_DIRECT = 2;
 export const CALL_CAPACITY_GROUP = 4;
 

@@ -857,13 +857,13 @@ describe('PostsSideEffectsHandler maybeEnqueueMarvReply', () => {
     );
   });
 
-  it('enqueues a direct reply to a Marv post without an explicit @marv', async () => {
+  it.each(['yeah I agree', 'Is this sufficient @benwisdom?'])('does not enqueue a direct reply to Marv without a body mention: %s', async (body) => {
     const { handler, deps } = makeHandler();
     deps.appConfig.marvBot.mockReturnValue({ enabled: true, username: 'marv', userId: 'marv-id' });
     deps.marvIdentity.cachedMarvUserId.mockReturnValue('marv-id');
 
     await (handler as any).maybeEnqueueMarvReply({
-      post: marvPost({ body: 'yeah I agree' }),
+      post: marvPost({ body }),
       actorUserId: 'alice',
       bodySnippet: 'yeah I agree',
       visibility: 'public',
@@ -871,11 +871,8 @@ describe('PostsSideEffectsHandler maybeEnqueueMarvReply', () => {
       parentAuthorUserId: 'marv-id',
     });
 
-    expect(deps.jobs.enqueue).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ postId: 'p-reply', requestingUserId: 'alice' }),
-      expect.any(Object),
-    );
+    expect(deps.jobs.enqueue).not.toHaveBeenCalled();
+    expect(deps.presenceRealtime.emitPostsTyping).not.toHaveBeenCalled();
   });
 
   it('does not enqueue a reply to someone else just because Marv is in the thread', async () => {

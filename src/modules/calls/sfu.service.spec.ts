@@ -48,6 +48,7 @@ function harness() {
     messages as never,
     realtime as never,
     { runSchedulers: () => true } as never,
+    { allowsAllocation: async () => true } as never,
   );
   const send = (action: string, fields: any = {}, user = 'alice', socket = 'socket-a') =>
     service.handle(user, socket, {

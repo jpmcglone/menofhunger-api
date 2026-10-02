@@ -8,6 +8,7 @@ import {
   MARV_NAME_AND_HANDLE,
   MARV_NO_PROACTIVE_OFFERS,
   MARV_THEOLOGY,
+  MARV_THREAD_ADDRESSEE,
   MARV_THREAD_TOOL_FALLBACK,
   MARV_THREAD_TOOL_OPTIONAL,
   MARV_USER_LOOKUP_HINT,
@@ -201,6 +202,7 @@ export class MarvinPromptBuilderService {
     lines.push(MARV_NAME_AND_HANDLE);
     if (input.source === 'public_thread') {
       lines.push('Source: public post thread.');
+      lines.push(MARV_THREAD_ADDRESSEE);
       if (input.triggeringPostId) lines.push(`Triggering post id: ${input.triggeringPostId}.`);
       if (input.rootPostId) lines.push(`Thread root post id: ${input.rootPostId}.`);
 

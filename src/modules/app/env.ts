@@ -141,24 +141,6 @@ export const envSchema = z
       z.string().optional(),
     ),
 
-    // WebRTC ICE servers for DM calling. STUN defaults to Google's public servers.
-    // TURN is optional fallback infrastructure; all three TURN vars must be set to enable it.
-    RTC_STUN_URLS: z.preprocess(
-      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
-      z.string().optional(),
-    ),
-    RTC_TURN_URLS: z.preprocess(
-      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
-      z.string().optional(),
-    ),
-    RTC_TURN_USERNAME: z.preprocess(
-      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
-      z.string().optional(),
-    ),
-    RTC_TURN_CREDENTIAL: z.preprocess(
-      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
-      z.string().optional(),
-    ),
     // Cloudflare Realtime TURN. When both are set, start/join mints short-lived ICE credentials.
     CF_TURN_KEY_ID: z.preprocess(
       (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
@@ -172,6 +154,7 @@ export const envSchema = z
     // SFU rollout is opt-in; credentials alone must never change live call routing.
     CLOUDFLARE_SFU_APP_ID: z.string().optional(),
     CLOUDFLARE_SFU_APP_SECRET: z.string().optional(),
+    CALLS_BUDGET_BYTES_PER_SECOND: z.coerce.number().int().positive().default(1_000_000),
     CALLS_SFU_ENABLED: z.enum(["true", "false"]).optional().default("false"),
 
     // Cloudflare R2 (S3-compatible) for public assets (avatars/banners).

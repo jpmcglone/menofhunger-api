@@ -1,3 +1,4 @@
+import { CallBudgetService } from './call-budget.service';
 import { SfuService } from './sfu.service';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import * as crypto from 'node:crypto';
@@ -7,9 +8,7 @@ import type {
   CallType,
   MessageCallDto,
   MessageCallOutcome,
-  RtcIceCandidateDto,
   RtcIceServerDto,
-  RtcSessionDescriptionDto,
 } from '../../common/dto/call.dto';
 import type { UserListDto } from '../../common/dto/user.dto';
 import { RtcIceServersService } from './rtc-ice-servers.service';
@@ -30,8 +29,6 @@ import {
   callParticipantGraceJobId,
   callRingTimeoutJobId,
 } from './calls.constants';
-
-const MAX_SDP_BYTES = 200_000;
 
 function ackError(code: CallsAckErrorCode, message: string): CallsAckDto {
   return { call: null, error: { code, message } };
@@ -76,8 +73,7 @@ export function callMessageBody(type: CallType, outcome: MessageCallOutcome, dur
 
 /**
  * DM voice/video call lifecycle. Owns the ephemeral Redis session, authorization, the
- * timeline row, and the timers. Never touches media: browsers negotiate directly and
- * this service only relays SDP/ICE between two current participants.
+ * timeline row, and the timers. Media flows exclusively through Cloudflare SFU.
  */
 @Injectable()
 export class CallsService {
@@ -91,7 +87,8 @@ export class CallsService {
     private readonly iceServers: RtcIceServersService,
     private readonly sideEffects: SideEffectsService,
     private readonly presenceRedis: PresenceRedisStateService,
-    private readonly sfu?: SfuService,
+    private readonly sfu: SfuService,
+    private readonly budget: CallBudgetService,
   ) {}
 
   /** Fields every successful start/join ack carries so a client can connect and knows when to stop retrying. */
@@ -111,7 +108,6 @@ export class CallsService {
   }): Promise<CallsAckDto> {
     const { userId, socketId, conversationId, type } = params;
     const sessionId = params.sessionId ?? null;
-    const iceServersPromise = this.iceServers.resolve();
     let ctx: CallConversationContext;
     try {
       ctx = await this.messages.getCallConversationContext({ userId, conversationId });
@@ -131,8 +127,6 @@ export class CallsService {
       return await this.join({ userId, socketId, callId: existing.id, sessionId, sfuCapable: params.sfuCapable });
     }
 
-    // One seat per member: starting here hangs up whatever they were in elsewhere.
-    await this.leaveOtherCall(userId, null);
 
     // Verified members call; admins call anybody. Group chats are a relationship by definition.
     // For a DM the other side must have accepted the thread, follow us back, or share a group
@@ -157,6 +151,12 @@ export class CallsService {
       ringTargetUserId = callee.userId;
     }
 
+    if (!params.sfuCapable || !sessionId) return ackError('client_update_required', 'Update the app to use calls.');
+    if (!this.sfu?.enabled()) return ackError('calling_unavailable', 'Calling is temporarily unavailable. Please try again later.');
+    let iceServers: RtcIceServerDto[];
+    try { iceServers = await this.iceServers.resolve(); }
+    catch { return ackError('calling_unavailable', 'Calling is temporarily unavailable. Please try again later.'); }
+
     const now = new Date();
     const nowIso = now.toISOString();
     const isDirect = ctx.type === 'direct';
@@ -164,7 +164,7 @@ export class CallsService {
       id: crypto.randomUUID(),
       conversationId,
       conversationType: ctx.type,
-      mediaTransport: !isDirect && params.sfuCapable && sessionId && this.sfu?.enabled() ? 'sfu' : 'p2p',
+      mediaTransport: 'sfu',
       type,
       status: isDirect ? 'ringing' : 'active',
       startedByUserId: userId,
@@ -179,6 +179,11 @@ export class CallsService {
       peakParticipantCount: 1,
       participants: [this.newParticipant(userId, socketId, nowIso, type === 'video', sessionId)],
     };
+
+    const allowance = await this.budget.reserve(record.id, record.capacity);
+    if ('error' in allowance) return ackError(allowance.error, 'Calling is temporarily unavailable. Please try again later.');
+    record.budgetReservedUntil = allowance.expiresAt;
+    await this.leaveOtherCall(userId, null);
 
     const created = await this.store.withConversationLock(conversationId, async () => {
       const raced = await this.store.getByConversationId(conversationId);
@@ -222,15 +227,15 @@ export class CallsService {
       });
     }
 
-    return this.connectAck(record, await iceServersPromise);
+    return this.connectAck(record, iceServers);
   }
 
-  async join(params: { userId: string; socketId: string; callId: string; sessionId?: string | null; sfuCapable?: boolean }): Promise<CallsAckDto> {
+  async join(params: { userId: string; socketId: string; callId: string; sessionId?: string | null; sfuCapable?: boolean; resumeSessionId?: string }): Promise<CallsAckDto> {
     const { userId, socketId, callId } = params;
     const sessionId = params.sessionId ?? null;
     const initial = await this.store.getByCallId(callId);
     if (!initial) return ackError('call_not_found', 'This call has ended.');
-    if (initial.mediaTransport === 'sfu' && (!params.sfuCapable || !sessionId)) {
+    if (!params.sfuCapable || !sessionId) {
       return ackError('client_update_required', 'Update the app to join this call.');
     }
 
@@ -250,8 +255,20 @@ export class CallsService {
       return ackError('not_verified', 'Verify your account to join calls.');
     }
 
-    // One seat per member: joining here hangs up whatever they were in elsewhere.
-    await this.leaveOtherCall(userId, callId);
+    if (initial.mediaTransport !== 'sfu' || !this.sfu?.enabled()) {
+      return ackError('calling_unavailable', 'Calling is temporarily unavailable. Please try again later.');
+    }
+    let iceServers: RtcIceServerDto[];
+    try { iceServers = await this.iceServers.resolve(); }
+    catch { return ackError('calling_unavailable', 'Calling is temporarily unavailable. Please try again later.'); }
+    if (initial.budgetWarningDeadline) {
+      const reason = initial.budgetFailureReason ?? 'budget_exhausted';
+      return ackError(reason, reason === 'budget_exhausted'
+        ? 'Calling has reached its monthly allowance. Please try again next month.'
+        : 'Calling is temporarily unavailable. Please try again later.');
+    }
+    if (!(await this.budget.allowsAllocation(callId))) return ackError('calling_unavailable', 'Calling is temporarily unavailable. Please try again later.');
+    if (!params.resumeSessionId) await this.leaveOtherCall(userId, callId);
 
     type JoinResult = {
       ack: CallsAckDto;
@@ -270,7 +287,6 @@ export class CallsService {
       displacedSocketId: null,
       newlySeated: false,
     });
-    const iceServers = await this.iceServers.resolve();
     const result = await this.store.withConversationLock(initial.conversationId, async (): Promise<JoinResult> => {
       const record = await this.store.getByConversationId(initial.conversationId);
       if (!record || record.id !== callId || record.status === 'ended') {
@@ -281,6 +297,10 @@ export class CallsService {
       let displacedSocketId: string | null = null;
       let newlySeated = false;
       const existing = record.participants.find((p) => p.userId === userId);
+      // Reload recovery may reclaim only its previous seat, never a newer device or expired seat.
+      if (params.resumeSessionId && existing?.sessionId !== params.resumeSessionId) {
+        return fail(ackError('call_ended', 'This call moved to another device or your reconnect window expired.'));
+      }
       if (existing) {
         // The newest tab/device wins the seat; the previous one is told to stand down.
         if (existing.connectionState === 'connected' && existing.socketId && existing.socketId !== socketId) {
@@ -310,7 +330,7 @@ export class CallsService {
       }
 
       let becameActiveFromRinging = false;
-      if (record.status === 'ringing') {
+      if (record.status === 'ringing' && record.participants.length >= 2) {
         record.status = 'active';
         record.activeAt = record.activeAt ?? nowIso;
         becameActiveFromRinging = true;
@@ -442,41 +462,6 @@ export class CallsService {
     await this.emitUpdatedToConversation(record);
   }
 
-  /**
-   * Relay SDP / ICE. Both ends must be current participants of the same call, so knowing
-   * a call id is never enough to push signaling into someone's browser.
-   */
-  async relaySignal(params: {
-    fromUserId: string;
-    callId: string;
-    toUserId: string;
-    /** Sending socket. When another socket holds the sender's seat, the signal is stale. */
-    fromSocketId?: string;
-    description?: unknown;
-    candidate?: unknown;
-  }): Promise<void> {
-    const { fromUserId, callId, toUserId, fromSocketId } = params;
-    if (!toUserId || toUserId === fromUserId) return;
-    const record = await this.store.getByCallId(callId);
-    if (!record || record.status === 'ended') return;
-    const sender = record.participants.find((p) => p.userId === fromUserId);
-    if (!sender || !record.participants.some((p) => p.userId === toUserId)) return;
-    // A device that lost its seat (the member moved the call) must not keep renegotiating the
-    // far side's connection. A seat mid-reconnect (no socket yet) may still signal.
-    if (fromSocketId && sender.socketId && sender.socketId !== fromSocketId) return;
-
-    const description = this.sanitizeDescription(params.description);
-    const candidate = this.sanitizeCandidate(params.candidate);
-    if (!description && !candidate) return;
-    this.realtime.emitRtcSignal(toUserId, {
-      callId,
-      fromUserId,
-      ...(sender.sessionId ? { fromSessionId: sender.sessionId } : {}),
-      ...(description ? { description } : {}),
-      ...(candidate ? { candidate } : {}),
-    });
-  }
-
   /** The socket bound to a participant dropped. Hold the seat for a grace period. */
   async markParticipantReconnecting(params: { userId: string; callId: string; socketId: string | null }): Promise<void> {
     const { userId, callId, socketId } = params;
@@ -557,6 +542,27 @@ export class CallsService {
       return 0;
     }
     const nowMs = now.getTime();
+    if (record.mediaTransport === 'sfu') {
+      const reservedUntil = Date.parse(record.budgetReservedUntil ?? '');
+      if (!Number.isFinite(reservedUntil) || nowMs >= reservedUntil) {
+        await this.endCall(conversationId, record.id, 'ended', record.budgetFailureReason ?? 'budget_exhausted');
+        return 1;
+      }
+      if (!record.budgetWarningDeadline && reservedUntil - nowMs <= 90_000) {
+        const allowance = await this.budget.reserve(record.id, record.capacity);
+        await this.store.withConversationLock(conversationId, async () => {
+          const current = await this.store.getByConversationId(conversationId);
+          if (!current || current.id !== record.id || current.status === 'ended') return;
+          if ('error' in allowance) {
+            current.budgetWarningDeadline = current.budgetReservedUntil;
+            current.budgetFailureReason = allowance.error;
+          }
+          else current.budgetReservedUntil = allowance.expiresAt;
+          await this.store.save(current);
+          if ('error' in allowance) await this.emitUpdatedToConversation(current);
+        });
+      }
+    }
     const ageOf = (iso: string | null | undefined): number => (iso ? nowMs - new Date(iso).getTime() : Number.POSITIVE_INFINITY);
 
     if (record.status === 'ringing' && ageOf(record.startedAt) > CALL_RING_TIMEOUT_MS + CALL_SWEEP_SLACK_MS) {
@@ -649,7 +655,7 @@ export class CallsService {
     return outcome.record;
   }
 
-  private async endCall(conversationId: string, callId: string, outcome: MessageCallOutcome): Promise<CallSessionRecord | null> {
+  private async endCall(conversationId: string, callId: string, outcome: MessageCallOutcome, endReason?: 'budget_exhausted' | 'calling_unavailable'): Promise<CallSessionRecord | null> {
     let seated: string[] = [];
     const ended = await this.store.withConversationLock(conversationId, async () => {
       const rec = await this.store.getByConversationId(conversationId);
@@ -657,6 +663,7 @@ export class CallsService {
       const now = new Date();
       seated = rec.participants.map((p) => p.userId);
       rec.status = 'ended';
+      if (endReason) rec.endReason = endReason;
       rec.endedAt = now.toISOString();
       rec.participants = [];
       await this.store.delete(rec);
@@ -740,26 +747,4 @@ export class CallsService {
     }
   }
 
-  private sanitizeDescription(raw: unknown): RtcSessionDescriptionDto | null {
-    if (!raw || typeof raw !== 'object') return null;
-    const r = raw as Record<string, unknown>;
-    const type = typeof r.type === 'string' ? r.type : '';
-    if (!['offer', 'answer', 'pranswer', 'rollback'].includes(type)) return null;
-    const sdp = typeof r.sdp === 'string' ? r.sdp : undefined;
-    if (sdp && Buffer.byteLength(sdp, 'utf8') > MAX_SDP_BYTES) return null;
-    return sdp !== undefined ? { type, sdp } : { type };
-  }
-
-  private sanitizeCandidate(raw: unknown): RtcIceCandidateDto | null {
-    if (!raw || typeof raw !== 'object') return null;
-    const r = raw as Record<string, unknown>;
-    const candidate = typeof r.candidate === 'string' ? r.candidate : null;
-    if (candidate === null || candidate.length > 2_000) return null;
-    return {
-      candidate,
-      sdpMid: typeof r.sdpMid === 'string' ? r.sdpMid : null,
-      sdpMLineIndex: typeof r.sdpMLineIndex === 'number' && Number.isFinite(r.sdpMLineIndex) ? r.sdpMLineIndex : null,
-      ...(typeof r.usernameFragment === 'string' ? { usernameFragment: r.usernameFragment } : {}),
-    };
-  }
 }

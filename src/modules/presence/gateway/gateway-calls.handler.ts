@@ -78,14 +78,16 @@ export class CallsGatewayHandler {
     }
   }
 
-  async handleCallsJoin(client: Socket, payload: { callId?: string; sessionId?: string; sfuCapable?: boolean }): Promise<CallsAckDto> {
+  async handleCallsJoin(client: Socket, payload: { callId?: string; sessionId?: string; sfuCapable?: boolean; resumeSessionId?: string }): Promise<CallsAckDto> {
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return this.notAuthed();
     const callId = String(payload?.callId ?? '').trim();
     if (!callId) return this.invalid('Missing call id.');
+    const resumeSessionId = payload?.resumeSessionId === undefined ? undefined : callSessionIdFrom(payload.resumeSessionId);
+    if (resumeSessionId === null) return this.invalid('Invalid reconnect session.');
     try {
       const sessionId = callSessionIdFrom(payload?.sessionId);
-      const ack = await this.calls.join({ userId, socketId: client.id, callId, sessionId, sfuCapable: payload?.sfuCapable === true });
+      const ack = await this.calls.join({ userId, socketId: client.id, callId, sessionId, sfuCapable: payload?.sfuCapable === true, ...(resumeSessionId ? { resumeSessionId } : {}) });
       return this.bind(client, ack, userId);
     } catch (err) {
       this.logger.warn(`[calls] join failed user=${userId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -153,31 +155,6 @@ export class CallsGatewayHandler {
       });
     } catch {
       // Best-effort; the next state change resyncs.
-    }
-  }
-
-  async handleRtcSignal(
-    client: Socket,
-    payload: { callId?: string; toUserId?: string; description?: unknown; candidate?: unknown },
-  ): Promise<void> {
-    const userId = this.presence.getUserIdForSocket(client.id);
-    if (!userId) return;
-    const callId = String(payload?.callId ?? '').trim();
-    const toUserId = String(payload?.toUserId ?? '').trim();
-    if (!callId || !toUserId) return;
-    // Signaling may only originate from the socket that joined the call.
-    if (this.boundCallBySocket.get(client.id)?.callId !== callId) return;
-    try {
-      await this.calls.relaySignal({
-        fromUserId: userId,
-        callId,
-        toUserId,
-        fromSocketId: client.id,
-        description: payload?.description,
-        candidate: payload?.candidate,
-      });
-    } catch (err) {
-      this.logger.debug(`[calls] relay failed user=${userId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
