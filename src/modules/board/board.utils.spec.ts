@@ -1,6 +1,4 @@
 import {
-  boardHotScore,
-  boardRankPoints,
   boardRangeStart,
   decodeOffsetCursor,
   encodeOffsetCursor,
@@ -36,34 +34,6 @@ describe("board utils", () => {
       "ask",
       "hiring",
     ]);
-  });
-
-  it("ranks Top with the feed-weighted boost score, not raw boost count", () => {
-    expect(boardRankPoints(6, 2)).toBe(6);
-    expect(boardRankPoints(null, 4)).toBe(4);
-    expect(boardRankPoints(undefined, 0)).toBe(0);
-    const now = new Date("2026-09-25T12:00:00Z");
-    const created = new Date("2026-09-25T11:00:00Z");
-    expect(boardHotScore(boardRankPoints(6, 2), created, now)).toBeGreaterThan(
-      boardHotScore(boardRankPoints(2, 2), created, now),
-    );
-  });
-
-  it("ranks like the HN front page: newer threads beat older ones with the same points", () => {
-    const now = new Date("2026-09-25T12:00:00Z");
-    const fresh = boardHotScore(10, new Date("2026-09-25T11:00:00Z"), now);
-    const old = boardHotScore(10, new Date("2026-09-24T12:00:00Z"), now);
-    const popularOld = boardHotScore(
-      1000,
-      new Date("2026-09-24T12:00:00Z"),
-      now,
-    );
-    expect(fresh).toBeGreaterThan(old);
-    expect(popularOld).toBeGreaterThan(fresh);
-    expect(boardHotScore(0, now, now)).toBe(boardHotScore(1, now, now));
-    expect(boardHotScore(0, now, now)).toBeGreaterThan(
-      boardHotScore(10, new Date("2026-09-24T12:00:00Z"), now),
-    );
   });
 
   it("computes ranged Top windows and round-trips offset cursors", () => {

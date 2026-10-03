@@ -4,9 +4,6 @@ export const BOARD_MAX_TAGS = 3;
 export const BOARD_TAG_MAX_LENGTH = 24;
 export const BOARD_THREADS_PER_HOUR = 5;
 export const BOARD_DUPLICATE_WINDOW_DAYS = 30;
-/** "Top" without a range ranks recent threads only; older ones have decayed out anyway. */
-export const BOARD_TOP_LOOKBACK_DAYS = 14;
-export const BOARD_TOP_CANDIDATES = 1500;
 export const BOARD_COMMENTS_MAX_ROWS = 2000;
 export const BOARD_SEED_TAGS = ["ask", "show", "hiring"] as const;
 
@@ -81,36 +78,6 @@ export function normalizeBoardTags(
     if (slug && !out.includes(slug)) out.push(slug);
   }
   return out;
-}
-
-/**
- * Ranking points for Board Top. Uses the feed's tier-weighted `boostScore`
- * (premium 1.25 / verified 1 / everyone else 0.5) when present; otherwise raw boosts.
- * The number shown on the row stays `boostCount`.
- */
-export function boardRankPoints(
-  boostScore: number | null | undefined,
-  boostCount: number,
-): number {
-  return typeof boostScore === "number" && Number.isFinite(boostScore)
-    ? boostScore
-    : Math.max(0, boostCount);
-}
-
-/**
- * Hacker News front-page gravity: points / (ageHours + 2)^1.8.
- * Unboosted threads still rank as 1 point so a brand-new post can exist on Top.
- */
-export function boardHotScore(
-  points: number,
-  createdAt: Date,
-  now: Date = new Date(),
-): number {
-  const ageHours = Math.max(
-    0,
-    (now.getTime() - createdAt.getTime()) / 3_600_000,
-  );
-  return Math.max(1, points) / Math.pow(ageHours + 2, 1.8);
 }
 
 export type BoardRange = "day" | "week" | "month" | "year" | "all";

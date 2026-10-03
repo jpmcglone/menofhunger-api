@@ -83,12 +83,10 @@ function setup(viewer: Record<string, unknown> | null, row = threadRow()) {
     user: { update: jest.fn().mockResolvedValue({}) },
   };
   const posts = {
-    viewerBlockSets: jest
-      .fn()
-      .mockResolvedValue({
-        blockedByViewer: new Set(),
-        viewerBlockedBy: new Set(),
-      }),
+    viewerBlockSets: jest.fn().mockResolvedValue({
+      blockedByViewer: new Set(),
+      viewerBlockedBy: new Set(),
+    }),
     viewerBoostedPostIds: jest.fn().mockResolvedValue(new Set()),
     viewerBookmarksByPostId: jest.fn().mockResolvedValue(new Map()),
     viewerLastSeenAtByPostId: jest
@@ -295,7 +293,11 @@ describe("BoardService list scope", () => {
     ]);
     const thread = await service.getThread("p", "thread-1");
     expect(thread.newCommentCount).toBe(4);
-    expect(posts.viewerLastSeenAtByPostId).toHaveBeenCalledWith({ viewerUserId: "p", postIds: ["thread-1"], openedOnly: true });
+    expect(posts.viewerLastSeenAtByPostId).toHaveBeenCalledWith({
+      viewerUserId: "p",
+      postIds: ["thread-1"],
+      openedOnly: true,
+    });
     const groupWhere = prisma.post.groupBy.mock.calls[0][0].where;
     expect(groupWhere.userId).toEqual({ notIn: ["p"] });
     expect(groupWhere.OR).toEqual([
@@ -308,47 +310,130 @@ describe("BoardService list scope", () => {
     ).toBeNull();
   });
 
-  it("ranks default Top by weighted boosts, and still shows raw points on the row", async () => {
-    const older = threadRow({
-      id: "raw",
-      createdAt: new Date("2026-09-25T10:00:00Z"),
-      boostCount: 4,
-      boostScore: 4,
-    });
-    const premium = threadRow({
-      id: "weighted",
-      createdAt: new Date("2026-09-25T10:00:00Z"),
-      boostCount: 2,
-      boostScore: 6,
-    });
-    const { service, prisma, posts } = setup(viewer);
-    posts.ensureBoostScoresFresh.mockResolvedValue(
-      new Map([
-        ["weighted", { boostScore: 6, boostScoreUpdatedAt: new Date() }],
-        ["raw", { boostScore: 4, boostScoreUpdatedAt: new Date() }],
-      ]),
-    );
-    prisma.post.findMany
-      .mockResolvedValueOnce([
-        {
-          id: "weighted",
-          boostCount: 2,
-          boostScore: 6,
-          createdAt: premium.createdAt,
-        },
-        { id: "raw", boostCount: 4, boostScore: 4, createdAt: older.createdAt },
-      ])
-      .mockResolvedValueOnce([premium, older]);
-    const listed = await service.listThreads({
+  it.each([null, "all", "day", "week", "month", "year"] as const)(
+    "orders Top by raw votes with newer ties and applies only range %s",
+    async (range) => {
+      const { service, prisma, posts } = setup(viewer);
+      const older = threadRow({
+        id: "older",
+        createdAt: new Date("2020-01-01T00:00:00Z"),
+        boostCount: 4,
+        boostScore: 0,
+      });
+      const newer = threadRow({ id: "newer", boostCount: 2, boostScore: 6 });
+      prisma.post.findMany.mockResolvedValue([older, newer]);
+      const before = Date.now();
+      const listed = await service.listThreads({
+        ...listParams,
+        sort: "top",
+        range,
+        viewerUserId: "viewer",
+      });
+      expect(
+        listed.threads.map((thread) => [thread.id, thread.points]),
+      ).toEqual([
+        ["older", 4],
+        ["newer", 2],
+      ]);
+      const query = prisma.post.findMany.mock.calls[0][0];
+      expect(query.orderBy).toEqual([
+        { boostCount: "desc" },
+        { createdAt: "desc" },
+        { id: "desc" },
+      ]);
+      expect(query.skip).toBe(0);
+      expect(query.take).toBe(31);
+      if (range && range !== "all") {
+        const days = { day: 1, week: 7, month: 30, year: 365 }[range];
+        const start = query.where.AND[1].createdAt.gte.getTime();
+        expect(start).toBeGreaterThanOrEqual(before - days * 86_400_000);
+        expect(start).toBeLessThanOrEqual(Date.now() - days * 86_400_000);
+      } else {
+        expect(JSON.stringify(query.where)).not.toContain('"createdAt"');
+      }
+      expect(posts.ensureBoostScoresFresh).not.toHaveBeenCalled();
+      expect(listed.nextCursor).toBeNull();
+    },
+  );
+
+  it("paginates Top beyond the former candidate cap and ends on the last page", async () => {
+    const { service, prisma } = setup(viewer);
+    prisma.post.findMany.mockResolvedValue([
+      threadRow({ id: "one" }),
+      threadRow({ id: "two" }),
+      threadRow({ id: "three" }),
+    ]);
+    const params = {
       ...listParams,
-      sort: "top",
+      sort: "top" as const,
       viewerUserId: "viewer",
+      limit: 2,
+      cursor: Buffer.from("o:1500").toString("base64url"),
+    };
+    const first = await service.listThreads(params);
+    expect(first.threads.map((thread) => thread.id)).toEqual(["one", "two"]);
+    expect(prisma.post.findMany.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ skip: 1500, take: 3 }),
+    );
+    expect(Buffer.from(first.nextCursor!, "base64url").toString()).toBe(
+      "o:1502",
+    );
+    prisma.post.findMany.mockResolvedValue([threadRow({ id: "three" })]);
+    const last = await service.listThreads({
+      ...params,
+      cursor: first.nextCursor,
     });
-    expect(listed.threads.map((t) => t.id)).toEqual(["weighted", "raw"]);
-    expect(listed.threads[0]?.points).toBe(2);
-    expect(posts.ensureBoostScoresFresh).toHaveBeenCalledWith([
-      "weighted",
-      "raw",
+    expect(prisma.post.findMany.mock.calls[1][0].skip).toBe(1502);
+    expect(last.threads.map((thread) => thread.id)).toEqual(["three"]);
+    expect(last.nextCursor).toBeNull();
+  });
+
+  it("sorts Top comments and nested replies by raw votes with newer ties", async () => {
+    const { service, prisma, posts } = setup(
+      viewer,
+      threadRow({ visibility: "public" }),
+    );
+    const comment = (
+      id: string,
+      votes: number,
+      date: string,
+      parentId = "thread-1",
+    ) =>
+      threadRow({
+        id,
+        parentId,
+        rootId: "thread-1",
+        boostCount: votes,
+        boostScore: votes === 0 ? 100 : 0,
+        createdAt: new Date(date),
+        visibility: "public",
+      });
+    prisma.post.findMany.mockResolvedValue([
+      comment("fresh", 0, "2026-10-02"),
+      comment("old", 4, "2020-01-01"),
+      comment("tie-old", 2, "2026-09-01"),
+      comment("tie-new", 2, "2026-10-01"),
+      comment("reply-new", 0, "2026-10-02", "old"),
+      comment("reply-old", 3, "2020-01-02", "old"),
+    ]);
+    const page = await service.listComments("viewer", "thread-1", "top");
+    expect(page.comments.map((comment) => comment.id)).toEqual([
+      "old",
+      "tie-new",
+      "tie-old",
+      "fresh",
+    ]);
+    expect(page.comments[0].replies.map((comment) => comment.id)).toEqual([
+      "reply-old",
+      "reply-new",
+    ]);
+    expect(posts.ensureBoostScoresFresh).not.toHaveBeenCalled();
+    const newest = await service.listComments("viewer", "thread-1", "new");
+    expect(newest.comments.map((comment) => comment.id)).toEqual([
+      "fresh",
+      "tie-new",
+      "tie-old",
+      "old",
     ]);
   });
 

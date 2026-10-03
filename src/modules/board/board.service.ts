@@ -51,10 +51,6 @@ import {
   BOARD_THREADS_PER_HOUR,
   BOARD_TITLE_MAX,
   BOARD_TITLE_MIN,
-  BOARD_TOP_CANDIDATES,
-  BOARD_TOP_LOOKBACK_DAYS,
-  boardHotScore,
-  boardRankPoints,
   boardRangeStart,
   decodeOffsetCursor,
   encodeOffsetCursor,
@@ -304,104 +300,28 @@ export class BoardService implements OnModuleInit {
         rows = rows.slice(0, limit);
         nextCursor = rows[rows.length - 1]?.id ?? null;
       }
-    } else if (params.range) {
+    } else {
       const offset = decodeOffsetCursor(params.cursor);
-      const start = boardRangeStart(params.range);
-      const candidates = await this.prisma.post.findMany({
+      const start = params.range ? boardRangeStart(params.range) : null;
+      // Top matches the visible vote count. A range only filters creation time.
+      rows = await this.prisma.post.findMany({
         where: start ? { AND: [where, { createdAt: { gte: start } }] } : where,
-        select: {
-          id: true,
-          boostCount: true,
-          boostScore: true,
-          createdAt: true,
-        },
+        include: POST_LIST_INCLUDE,
         orderBy: [
           { boostCount: "desc" },
           { createdAt: "desc" },
           { id: "desc" },
         ],
-        take: BOARD_TOP_CANDIDATES,
+        skip: offset,
+        take: limit + 1,
       });
-      const ranked = await this.rankBoardThreads(candidates, {
-        gravity: false,
-      });
-      const pageIds = ranked.slice(offset, offset + limit).map((r) => r.id);
-      if (ranked.length > offset + limit)
+      if (rows.length > limit) {
+        rows = rows.slice(0, limit);
         nextCursor = encodeOffsetCursor(offset + limit);
-      rows = await this.hydrateRankedThreadRows(pageIds);
-    } else {
-      const offset = decodeOffsetCursor(params.cursor);
-      const since = new Date(Date.now() - BOARD_TOP_LOOKBACK_DAYS * 86_400_000);
-      const candidates = await this.prisma.post.findMany({
-        where: { AND: [where, { createdAt: { gte: since } }] },
-        select: {
-          id: true,
-          boostCount: true,
-          boostScore: true,
-          createdAt: true,
-        },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: BOARD_TOP_CANDIDATES,
-      });
-      const ranked = await this.rankBoardThreads(candidates, { gravity: true });
-      const pageIds = ranked.slice(offset, offset + limit).map((r) => r.id);
-      if (ranked.length > offset + limit)
-        nextCursor = encodeOffsetCursor(offset + limit);
-      rows = await this.hydrateRankedThreadRows(pageIds);
+      }
     }
 
     return { threads: await this.hydrateThreads(viewer, rows), nextCursor };
-  }
-
-  /** Top ranks with the feed's weighted boostScore; row `points` stay raw boostCount. */
-  private async rankBoardThreads(
-    candidates: Array<{
-      id: string;
-      boostCount: number;
-      boostScore: number | null;
-      createdAt: Date;
-    }>,
-    opts: { gravity: boolean },
-  ): Promise<Array<{ id: string; createdAt: Date; score: number }>> {
-    const fresh = await this.posts.ensureBoostScoresFresh(
-      candidates.map((c) => c.id),
-    );
-    const now = new Date();
-    return candidates
-      .map((c) => {
-        const points = boardRankPoints(
-          fresh.get(c.id)?.boostScore ?? c.boostScore,
-          c.boostCount,
-        );
-        return {
-          id: c.id,
-          createdAt: c.createdAt,
-          score: opts.gravity
-            ? boardHotScore(points, c.createdAt, now)
-            : points,
-        };
-      })
-      .sort(
-        (a, b) =>
-          b.score - a.score || b.createdAt.getTime() - a.createdAt.getTime(),
-      );
-  }
-
-  private async hydrateRankedThreadRows(
-    pageIds: string[],
-  ): Promise<ThreadRow[]> {
-    if (!pageIds.length) return [];
-    const byId = new Map(
-      (
-        await this.prisma.post.findMany({
-          where: { id: { in: pageIds } },
-          include: POST_LIST_INCLUDE,
-        })
-      ).map((r) => [r.id, r]),
-    );
-    return pageIds
-      .map((id) => byId.get(id))
-      .filter((r): r is ThreadRow => Boolean(r));
   }
 
   async getThread(
@@ -947,11 +867,6 @@ export class BoardService implements OnModuleInit {
           postIds: rows.map((r) => r.id),
         })
       : new Set<string>();
-    const fresh =
-      sort === "top"
-        ? await this.posts.ensureBoostScoresFresh(rows.map((r) => r.id))
-        : new Map();
-
     const childrenOf = new Map<string, CommentRow[]>();
     for (const r of rows) {
       const key = r.parentId ?? threadId;
@@ -959,24 +874,16 @@ export class BoardService implements OnModuleInit {
       list.push(r);
       childrenOf.set(key, list);
     }
-    const now = new Date();
     const byId = new Map<string, BoardCommentDto>();
     const build = (parentId: string, depth: number): BoardCommentDto[] => {
       const kids = [...(childrenOf.get(parentId) ?? [])];
       kids.sort((a, b) => {
         if (sort === "new")
           return b.createdAt.getTime() - a.createdAt.getTime();
-        const score = (row: CommentRow) =>
-          boardHotScore(
-            boardRankPoints(
-              fresh.get(row.id)?.boostScore ?? row.boostScore,
-              row.boostCount,
-            ),
-            row.createdAt,
-            now,
-          );
         return (
-          score(b) - score(a) || a.createdAt.getTime() - b.createdAt.getTime()
+          b.boostCount - a.boostCount ||
+          b.createdAt.getTime() - a.createdAt.getTime() ||
+          b.id.localeCompare(a.id)
         );
       });
       const out: BoardCommentDto[] = [];
