@@ -353,3 +353,22 @@ describe('SearchService topic-enriched post search', () => {
     expect(prisma.post.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ['warcraft'] } } }));
   });
 });
+
+
+describe('broad topic query ranking', () => {
+  it.each(['game', 'Game'])('puts Warcraft on the first Explore page for %s', async (q) => {
+    const { service, prisma, posts } = makeService(null);
+    posts.computeScoresForPostIds.mockResolvedValue(new Map([['incidental-0', 100000]]));
+    const incidental = Array.from({ length: 6 }, (_, i) => ({ id: `incidental-${i}`,
+      body: i === 0 ? 'An old gaming discussion' : 'The game of politics', topics: i === 0 ? ['gaming'] : ['politics'], createdAt: new Date('2026-01-01'),
+      user: { username: 'other', name: 'Other' } }));
+    const warcraft = { id: 'warcraft', body: 'World of Warcraft: Forever', topics: ['fatherhood', 'gaming'],
+      createdAt: new Date('2026-10-03'), user: { username: 'john', name: 'John' } };
+    prisma.$queryRaw.mockResolvedValue([...incidental, warcraft].map(({ id }) => ({ id })));
+    prisma.post.findMany.mockResolvedValue([...incidental, warcraft]);
+    const result = await service.searchPosts({ viewerUserId: null, q, limit: 6, cursor: null });
+    expect(result.posts[0].id).toBe('warcraft');
+    expect(result.posts).toHaveLength(6);
+    expect(result.nextCursor).toBe('6');
+  });
+});

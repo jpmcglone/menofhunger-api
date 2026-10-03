@@ -59,6 +59,7 @@ const POST_SCORE = {
   bodyPhrase: 90,
   bodyAllWords: 75,
   topicMatch: 70,
+  broadTopicMatch: 95,
   authorExactUsername: 65,
   authorExactName: 60,
   bodyAnyWord: 45,
@@ -1340,7 +1341,10 @@ export class SearchService {
       if (topicValues.length > 0) {
         const topics = Array.isArray((p as any).topics) ? ((p as any).topics as string[]) : [];
         if (topics.some((t) => topicValues.includes(String(t)))) {
-          score = Math.max(score, POST_SCORE.topicMatch);
+          // A broad subject query should favor posts about that subject over incidental wording.
+          const topicScore = words.length === 1 && phraseLowers.length === 0
+            ? POST_SCORE.broadTopicMatch : POST_SCORE.topicMatch;
+          score = Math.max(score, topicScore);
         }
       }
       if (un === qLower) score = Math.max(score, POST_SCORE.authorExactUsername);
@@ -1354,6 +1358,11 @@ export class SearchService {
     const sorted = [...raw].sort((a, b) => {
       const relA = postScore(a);
       const relB = postScore(b);
+      // For equally relevant broad-topic hits, surface current conversations first.
+      if (relA === POST_SCORE.broadTopicMatch && relB === POST_SCORE.broadTopicMatch) {
+        const recentFirst = b.createdAt.getTime() - a.createdAt.getTime();
+        if (recentFirst) return recentFirst;
+      }
       const popA = popularityByPostId.get(a.id) ?? 0;
       const popB = popularityByPostId.get(b.id) ?? 0;
       const scoreA = relA * 10 + Math.log10(1 + popA);

@@ -84,6 +84,7 @@ describe('PostsDiscoverMoreService', () => {
     };
     const cacheInvalidation = {
       feedGlobalVersion: jest.fn(async () => 1),
+      searchGlobalVersion: jest.fn(async () => 1),
     };
 
     const service = new PostsDiscoverMoreService(
@@ -97,12 +98,37 @@ describe('PostsDiscoverMoreService', () => {
 
     return {
       service,
+      cache,
+      cacheInvalidation,
       prisma,
       enrichment,
       metaFindMany,
       postViewFindMany,
     };
   }
+
+  it('refreshes recommendations when AI enriches topics without a feed write', async () => {
+    const { service, cache, cacheInvalidation } = makeService({ cachedIds: [] });
+    const params = { viewerUserId: null, postId: 'seed', limit: 8, cursor: null };
+    await service.listDiscoverMore(params);
+    const before = cache.getOrSetJson.mock.calls[0][0] as any;
+    cacheInvalidation.searchGlobalVersion.mockResolvedValue(2);
+    await service.listDiscoverMore(params);
+    const after = cache.getOrSetJson.mock.calls[1][0] as any;
+    expect(before.key).not.toBe(after.key);
+    expect(cacheInvalidation.feedGlobalVersion).toHaveBeenCalledTimes(2);
+  });
+
+  it('retrieves candidates using enriched seed topics', async () => {
+    const { service, prisma } = makeService({ seedPost: {
+      id: 'warcraft', userId: 'john', visibility: 'public', communityGroupId: null,
+      topics: ['fatherhood', 'gaming'], hashtags: [], rootId: null, parentId: null,
+    } });
+    await service.listDiscoverMore({ viewerUserId: null, postId: 'warcraft', limit: 8, cursor: null });
+    expect(prisma.post.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { AND: expect.arrayContaining([{ topics: { hasSome: ['fatherhood', 'gaming'] } }]) },
+    }));
+  });
 
   it('throws when seed post is missing', async () => {
     const { service } = makeService({ seedPost: null });

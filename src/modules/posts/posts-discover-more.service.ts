@@ -80,8 +80,12 @@ export class PostsDiscoverMoreService {
     const seed = await this.loadSeed(postId, viewerUserId);
     const signals = await this.resolveSeedSignals(seed);
 
-    const feedVer = await this.cacheInvalidation.feedGlobalVersion();
-    const cacheKey = RedisKeys.discoverMoreIds(seed.id, feedVer);
+    // Topic enrichment bumps search versions without flushing home feeds.
+    const [feedVer, searchVer] = await Promise.all([
+      this.cacheInvalidation.feedGlobalVersion(),
+      this.cacheInvalidation.searchGlobalVersion(),
+    ]);
+    const cacheKey = `${RedisKeys.discoverMoreIds(seed.id, feedVer)}:s${searchVer}`;
 
     const cachedIds = await this.cache.getOrSetJson<string[]>({
       enabled: true,
