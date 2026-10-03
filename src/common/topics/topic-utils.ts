@@ -216,6 +216,8 @@ export function queryToTopicValues(query: string): string[] {
 
   // Direct match to option phrases.
   const direct = new Set<string>();
+  // Query-only variants: do not tag incidental uses of "game" in post bodies.
+  if (['game', 'gamer', 'gamers'].includes(q)) direct.add('gaming');
   const hay = ` ${q} `;
   for (const o of OPTION_PHRASES) {
     for (const p of o.phrases) {

@@ -51,6 +51,13 @@ describe('Board mention persistence on edit', () => {
     expect(post.mentions).toEqual([]);
     expect(effects.dispatch).not.toHaveBeenCalled();
   });
+  it('clears classification after edits even when keyword topics remain', async () => {
+    const { service, tx } = fixture();
+    await service.updatePost({ userId: 'author', postId: 'board', body: 'A dad playing World of Warcraft.' });
+    expect(tx.post.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ topics: expect.arrayContaining(['fatherhood']), topicsClassifiedAt: null }),
+    }));
+  });
   it('does not notify unchanged recipients', async () => {
     const { service, effects } = fixture();
     await service.updatePost({ userId: 'author', postId: 'board', body: 'Edited: @existing @old' });

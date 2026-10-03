@@ -158,7 +158,7 @@ export class PostsTopicsBackfillCron {
         );
       }
 
-      // After keywords, drain remaining public empties with Luna (one batch per cron tick).
+      // Enrich unclassified posts with Luna, including keyword-tagged posts (one bounded batch per tick).
       try {
         await this.jobs.enqueueCron(
           JOBS.postsTopicsAiClassify,

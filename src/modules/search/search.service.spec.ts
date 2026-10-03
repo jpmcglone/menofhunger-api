@@ -338,3 +338,18 @@ describe('SearchService.searchUsers — ranking', () => {
     expect(result.users[0]!.username).toBe('joe');
   });
 });
+
+
+describe('SearchService topic-enriched post search', () => {
+  it('retrieves a gaming-tagged Warcraft post for game without a literal text match', async () => {
+    const { service, prisma } = makeService(null);
+    const post = { id: 'warcraft', body: 'World of Warcraft: Forever', topics: ['gaming', 'fatherhood'],
+      createdAt: new Date(), user: { username: 'john', name: 'John' } };
+    prisma.$queryRaw.mockImplementation(async (sql: any) =>
+      sql.values.includes('gaming') && sql.strings.join('').includes('p."topics" &&') ? [{ id: post.id }] : []);
+    prisma.post.findMany.mockResolvedValue([post]);
+    const result = await service.searchPosts({ viewerUserId: null, q: 'game', limit: 10, cursor: null });
+    expect(result.posts.map((p) => p.id)).toEqual(['warcraft']);
+    expect(prisma.post.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ['warcraft'] } } }));
+  });
+});
