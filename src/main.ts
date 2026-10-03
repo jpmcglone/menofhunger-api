@@ -451,7 +451,8 @@ async function bootstrap() {
   }
 
   try {
-    await app.listen(port);
+    if (appConfig.localBillingTestsEnabled()) await app.listen(port, '127.0.0.1');
+    else await app.listen(port);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException | undefined)?.code;
     if (code === 'EADDRINUSE') {

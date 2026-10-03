@@ -2,6 +2,8 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { SubscriptionGrant } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
+import { AuthService } from '../auth/auth.service';
+import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 
 export type GrantTier = 'premium' | 'premiumPlus';
@@ -89,6 +91,8 @@ export class EntitlementService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly sideEffects: SideEffectsService,
+    private readonly auth: AuthService,
+    private readonly usersMeRealtime: UsersMeRealtimeService,
   ) {}
 
   /**
@@ -219,6 +223,7 @@ export class EntitlementService {
       where: { id: userId },
       select: {
         premium: true,
+        premiumPlus: true,
         accountKind: true,
         verifiedStatus: true,
         stripeSubscriptionStatus: true,
@@ -316,6 +321,13 @@ export class EntitlementService {
       where: { id: userId },
       data: { premium: isPremium, premiumPlus: isPremiumPlus },
     });
+
+    // Auth guards and /auth/me cache full user profiles. Drop those snapshots
+    // before clients refresh, including Premium <-> Premium+ changes.
+    if (user.premium !== isPremium || user.premiumPlus !== isPremiumPlus) {
+      await this.auth.bustSessionCachesForUser(userId);
+      await this.usersMeRealtime.emitMeUpdated(userId, 'billing_tier_changed');
+    }
 
     // Fire a side effect only when crossing the none <-> premium boundary.
     // Premium <-> Premium+ upgrades/downgrades stay silent.

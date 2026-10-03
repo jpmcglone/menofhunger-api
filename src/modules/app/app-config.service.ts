@@ -269,6 +269,20 @@ export class AppConfigService {
     return fallback;
   }
 
+  localBillingTestsEnabled(): boolean {
+    try {
+      return (
+        this.config.get("MOH_LOCAL_BILLING_TESTS") === "1" &&
+        this.nodeEnv() === "development" &&
+        ["localhost", "127.0.0.1", "[::1]"].includes(
+          new URL(this.databaseUrl()).hostname,
+        )
+      );
+    } catch {
+      return false;
+    }
+  }
+
   nodeEnv(): NodeEnv {
     return (this.config.get<string>("NODE_ENV") ?? "development") as NodeEnv;
   }

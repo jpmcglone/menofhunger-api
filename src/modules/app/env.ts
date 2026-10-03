@@ -18,6 +18,7 @@ export const envSchema = z
         (v) => (v ? !Number.isNaN(Number(v)) : true),
         "PORT must be a number",
       ),
+    MOH_LOCAL_BILLING_TESTS: z.enum(["0", "1"]).optional(),
     DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
 
     // Redis (BullMQ). Default is dev-friendly; require explicit value in production.

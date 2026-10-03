@@ -13,6 +13,8 @@
     "mcp:setup": "npm ci --prefix tools/mcp --ignore-scripts --no-audit --no-fund",
     "mcp:test": "npm test --prefix tools/mcp",
     "dev": "nest start --watch",
+    "dev:billing-test": "NODE_ENV=development MOH_LOCAL_BILLING_TESTS=1 PORT=3002 RUN_JOB_CONSUMERS=false RUN_SCHEDULERS=false nest start --watch",
+    "seed:billing-test": "NODE_ENV=development node --env-file=.env scripts/seed-local-storekit.js",
     "dev:check": "node scripts/check-port.mjs",
     "dev:kill": "node scripts/kill-port.mjs",
     "dev:clean": "npm run dev:kill && npm run dev",

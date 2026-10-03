@@ -8,6 +8,7 @@ import type { AffiliateSummaryDto, BillingCheckoutSessionDto, BillingMeDto, Bill
 import { BillingService } from './billing.service';
 import { ReferralService } from './referral.service';
 import { AffiliateService } from './affiliate.service';
+import { LocalBillingTestService } from './local-billing-test.service';
 import { AppleIapService } from './apple-iap.service';
 
 const checkoutSchema = z.object({
@@ -41,7 +42,14 @@ export class BillingController {
     private readonly referral: ReferralService,
     private readonly affiliate: AffiliateService,
     private readonly appleIap: AppleIapService,
+    private readonly localBillingTests: LocalBillingTestService,
   ) {}
+
+  @UseGuards(AuthGuard, PersonAccountGuard)
+  @Post('local-test/sync')
+  async syncLocalTest(@CurrentUserId() userId: string, @Req() request: Request, @Body() body: unknown): Promise<{ data: BillingMeDto }> {
+    return this.localBillingTests.sync(userId, request.socket.remoteAddress, body);
+  }
 
   @UseGuards(AuthGuard, PersonAccountGuard)
   @Get('me')

@@ -5,6 +5,8 @@ type Deps = {
   prisma: any;
   appConfig: any;
   sideEffects: any;
+  auth: any;
+  usersMeRealtime: any;
 };
 
 const STRIPE_CFG = {
@@ -39,13 +41,15 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
     sideEffects: {
       dispatch: jest.fn(),
     },
+    auth: { bustSessionCachesForUser: jest.fn(async () => undefined) },
+    usersMeRealtime: { emitMeUpdated: jest.fn(async () => undefined) },
     ...overrides,
   };
 }
 
 function makeService(overrides: Partial<Deps> = {}) {
   const deps = makeDeps(overrides);
-  const service = new EntitlementService(deps.prisma, deps.appConfig, deps.sideEffects);
+  const service = new EntitlementService(deps.prisma, deps.appConfig, deps.sideEffects, deps.auth, deps.usersMeRealtime);
   return { service, deps };
 }
 
@@ -71,6 +75,7 @@ function grantRow(overrides: Record<string, unknown> = {}) {
 function userRow(overrides: Record<string, unknown> = {}) {
   return {
     premium: false,
+    premiumPlus: false,
     accountKind: 'person',
     verifiedStatus: 'identity',
     stripeSubscriptionStatus: null,
@@ -376,6 +381,8 @@ describe('EntitlementService.recomputeAndApply', () => {
 
     await service.recomputeAndApply('u1');
 
+    expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith('u1');
+    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith('u1', 'billing_tier_changed');
     expect(deps.sideEffects.dispatch).toHaveBeenCalledWith('billing.premium.changed', {
       userId: 'u1',
       direction: 'started',
@@ -394,6 +401,8 @@ describe('EntitlementService.recomputeAndApply', () => {
 
     await service.recomputeAndApply('u1');
 
+    expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith('u1');
+    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith('u1', 'billing_tier_changed');
     expect(deps.sideEffects.dispatch).toHaveBeenCalledWith('billing.premium.changed', {
       userId: 'u1',
       direction: 'ended',
@@ -438,7 +447,12 @@ describe('EntitlementService.recomputeAndApply', () => {
 
     await service.recomputeAndApply('u1');
 
-    // isPremium stays true, only premiumPlus changes — no dispatch.
+    // Tier changes still invalidate permission caches and notify the active client.
+    expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith('u1');
+    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith('u1', 'billing_tier_changed');
+    expect(deps.auth.bustSessionCachesForUser.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.usersMeRealtime.emitMeUpdated.mock.invocationCallOrder[0],
+    );
     expect(deps.sideEffects.dispatch).not.toHaveBeenCalled();
   });
 });
