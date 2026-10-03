@@ -102,7 +102,6 @@ function makeService(conversations: Record<string, CallConversationContext>) {
     enqueue: jest.fn(async () => ({})),
     removeById: jest.fn(async () => undefined),
   };
-  const iceServers = { resolve: jest.fn(async () => [{ urls: ['stun:stun.example.com'] }]) };
   const sideEffects = { dispatch: jest.fn() };
   /** Socket ids presence can prove are still connected, per user. Tests mutate this to simulate drops. */
   const liveSockets = new Map<string, Set<string>>();
@@ -119,13 +118,12 @@ function makeService(conversations: Record<string, CallConversationContext>) {
     messages as any,
     realtime as any,
     jobs as any,
-    iceServers as any,
     sideEffects as any,
     presenceRedis as any,
     sfu as any,
     budget as any,
   );
-  return { svc, store, messages, realtime, jobs, sideEffects, liveSockets, sfu, budget, iceServers };
+  return { svc, store, messages, realtime, jobs, sideEffects, liveSockets, sfu, budget };
 }
 
 const DIRECT: CallConversationContext = {
@@ -238,7 +236,7 @@ describe('CallsService direct call lifecycle', () => {
     const ack = await svc.start({ sfuCapable: true, sessionId: "test-session", userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'video' });
 
     expect(ack.error).toBeUndefined();
-    expect(ack.iceServers).toEqual([{ urls: ['stun:stun.example.com'] }]);
+    expect(ack.iceServers).toEqual([{ urls: ['stun:stun.cloudflare.com:3478'] }]);
     expect(ack.reconnectGraceMs).toBe(30_000);
     expect(ack.call).toMatchObject({ status: 'ringing', capacity: 2, messageId: 'msg-1', startedByUserId: 'alice' });
     expect(ack.call?.participants).toHaveLength(1);
@@ -748,12 +746,20 @@ describe('SFU-only admission and budget deadline', () => {
     expect((await svc.start({ ...request, sfuCapable: true, sessionId: 'client-session' })).error?.code).toBe('calling_unavailable');
     expect(store.byConversation.size).toBe(0);
   });
-  it('does not admit a seat when TURN minting fails', async () => {
-    const { svc, iceServers, store } = makeService({ [DIRECT.id]: DIRECT });
-    iceServers.resolve.mockRejectedValueOnce(new Error('unavailable'));
-    const result = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'audio', sfuCapable: true, sessionId: 'client-session' });
-    expect(result.error?.code).toBe('calling_unavailable');
-    expect(store.byConversation.size).toBe(0);
+  it('starts and joins with credential-free STUN and no TURN mint request', async () => {
+    const fetch = jest.spyOn(global, 'fetch').mockRejectedValue(new Error('No network available'));
+    try {
+      const { svc } = makeService({ [DIRECT.id]: DIRECT });
+      const started = await svc.start({ userId: 'alice', socketId: 's1', conversationId: DIRECT.id, type: 'audio', sfuCapable: true, sessionId: 'alice-session' });
+      expect(started.error).toBeUndefined();
+      expect(started.iceServers).toEqual([{ urls: ['stun:stun.cloudflare.com:3478'] }]);
+      const joined = await svc.join({ userId: 'bob', socketId: 's2', callId: started.call!.id, sfuCapable: true, sessionId: 'bob-session' });
+      expect(joined.error).toBeUndefined();
+      expect(joined.iceServers).toEqual(started.iceServers);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      fetch.mockRestore();
+    }
   });
   it('warns within the reserved allowance and ends server-side without extending the deadline', async () => {
     const { svc, store, budget, realtime, sfu, liveSockets } = makeService({ [GROUP.id]: GROUP });

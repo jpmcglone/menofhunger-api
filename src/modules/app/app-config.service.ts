@@ -430,10 +430,7 @@ export class AppConfigService {
     return { accountSid, authToken, verifyServiceSid };
   }
 
-  /**
-   * Cloudflare Realtime TURN key. Used to mint short-lived ICE credentials on start/join.
-   * The key itself is never sent to clients.
-   */
+  /** Operational switch for SFU call admission. */
   callsSfuEnabled(): boolean {
     return this.config.get<string>("CALLS_SFU_ENABLED") === "true";
   }
@@ -451,13 +448,6 @@ export class AppConfigService {
       this.config.get<string>("CLOUDFLARE_SFU_APP_SECRET")?.trim() ?? "";
     if (!appId || !secret) return null;
     return { appId, secret };
-  }
-
-  cloudflareTurn(): { keyId: string; apiToken: string } | null {
-    const keyId = this.config.get<string>("CF_TURN_KEY_ID")?.trim() ?? "";
-    const apiToken = this.config.get<string>("CF_TURN_API_TOKEN")?.trim() ?? "";
-    if (!keyId || !apiToken) return null;
-    return { keyId, apiToken };
   }
 
   r2(): R2Config | null {

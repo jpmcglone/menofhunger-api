@@ -8,10 +8,8 @@ import type {
   CallType,
   MessageCallDto,
   MessageCallOutcome,
-  RtcIceServerDto,
 } from '../../common/dto/call.dto';
 import type { UserListDto } from '../../common/dto/user.dto';
-import { RtcIceServersService } from './rtc-ice-servers.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS, type JobName } from '../jobs/jobs.constants';
 import { MessagesService, type CallConversationContext } from '../messages/messages.service';
@@ -84,7 +82,6 @@ export class CallsService {
     private readonly messages: MessagesService,
     private readonly realtime: PresenceRealtimeService,
     private readonly jobs: JobsService,
-    private readonly iceServers: RtcIceServersService,
     private readonly sideEffects: SideEffectsService,
     private readonly presenceRedis: PresenceRedisStateService,
     private readonly sfu: SfuService,
@@ -92,8 +89,13 @@ export class CallsService {
   ) {}
 
   /** Fields every successful start/join ack carries so a client can connect and knows when to stop retrying. */
-  private connectAck(record: CallSessionRecord, iceServers: RtcIceServerDto[]): CallsAckDto {
-    return { call: CallSessionStore.toDto(record), iceServers, reconnectGraceMs: CALL_PARTICIPANT_GRACE_MS };
+  private connectAck(record: CallSessionRecord): CallsAckDto {
+    return {
+      call: CallSessionStore.toDto(record),
+      // STUN discovers addresses; media goes directly to the SFU. No TURN relay or credentials.
+      iceServers: [{ urls: ['stun:stun.cloudflare.com:3478'] }],
+      reconnectGraceMs: CALL_PARTICIPANT_GRACE_MS,
+    };
   }
 
   // ─── Lifecycle (client-initiated) ────────────────────────────────────────────
@@ -153,9 +155,6 @@ export class CallsService {
 
     if (!params.sfuCapable || !sessionId) return ackError('client_update_required', 'Update the app to use calls.');
     if (!this.sfu?.enabled()) return ackError('calling_unavailable', 'Calling is temporarily unavailable. Please try again later.');
-    let iceServers: RtcIceServerDto[];
-    try { iceServers = await this.iceServers.resolve(); }
-    catch { return ackError('calling_unavailable', 'Calling is temporarily unavailable. Please try again later.'); }
 
     const now = new Date();
     const nowIso = now.toISOString();
@@ -227,7 +226,7 @@ export class CallsService {
       });
     }
 
-    return this.connectAck(record, iceServers);
+    return this.connectAck(record);
   }
 
   async join(params: { userId: string; socketId: string; callId: string; sessionId?: string | null; sfuCapable?: boolean; resumeSessionId?: string }): Promise<CallsAckDto> {
@@ -258,9 +257,6 @@ export class CallsService {
     if (initial.mediaTransport !== 'sfu' || !this.sfu?.enabled()) {
       return ackError('calling_unavailable', 'Calling is temporarily unavailable. Please try again later.');
     }
-    let iceServers: RtcIceServerDto[];
-    try { iceServers = await this.iceServers.resolve(); }
-    catch { return ackError('calling_unavailable', 'Calling is temporarily unavailable. Please try again later.'); }
     if (initial.budgetWarningDeadline) {
       const reason = initial.budgetFailureReason ?? 'budget_exhausted';
       return ackError(reason, reason === 'budget_exhausted'
@@ -342,7 +338,7 @@ export class CallsService {
       }
       record.peakParticipantCount = Math.max(record.peakParticipantCount, record.participants.length);
       await this.store.save(record);
-      return { ack: this.connectAck(record, iceServers), record, becameActiveFromRinging, cancel, displacedSocketId, newlySeated };
+      return { ack: this.connectAck(record), record, becameActiveFromRinging, cancel, displacedSocketId, newlySeated };
     });
 
     if (!result.record) return result.ack;

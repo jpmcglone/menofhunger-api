@@ -15,6 +15,13 @@ export type SfuProviderResult = {
   }>;
 };
 
+/** Only controlled metadata may be logged; never provider response bodies or SDP. */
+export class SfuProviderError extends Error {
+  constructor(readonly reason: 'http' | 'network' | 'negotiation', readonly status?: number) {
+    super(`SFU request failed: ${reason}${status === undefined ? '' : ` (${status})`}`);
+  }
+}
+
 /** Provider credentials and untrusted provider errors never leave this boundary. */
 @Injectable()
 export class SfuProviderService {
@@ -35,15 +42,15 @@ export class SfuProviderService {
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(6_000),
-    });
+    }).catch(() => { throw new SfuProviderError('network'); });
     if (response.status === 404 && method === 'GET') return { tracks: [] };
-    if (!response.ok) throw new Error('SFU request failed');
+    if (!response.ok) throw new SfuProviderError('http', response.status);
     const result = (await response.json()) as SfuProviderResult;
     if (
       result.errorCode ||
       result.tracks?.some((track) => track.errorCode && !(path.endsWith('/tracks/close') && track.errorCode === 'close_track_error'))
     )
-      throw new Error('SFU negotiation failed');
+      throw new SfuProviderError('negotiation', response.status);
     return result;
   }
 

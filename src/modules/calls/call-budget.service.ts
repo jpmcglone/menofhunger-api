@@ -15,7 +15,7 @@ type Lease = { callId: string; expiresAt: Date; capacity: number };
 export type BudgetAdmission = { expiresAt: string } | { error: 'budget_exhausted' | 'calling_unavailable' };
 
 /** Durable, conservative estimated traffic reservations. Never refunds estimates or accepts client usage reports.
- * The configured estimate includes headroom for TURN, retries, and cleanup.
+ * The configured estimate includes headroom for retries and cleanup.
  * This is an application allowance, not a guaranteed Cloudflare invoice cap.
  */
 @Injectable()

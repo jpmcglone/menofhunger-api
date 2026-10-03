@@ -141,16 +141,6 @@ export const envSchema = z
       z.string().optional(),
     ),
 
-    // Cloudflare Realtime TURN. When both are set, start/join mints short-lived ICE credentials.
-    CF_TURN_KEY_ID: z.preprocess(
-      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
-      z.string().optional(),
-    ),
-    CF_TURN_API_TOKEN: z.preprocess(
-      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
-      z.string().optional(),
-    ),
-
     // SFU rollout is opt-in; credentials alone must never change live call routing.
     CLOUDFLARE_SFU_APP_ID: z.string().optional(),
     CLOUDFLARE_SFU_APP_SECRET: z.string().optional(),

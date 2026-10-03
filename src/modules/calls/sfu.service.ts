@@ -8,7 +8,7 @@ import { RedisService } from '../redis/redis.service';
 import { MessagesService } from '../messages/messages.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { CallSessionStore, type CallSessionRecord } from './call-session.store';
-import { SfuProviderService } from './sfu-provider.service';
+import { SfuProviderError, SfuProviderService } from './sfu-provider.service';
 
 const id = z
   .string()
@@ -107,8 +107,10 @@ export class SfuService {
         return this.operate(current, userId, socketId, request);
       });
       return result ?? failure('busy', 'Call connection is busy. Try again.');
-    } catch {
-      this.logger.warn('[calls] SFU operation failed; client must rebuild its connection');
+    } catch (error) {
+      const reason = error instanceof SfuProviderError ? error.message : 'internal';
+      const role = request.remoteUserId ? 'subscriber' : 'publisher';
+      this.logger.warn(`[calls] SFU failed action=${request.action} role=${role} reason=${reason}`);
       return failure('connection_failed', 'Couldn’t connect the call. Please try again.');
     }
   }

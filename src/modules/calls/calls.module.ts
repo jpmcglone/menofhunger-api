@@ -9,7 +9,6 @@ import { CallSessionStoreModule } from './call-session-store.module';
 import { CallsSideEffectsHandler } from './calls-side-effects.handler';
 import { CallsSweepCron } from './calls-sweep.cron';
 import { CallsService } from './calls.service';
-import { RtcIceServersService } from './rtc-ice-servers.service';
 
 /**
  * DM voice/video calling. No HTTP surface: lifecycle runs over acked Socket.IO events
@@ -19,7 +18,7 @@ import { RtcIceServersService } from './rtc-ice-servers.service';
  */
 @Module({
   imports: [MessagesModule, NotificationsModule, RealtimeModule, CallSessionStoreModule],
-  providers: [CallBudgetService, SfuService, SfuProviderService, CallsService, RtcIceServersService, CallsSideEffectsHandler, CallsSweepCron],
+  providers: [CallBudgetService, SfuService, SfuProviderService, CallsService, CallsSideEffectsHandler, CallsSweepCron],
   exports: [SfuService, CallsService, CallSessionStoreModule],
 })
 export class CallsModule {}
