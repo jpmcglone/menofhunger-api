@@ -472,3 +472,54 @@ failed receipts with their normal message. Unknown transport outcomes are never 
 Only explicit future or recurring work uses delegated jobs. For once schedules, `at`
 is an absolute instant; without `at`, work begins when the job is created. Recurring
 `time` and `weekday` defaults do not apply to a once schedule.
+
+### Board publishing and changing an existing news job
+
+`publish_post` (desktop/CLI) and the reviewed `post_publish` action (Ask MARV and
+hosted delegated work) accept an optional `board` object:
+
+```json
+{
+  "body": "An original summary, including source links.",
+  "board": {
+    "title": "A clear headline",
+    "url": "https://example.com/report",
+    "tags": ["news"],
+    "showInFeed": true
+  },
+  "visibility": "public"
+}
+```
+
+Omit `board` for an ordinary feed post. Set `showInFeed: false` for Board-only,
+true for a single Board post also distributed into Feed. The Board headline is
+3–80 characters, up to three tags are supported, and feed sharing must be explicit.
+Board cannot be combined with `onlyMe`, a reply parent, or an existing feed draft.
+Use a once or recurring delegated job for future Board publication; the ordinary
+`post_schedule` and `post_draft` operations remain feed-only. A pending reviewed
+Board publication can hold the proposed content without publishing it.
+
+To change an existing job, read `delegation_job` for the full instruction and its
+current revision, then use `edit_delegated_job` with only the requested `changes`:
+
+```json
+{
+  "jobId": "EXISTING_JOB_ID",
+  "revision": 3,
+  "changes": {
+    "instruction": "Preserve the existing research requirements here. Publish one Board post with a headline, fetched source URL and original summary, using post_publish with board.showInFeed true. Do not create a separate feed post."
+  }
+}
+```
+
+Use the actual existing instruction and revision; do not replace its research
+requirements with that placeholder. Omitted actor, schedule and permission stay
+unchanged. Edits invalidate old pending proposals and prevent older running
+revisions from publishing. Existing feed jobs remain unchanged until edited.
+
+In admin Ask MARV: “Update my existing daily @mohnews job to publish a Board post
+that also appears in Feed. Keep its research requirements, schedule, account, and
+publishing permission. Do not create a new job.” Review and confirm the proposed
+instruction edit. Automatic news still requires web search, fetched citations,
+one publication per run, and existing explicit `publish_news` authorization. A
+Board source link must also have been fetched during that run.

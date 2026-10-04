@@ -35,9 +35,10 @@ async function setup(t, { failPost = false, wrongIdentity = false, failRestore =
         'set-cookie': `moh_session=${cookie}; Expires=${new Date(Date.now() + 3600000).toUTCString()}; HttpOnly`,
       } });
     }
-    if (route === 'posts') {
+    if (route === 'posts' || route === 'board/threads') {
       if (denied) return Response.json({ meta: { errors: [{ message: 'Verify your account to create verified-only posts.' }] } }, { status: 403 });
       if (failPost) throw new Error('connection lost after commit');
+      if (route === 'board/threads') return Response.json({ data: { id: 'board1', author: { id: current.id, username: current.username }, ...body } });
       return Response.json({ data: { post: { id: 'post1', author: { id: current.id, username: current.username }, ...body } } });
     }
     throw new Error(`Unexpected route: ${route}`);
@@ -130,5 +131,34 @@ test('preserves API permission failures and never widens the audience', async (t
   await assert.rejects(publish.execute({ authorUsername: 'mohnews', body: 'Keep going.', visibility: 'verifiedOnly' }), error => error.status === 403 && error.message.includes('Verify your account') && !error.message.includes('may have occurred'));
   assert.equal(writes.filter(w => w.route === 'posts').length, 1);
   assert.equal(writes.find(w => w.route === 'posts').body.visibility, 'verifiedOnly');
+  assert.equal((await api.identity()).id, 'admin');
+});
+
+for (const showInFeed of [true, false]) {
+  test(`Board publication shares to feed=${showInFeed} without a separate feed write`, async (t) => {
+    const { publish, api, writes } = await setup(t);
+    const board = { title: 'Today’s story', url: 'https://example.com/story', showInFeed };
+    const result = await publish.execute({ authorUsername: 'mohnews', body: 'Original summary.', visibility: 'verifiedOnly', board });
+    assert.equal(result.published, true);
+    assert.equal(result.data.post.showInFeed, showInFeed);
+    assert.deepEqual(writes.filter(w => w.route !== 'auth/switch'), [{ route: 'board/threads', actor: 'page', body: { ...board, tags: [], body: 'Original summary.', visibility: 'verifiedOnly' } }]);
+    assert.equal((await api.identity()).id, 'admin');
+  });
+}
+test('invalid Board destinations never write', async (t) => {
+  const { publish, writes } = await setup(t);
+  for (const args of [
+    { visibility: 'onlyMe', board: { title: 'Story', showInFeed: true } },
+    { board: { title: 'Story' } },
+    { board: { title: 'Story', url: 'javascript:alert(1)', showInFeed: false } },
+    { board: { title: 'x'.repeat(81), showInFeed: false } },
+  ]) await assert.rejects(publish.execute({ authorUsername: 'mohnews', body: 'Summary', ...args }));
+  assert.equal(writes.length, 0);
+});
+test('ambiguous Board publication restores identity and never retries or creates a feed post', async (t) => {
+  const { publish, api, writes } = await setup(t, { failPost: true });
+  await assert.rejects(publish.execute({ authorUsername: 'mohnews', body: 'Summary', board: { title: 'Story', showInFeed: true } }), /Publication may have occurred/);
+  assert.equal(writes.filter(w => w.route === 'board/threads').length, 1);
+  assert.equal(writes.filter(w => w.route === 'posts').length, 0);
   assert.equal((await api.identity()).id, 'admin');
 });

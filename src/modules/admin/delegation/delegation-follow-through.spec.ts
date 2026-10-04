@@ -299,6 +299,38 @@ describe("job lifecycle follow-through", () => {
       prisma.delegationAction.updateMany.mock.calls[0][0].where.run.jobSnapshot,
     ).toEqual({ path: ["revision"], lte: 3 });
   });
+  it("changes daily news instructions without resetting schedule, actor or automatic permission", async () => {
+    const { job, prisma, service } = setup();
+    job.workflow = "news";
+    job.permission = "publish_news";
+    (service as any).config = {
+      marvOpenAI: () => ({
+        webSearchEnabled: true,
+        webSearchModes: ["regular"],
+      }),
+    };
+    const instruction =
+      "Keep current research requirements. Publish one Board post with board.showInFeed true.";
+    await service.edit("admin", job.id, 3, { changes: { instruction } });
+    expect(prisma.delegationJob.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: job.id, revision: 3 }),
+        data: expect.objectContaining({
+          instruction,
+          actorId: "page",
+          workflow: "news",
+          permission: "publish_news",
+          schedule: job.schedule,
+          revision: { increment: 1 },
+        }),
+      }),
+    );
+    expect(prisma.delegationAction.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "cancelled" }),
+      }),
+    );
+  });
   it("rejects stale controls before changing any job or proposal", async () => {
     const { job, prisma, service } = setup();
     await expect(

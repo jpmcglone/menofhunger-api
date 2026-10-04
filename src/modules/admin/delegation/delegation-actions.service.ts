@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { PrismaService } from "../../prisma/prisma.service";
+import { BoardService } from "../../board/board.service";
 import { PostsService } from "../../posts/posts.service";
 import { ScheduledPostsService } from "../../posts/scheduled-posts.service";
 import { BookmarksService } from "../../bookmarks/bookmarks.service";
@@ -55,6 +56,7 @@ export class DelegationActionsService {
     private readonly newsletters: NewslettersService,
     private readonly config: AppConfigService,
     private readonly realtime: PresenceRealtimeService,
+    private readonly board: BoardService,
   ) {}
 
   async assertFreshSubject(
@@ -91,6 +93,7 @@ export class DelegationActionsService {
     actorId: string,
     input: DelegatedActionInput,
   ): Promise<Record<string, unknown>> {
+    this.assertPublication(input);
     const draftId = "draftId" in input ? input.draftId : undefined;
     if (draftId) {
       const draft = await this.draft(actorId, draftId);
@@ -183,6 +186,16 @@ export class DelegationActionsService {
     }
     return json(row);
   }
+  private assertPublication(input: DelegatedActionInput) {
+    if (
+      input.operation === "post_publish" &&
+      input.board &&
+      (input.parentId || input.draftId || input.visibility === "onlyMe")
+    )
+      throw new BadRequestException(
+        "Board publications cannot be replies or Only me drafts. Choose public, verifiedOnly, or premiumOnly.",
+      );
+  }
   private async draft(actorId: string, id: string) {
     const draft = await this.prisma.post.findFirst({
       where: {
@@ -208,6 +221,7 @@ export class DelegationActionsService {
     raw: unknown,
   ): Promise<{ receipt: string; path: string | null }> {
     const input = actionSchema.parse(raw);
+    this.assertPublication(input);
     const link = (receipt: string, path: string | null = null) => ({
       receipt,
       path,
@@ -223,6 +237,24 @@ export class DelegationActionsService {
             "Use draft editing to keep this draft in Only me.",
           );
         const body = publicationBody(input);
+        if (input.board) {
+          const thread = await this.board.createThread(actorId, {
+            ...input.board,
+            url: input.board.url ?? null,
+            body,
+            image: null,
+            visibility: input.visibility as
+              | "public"
+              | "verifiedOnly"
+              | "premiumOnly",
+          });
+          return link(
+            input.board.showInFeed
+              ? "Board post published and shared to the feed."
+              : "Board post published without feed sharing.",
+            `/p/${thread.id}`,
+          );
+        }
         const result = input.draftId
           ? await this.posts.publishFromOnlyMe({
               userId: actorId,

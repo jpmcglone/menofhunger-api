@@ -349,3 +349,16 @@ test('create_newsletter_draft posts admin draft and is gated by remoteWrites', a
   assert.equal(command.toolName, 'create_newsletter_draft');
   assert.deepEqual(command.args, { subject: 'Week in review', body: 'Hello' });
 });
+
+
+test('MCP edits only the requested job fields without injecting default permissions or schedules', async () => {
+  const calls = [];
+  const api = { request: async (path, options) => { calls.push({ path, ...options }); return { data: {} }; } };
+  const tools = createTools({ api, localArtifacts: false, remoteWrites: true });
+  const edit = tools.find(t => t.name === 'edit_delegated_job');
+  const changes = { instruction: 'Keep the current reporting requirements. Publish a Board post with board.showInFeed true.' };
+  await edit.execute({ jobId: 'daily-news', revision: 7, changes });
+  assert.deepEqual(calls, [{ path: 'admin/delegation/jobs/daily-news', method: 'PATCH', body: { revision: 7, changes } }]);
+  await assert.rejects(edit.execute({ jobId: 'daily-news', revision: 7, changes: { ownerId: 'other' } }));
+  assert.equal(calls.length, 1);
+});

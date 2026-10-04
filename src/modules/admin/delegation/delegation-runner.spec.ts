@@ -14,6 +14,11 @@ describe("sourced-news runner", () => {
     revoke = false,
     condition = false,
     recent = false,
+    board = undefined as
+      | undefined
+      | { title: string; url: string; showInFeed: boolean },
+    permission = "publish_news",
+    changeDuringResearch = false,
   } = {}) {
     const job = {
       id: "job",
@@ -22,7 +27,7 @@ describe("sourced-news runner", () => {
       title: "News",
       instruction: "Publish news",
       workflow: "news",
-      permission: "publish_news",
+      permission,
       revision: 1,
       status: "active",
       schedule: {
@@ -89,6 +94,7 @@ describe("sourced-news runner", () => {
           {
             action: {
               operation: "post_publish",
+              ...(board ? { board } : {}),
               body: "An original news summary.",
               sources: [{ title: "Reporting", url }],
             },
@@ -96,6 +102,7 @@ describe("sourced-news runner", () => {
           {},
         );
         toolErrors.push(JSON.parse(result));
+        if (changeDuringResearch) job.revision++;
         return { text: "News prepared.", webSearchCount, errorCode: null };
       }),
     };
@@ -120,6 +127,59 @@ describe("sourced-news runner", () => {
     );
     return { runner, prisma, policy, service, ai, toolErrors, run };
   }
+  it.each([false, true])(
+    "automatically publishes one sourced Board post, feed sharing %s",
+    async (showInFeed) => {
+      const board = {
+        title: "Today’s story",
+        url: "https://example.com/report",
+        showInFeed,
+      };
+      const { runner, service, prisma } = setup({ board });
+      await runner.run("run");
+      expect(service.decide).toHaveBeenCalledTimes(1);
+      const saved = prisma.delegationRun.update.mock.calls.find(
+        ([args]: any) => args.data.actions,
+      )[0];
+      expect(saved.data.actions.create).toHaveLength(1);
+      expect(saved.data.actions.create[0].input.board).toEqual({
+        ...board,
+        tags: [],
+      });
+    },
+  );
+  it.each([
+    { fetchSource: false },
+    { webSearchCount: 0 },
+    { permission: "review" },
+    { changeDuringResearch: true },
+  ])(
+    "does not automatically publish Board without current authority and evidence: %j",
+    async (options) => {
+      const { runner, service } = setup({
+        ...options,
+        board: {
+          title: "Today’s story",
+          url: "https://example.com/report",
+          showInFeed: true,
+        },
+      });
+      await runner.run("run");
+      expect(service.decide).not.toHaveBeenCalled();
+    },
+  );
+  it("rejects a Board link that was not fetched even if the separate citations were fetched", async () => {
+    const { runner, service, toolErrors } = setup({
+      board: {
+        title: "Today’s story",
+        url: "https://unverified.example/story",
+        showInFeed: true,
+      },
+    });
+    await runner.run("run");
+    expect(toolErrors[0].error).toMatch(/fetch_sources/);
+    expect(service.decide).not.toHaveBeenCalled();
+  });
   it("continues jobs queued before schedules were added to run snapshots", async () => {
     const { runner, run, ai } = setup();
     delete (run.jobSnapshot as any).schedule;

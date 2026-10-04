@@ -1,3 +1,4 @@
+import { BoardModule } from "../board/board.module";
 import { DelegationService } from "./delegation/delegation.service";
 import { DelegationPolicyService } from "./delegation/delegation-policy.service";
 import { DelegationActionsService } from "./delegation/delegation-actions.service";
@@ -73,6 +74,7 @@ import { AdminOperationsController } from "./admin-operations.controller";
 
 @Module({
   imports: [
+    BoardModule,
     BookmarksModule,
     SpacesModule,
     JobsModule,

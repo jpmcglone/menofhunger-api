@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  BOARD_TITLE_MIN,
+  BOARD_TITLE_MAX,
+  BOARD_MAX_TAGS,
+  BOARD_TAG_MAX_LENGTH,
+} from "../../board/board.utils";
 import { newsletterAudienceFiltersSchema } from "../../newsletters/newsletter-audience";
 
 export const delegationId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
@@ -110,11 +116,29 @@ export const sourceSchema = z
       ),
   })
   .strict();
+/** One canonical Board thread, optionally distributed into the feed. */
+export const boardPublicationSchema = z
+  .object({
+    title: z.string().trim().min(BOARD_TITLE_MIN).max(BOARD_TITLE_MAX),
+    url: z
+      .string()
+      .url()
+      .max(2048)
+      .refine((v) => /^https?:/.test(v))
+      .optional(),
+    tags: z
+      .array(z.string().trim().min(1).max(BOARD_TAG_MAX_LENGTH))
+      .max(BOARD_MAX_TAGS)
+      .default([]),
+    showInFeed: z.boolean(),
+  })
+  .strict();
 export const actionSchema = z.discriminatedUnion("operation", [
   z
     .object({
       operation: z.literal("post_publish"),
       body,
+      board: boardPublicationSchema.optional(),
       visibility: z
         .enum(["public", "verifiedOnly", "premiumOnly", "onlyMe"])
         .default("public"),

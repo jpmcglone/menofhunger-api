@@ -268,6 +268,7 @@ describe("canonical draft and media execution", () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
     );
     return { prisma, posts, service };
   };
@@ -344,6 +345,7 @@ describe("canonical post audiences", () => {
         {} as any,
         {} as any,
         {} as any,
+        {} as any,
       );
       await service.execute("admin", "page", {
         operation: "post_publish",
@@ -361,6 +363,7 @@ describe("canonical post audiences", () => {
       {} as any,
       {} as any,
       scheduled as any,
+      {} as any,
       {} as any,
       {} as any,
       {} as any,
@@ -421,4 +424,95 @@ describe("existing post service permission enforcement", () => {
       expect(mutation.prisma.post.create).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("Board publishing destinations", () => {
+  function setup() {
+    const board = {
+      createThread: jest.fn().mockResolvedValue({ id: "board1" }),
+    };
+    const posts = { createPost: jest.fn() };
+    const service = new DelegationActionsService(
+      {} as any,
+      posts as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      board as any,
+    );
+    return { service, posts, board };
+  }
+  it.each([true, false])(
+    "creates a single canonical Board thread with showInFeed=%s",
+    async (showInFeed) => {
+      const { service, posts, board } = setup();
+      const receipt = await service.execute("admin", "page", {
+        operation: "post_publish",
+        body: "Original summary.",
+        visibility: "verifiedOnly",
+        board: {
+          title: "Today’s story",
+          url: "https://example.com/story",
+          showInFeed,
+        },
+        sources: [{ title: "Source", url: "https://example.com/story" }],
+      });
+      expect(board.createThread).toHaveBeenCalledTimes(1);
+      expect(board.createThread).toHaveBeenCalledWith("page", {
+        title: "Today’s story",
+        url: "https://example.com/story",
+        tags: [],
+        showInFeed,
+        visibility: "verifiedOnly",
+        image: null,
+        body: "Original summary.\n\nSource: https://example.com/story",
+      });
+      expect(posts.createPost).not.toHaveBeenCalled();
+      expect(receipt.path).toBe("/p/board1");
+    },
+  );
+  it.each([
+    { visibility: "onlyMe" },
+    { parentId: "parent" },
+    { draftId: "draft" },
+  ])(
+    "rejects incompatible Board publication instead of falling back: %j",
+    async (extra) => {
+      const { service, board, posts } = setup();
+      const input = actionSchema.parse({
+        operation: "post_publish",
+        body: "Summary",
+        board: { title: "Story", showInFeed: true },
+        ...extra,
+      });
+      await expect(service.snapshot("page", input)).rejects.toThrow(
+        "Board publications",
+      );
+      await expect(service.execute("admin", "page", input)).rejects.toThrow(
+        "Board publications",
+      );
+      expect(board.createThread).not.toHaveBeenCalled();
+      expect(posts.createPost).not.toHaveBeenCalled();
+    },
+  );
+  it("does not retry or fall back after a canonical Board error", async () => {
+    const { service, board, posts } = setup();
+    board.createThread.mockRejectedValue(new Error("unconfirmed outcome"));
+    await expect(
+      service.execute("admin", "page", {
+        operation: "post_publish",
+        body: "Summary",
+        board: { title: "Story", showInFeed: false },
+      }),
+    ).rejects.toThrow("unconfirmed");
+    expect(board.createThread).toHaveBeenCalledTimes(1);
+    expect(posts.createPost).not.toHaveBeenCalled();
+  });
 });

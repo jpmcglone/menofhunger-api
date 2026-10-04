@@ -132,3 +132,19 @@ describe('direct post review', () => {
     expect(posting.execute).not.toHaveBeenCalled();
   });
 });
+
+
+describe('direct Board review', () => {
+  it.each([true, false])('keeps the reviewed Board destination and page identity (%s)', async (showInFeed) => {
+    const { svc, action, actor, posting, policy, api } = fixture();
+    const page = { ...actor, id: 'page', username: 'mohnews', accountKind: 'page' };
+    policy.actor.mockResolvedValue(page);
+    const board = { title: 'Today’s story', url: 'https://example.com/story', tags: ['news'], showInFeed };
+    Object.assign(action, { operation: 'post_publish', input: { body: 'Summary', board, authorUsername: 'mohnews' }, before: { actor: page } });
+    await Promise.all([svc.decide('admin1', 'token', 'action1', 'confirm'), svc.decide('admin1', 'token', 'action1', 'confirm')]);
+    expect(posting.execute).toHaveBeenCalledTimes(1);
+    expect(posting.execute).toHaveBeenCalledWith('admin1', 'page', { operation: 'post_publish', body: 'Summary', visibility: 'public', board });
+    expect(api.request).not.toHaveBeenCalled();
+    expect(action.status).toBe('complete');
+  });
+});

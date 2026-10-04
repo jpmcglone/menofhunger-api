@@ -7,7 +7,8 @@ export async function publishingAccounts(api) {
     account.id === administrator.id || account.accountKind === 'page') };
 }
 
-export async function publishPost({ api, store, authorUsername, body, visibility = 'public' }) {
+export async function publishPost({ api, store, authorUsername, body, visibility = 'public', board }) {
+  if (board && visibility === 'onlyMe') throw new ApiError('Board posts cannot use Only me. Choose public, verifiedOnly, or premiumOnly.', 400);
   return store.withPublishingLock(api.baseUrl, async () => {
     const accounts = await publishingAccounts(api);
     const author = accounts.data.find((account) =>
@@ -30,9 +31,17 @@ export async function publishPost({ api, store, authorUsername, body, visibility
           (!switching && (!current.siteAdmin || current.accountSwitch)))
         throw new ApiError('The active account does not match the requested publishing identity.', 403);
       publishAttempted = true;
-      result = await api.publish({ body, visibility });
+      if (board) {
+        const response = await api.request('board/threads', { method: 'POST', body: { ...board, body, visibility } });
+        // Match publish_post's existing result envelope while verifying the Board receipt.
+        result = { ...response, data: { post: response.data } };
+      } else {
+        result = await api.publish({ body, visibility });
+      }
       if (!result.data?.post?.id || result.data.post.author?.id !== author.id)
         throw new ApiError('The API did not confirm the requested post author. Check the feed before retrying.');
+      if (board && result.data.post.showInFeed !== board.showInFeed)
+        throw new ApiError('The API did not confirm the requested Board feed sharing. Inspect the post before taking further action.');
       if (result.data.post.visibility !== visibility)
         throw new ApiError('The API did not confirm the requested visibility. Inspect the post before taking further action.');
     } catch (error) {

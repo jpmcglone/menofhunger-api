@@ -1,5 +1,6 @@
 import {
   jobInputSchema,
+  boardPublicationSchema,
   jobEditSchema,
   jobControlSchema,
 } from "./delegation/delegation.schemas";
@@ -16,6 +17,7 @@ import { adminUserPatchSchema } from "../marvin/marvin.controller";
 export const assistantPostSchema = z
   .object({
     body: z.string().trim().min(1).max(1000),
+    board: boardPublicationSchema.optional(),
     visibility: z
       .enum(["public", "verifiedOnly", "premiumOnly", "onlyMe"])
       .default("public"),
@@ -24,7 +26,11 @@ export const assistantPostSchema = z
       .regex(/^@?[A-Za-z0-9_]{1,40}$/)
       .optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (input) => !input.board || input.visibility !== "onlyMe",
+    "Board posts cannot use Only me.",
+  );
 
 const target = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 const changed = <T extends z.ZodRawShape>(schema: z.ZodObject<T>) =>
@@ -56,7 +62,7 @@ export const adminActions: Operation[] = [
   {
     name: "delegation_job_edit",
     description:
-      "Edit the selected job after review. Read it first and use its current revision. Only supplied fields change; the acting account and permission are preserved.",
+      "Edit the selected job after review. Read it first and use its current revision. Change instruction to switch future runs between feed posts, Board-only posts, or Board posts also shared to feed. Keep all other instructions. Do not create a replacement job. Only supplied fields change; the acting account and permission are preserved.",
     method: "PATCH",
     path: "admin/delegation/jobs/:id",
     schema: jobEditSchema,
@@ -76,7 +82,7 @@ export const adminActions: Operation[] = [
   {
     name: "post_publish",
     description:
-      "Publish this exact post immediately after review, with body, visibility (public, verifiedOnly, premiumOnly, onlyMe), and optional authorUsername. Omitted author means your personal admin account; explicit authors must be your account or an operated page. Uses canonical post permissions. Do not create a job for a request to post now.",
+      "Publish this exact post immediately after review, with body, visibility (public, verifiedOnly, premiumOnly, onlyMe), and optional authorUsername. For a Board publication supply board {title,url?,tags?,showInFeed}; showInFeed true shares the same Board post to the feed, false keeps it Board-only. Board does not support onlyMe. Omitted author means your personal admin account; explicit authors must be your account or an operated page. Uses canonical post permissions. Do not create a job for a request to post now.",
     method: "POST",
     path: "posts",
     schema: assistantPostSchema,
