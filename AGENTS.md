@@ -1,5 +1,7 @@
 # Men of Hunger — API
 
+Work directly on `main` in this repository. Do not create a feature branch or a new worktree unless the user explicitly requests one.
+
 Read [engineering policy](docs/engineering-policy.md) for scope, dependency versions, product decisions, realtime contracts, and the validation matrix. Preserve unrelated working-tree changes. Inspect the nearest implementation before editing.
 
 Skills live in `.agents/skills/<name>/SKILL.md`. Read a skill when its description matches the task. Do not copy skills into editor-specific folders. Shared skills (`api-contract-sync`, `design-simplicity-principles`, `moh-designer`, `moh-marketing`, `ux-review`) and shared rules `15-feed-surface`, `20-deletion-deprecation`, and `56-notification-seen-vs-read` are canonical in this repository. Interface-polish references are canonical in web. `60-realtime-first` is platform-specific. Sync copies with `scripts/sync-agent-guidance.py`. Do not edit a mirror independently.
