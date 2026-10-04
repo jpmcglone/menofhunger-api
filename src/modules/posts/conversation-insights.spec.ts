@@ -107,20 +107,36 @@ describe("Conversation insights", () => {
       ])
       .mockResolvedValueOnce([{ userId: "friend" }]);
     const postView = {
-      findMany: jest.fn().mockResolvedValue([
-        { userId: "friend" },
-        { userId: "new" },
-        { userId: "owner" },
-      ]),
+      findMany: jest
+        .fn()
+        .mockResolvedValue([
+          { userId: "friend" },
+          { userId: "new" },
+          { userId: "owner" },
+        ]),
     };
     const postAnonView = {
       findMany: jest.fn().mockResolvedValue([{ anonId: "guest-1" }]),
     };
     const viewerIdentity = {
-      findMany: jest.fn().mockResolvedValue([{ anonId: "guest-1", userId: "friend" }]),
+      findMany: jest
+        .fn()
+        .mockResolvedValue([{ anonId: "guest-1", userId: "friend" }]),
     };
     const prisma = {
       post: { findMany },
+      postReachTracking: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ startedAt: new Date("2026-09-01T00:00:00Z") }),
+      },
+      postReachDay: {
+        findMany: jest.fn().mockResolvedValue([
+          { userId: "friend", anonId: null, impressions: 2 },
+          { userId: "friend", anonId: null, impressions: 3 },
+          { userId: null, anonId: "guest-1", impressions: 1 },
+        ]),
+      },
       postView,
       postAnonView,
       viewerIdentity,
@@ -166,6 +182,29 @@ describe("Conversation insights", () => {
     expect(result.timeline).toHaveLength(7);
     expect(result.timeline[0]?.date).toBe("2026-08-30");
     expect(result.timeline[6]?.date).toBe("2026-09-05");
+    expect(result.windowReach).toEqual({
+      people: 1,
+      impressions: 6,
+      trackedSince: "2026-09-01T00:00:00.000Z",
+      complete: false,
+    });
+    expect(prisma.postReachDay.findMany).toHaveBeenCalledWith({
+      where: {
+        postId: { in: ["a", "b"] },
+        day: {
+          gte: new Date("2026-08-30"),
+          lte: new Date("2026-09-05"),
+        },
+      },
+      select: { userId: true, anonId: true, impressions: true },
+    });
+    expect(findMany.mock.calls[0][0].where.AND[2].OR).toContainEqual({
+      reachDays: {
+        some: {
+          day: { gte: new Date("2026-08-30"), lte: new Date("2026-09-05") },
+        },
+      },
+    });
     expect(result.participantCount).toBe(4);
     expect(result.newParticipantCount).toBe(2);
     expect(result.postCount).toBe(1);
@@ -220,6 +259,11 @@ describe("Conversation insights", () => {
     const service = new ConversationsService(
       {
         post: { findMany: jest.fn().mockResolvedValue([]) },
+        postReachTracking: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ startedAt: new Date("2026-01-01T00:00:00Z") }),
+        },
         postView,
       } as never,
       {} as never,
@@ -233,6 +277,11 @@ describe("Conversation insights", () => {
       scope: "lifetime",
     });
     expect(result.participantCount).toBe(0);
+    expect(result.windowReach).toMatchObject({
+      people: 0,
+      impressions: 0,
+      complete: true,
+    });
     expect(postView.findMany).not.toHaveBeenCalled();
   });
 
@@ -240,6 +289,11 @@ describe("Conversation insights", () => {
     const service = new ConversationsService(
       {
         post: { findMany: jest.fn().mockResolvedValue([]) },
+        postReachTracking: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ startedAt: new Date("2026-01-01T00:00:00Z") }),
+        },
         $queryRaw: jest.fn(),
       } as never,
       {} as never,

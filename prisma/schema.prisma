@@ -587,6 +587,7 @@ model User {
   blocksReceived               UserBlock[]                @relation("UserBlock_blocked")
   mutesInitiated               UserMute[]                 @relation("UserMute_muter")
   mutesReceived                UserMute[]                 @relation("UserMute_muted")
+  postReachDays                PostReachDay[]
   postViews                    PostView[]
   viewerIdentities             ViewerIdentity[]
   articleViews                 ArticleView[]
@@ -1657,6 +1658,7 @@ model Post {
   notificationsAsSubject   Notification[] @relation("Notification_subjectPost")
   notificationsAsActorPost Notification[] @relation("Notification_actorPost")
   reports                  Report[]       @relation("Report_subjectPost")
+  reachDays                PostReachDay[]
   views                    PostView[]
   boardThread              BoardThread?
   boardHides               BoardHide[]
@@ -4183,4 +4185,25 @@ model CallBudgetLease {
   expiresAt DateTime @db.Timestamptz(6)
 
   @@index([expiresAt])
+}
+
+// Accepted impressions by Eastern day. Lifetime counters cannot reconstruct a time window.
+model PostReachDay {
+  postId String
+  actorKey String
+  day DateTime @db.Date
+  userId String?
+  anonId String?
+  impressions Int @default(0)
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+  @@index([anonId])
+  @@id([postId, actorKey, day])
+  @@index([day, postId])
+}
+
+model PostReachTracking {
+  id String @id
+  startedAt DateTime @default(now())
 }

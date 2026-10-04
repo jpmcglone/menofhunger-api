@@ -133,6 +133,16 @@ export class ConversationsService {
             : {
                 OR: [
                   { createdAt: { gte: from, lte: to } },
+                  {
+                    reachDays: {
+                      some: {
+                        day: {
+                          gte: new Date(dayKeys[0]!),
+                          lte: new Date(dayKeys[dayKeys.length - 1]!),
+                        },
+                      },
+                    },
+                  },
                   { threadReplies: { some: eventWhere } },
                   { replies: { some: eventWhere } },
                   { reposts: { some: eventWhere } },
@@ -229,6 +239,30 @@ export class ConversationsService {
     const links = anonIds.length
       ? await this.prisma.viewerIdentity.findMany({
           where: { anonId: { in: anonIds } },
+          select: { anonId: true, userId: true },
+        })
+      : [];
+    const [windowViews, tracking] = await Promise.all([
+      ids.length
+        ? this.prisma.postReachDay.findMany({
+            where: {
+              postId: { in: ids },
+              day: {
+                gte: new Date(dayKeys[0]!),
+                lte: new Date(dayKeys[dayKeys.length - 1]!),
+              },
+            },
+            select: { userId: true, anonId: true, impressions: true },
+          })
+        : Promise.resolve([]),
+      this.prisma.postReachTracking.findUnique({ where: { id: "posts" } }),
+    ]);
+    const windowAnonIds = windowViews.flatMap((v) =>
+      v.anonId ? [v.anonId] : [],
+    );
+    const windowLinks = windowAnonIds.length
+      ? await this.prisma.viewerIdentity.findMany({
+          where: { anonId: { in: windowAnonIds } },
           select: { anonId: true, userId: true },
         })
       : [];
@@ -358,6 +392,25 @@ export class ConversationsService {
       renewedCount: posts.filter((p) => p.renewed).length,
       participantCount: participants.size,
       newParticipantCount: participants.size - priorPeople.size,
+      ...(tracking
+        ? {
+            windowReach: {
+              people: uniqueReachPeople({
+                userIds: windowViews.flatMap((v) =>
+                  v.userId ? [v.userId] : [],
+                ),
+                anonIds: windowAnonIds,
+                links: windowLinks,
+              }),
+              impressions: windowViews.reduce(
+                (sum, row) => sum + row.impressions,
+                0,
+              ),
+              trackedSince: tracking.startedAt.toISOString(),
+              complete: tracking.startedAt <= from,
+            },
+          }
+        : {}),
       reach: {
         people: uniqueReachPeople({
           userIds: userViews.map((view) => view.userId),

@@ -1554,6 +1554,15 @@ export type ConversationReachDto = {
   scope: "lifetime";
 };
 
+export type ConversationWindowReachDto = {
+  people: number;
+  impressions: number;
+  /** Time bounded tracking began; older impressions cannot be reconstructed. */
+  trackedSince: string;
+  /** False until the entire requested window has tracked history. */
+  complete: boolean;
+};
+
 /** Last 7 (weekly recap) or 30 (post) Eastern calendar days including today. Reach is lifetime. */
 export type ConversationInsightsDto = {
   from: string;
@@ -1563,6 +1572,7 @@ export type ConversationInsightsDto = {
   participantCount: number;
   newParticipantCount: number;
   reach: ConversationReachDto;
+  windowReach?: ConversationWindowReachDto;
   timeline: ConversationDayDto[];
   posts: ConversationPostDto[];
 };
