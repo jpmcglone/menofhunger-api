@@ -165,12 +165,26 @@ describe('Board and article unread activity filtering', () => {
     expect(prisma.notification.findMany.mock.calls[1][0].where).not.toHaveProperty('readAt');
   });
 
+  it('filters relevant Board comments before pagination, excluding new posts and boosts', async () => {
+    const { svc, prisma } = makeService();
+    await svc.list({ recipientUserId: 'viewer', limit: 1, cursor: null, kind: 'board', unreadOnly: true, boardCommentsOnly: true });
+    expect(prisma.notification.findMany.mock.calls[0][0].where).toEqual(expect.objectContaining({
+      recipientUserId: 'viewer', readAt: null, kind: { in: ['comment', 'mention', 'followed_post'] },
+      OR: [
+        { actorPost: { is: { kind: 'board', parentId: { not: null } } } },
+        { kind: 'followed_post', subjectPost: { is: { kind: 'board', parentId: { not: null } } } },
+      ],
+    }));
+  });
+
   it('partitions unread and all-activity first-page caches', async () => {
     const keys: string[] = [];
     const cache = { getOrSetJsonWithLock: jest.fn(async (args: { key: string }) => { keys.push(args.key); return { items: [] }; }) };
     const query = new NotificationQueryService({} as any, {} as any, {} as any, {} as any, cache as any,
       { notificationsListVersion: async () => 1 } as any);
     for (const unreadOnly of [true, false, undefined]) await query.list({ recipientUserId: 'viewer', limit: 30, cursor: null, kind: 'board', unreadOnly });
+    await query.list({ recipientUserId: 'viewer', limit: 30, cursor: null, kind: 'board', unreadOnly: true, boardCommentsOnly: true });
+    expect(keys[3]).not.toBe(keys[0]);
     expect(keys[0]).not.toBe(keys[1]);
     expect(keys[1]).toBe(keys[2]);
   });
@@ -1098,7 +1112,7 @@ describe('NotificationReadStateService board thread read + nav dots', () => {
 
     const inThread = { is: { kind: 'board', OR: [{ id: 't1' }, { rootId: 't1' }, { parentId: 't1' }] } };
     expect(notification.updateMany).toHaveBeenNthCalledWith(1, {
-      where: { recipientUserId: 'viewer-1', readAt: null, OR: [{ actorPost: inThread }, { subjectPost: inThread }] },
+      where: { recipientUserId: 'viewer-1', readAt: null, createdAt: { lte: expect.any(Date) }, OR: [{ actorPost: inThread }, { subjectPost: inThread }] },
       data: { readAt: expect.any(Date) },
     });
     expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalledWith('viewer-1', {
@@ -1121,16 +1135,30 @@ describe('NotificationReadStateService board thread read + nav dots', () => {
     });
   });
 
-  it('visiting Board reads every Board notification without delivering the bell', async () => {
+  it('entering Board delivers only Board arrivals without reading any rows', async () => {
+    const { readState, notification } = build([7, 0, 2]);
+    await readState.markDelivered('viewer-1', 'board');
+    expect(notification.updateMany).toHaveBeenCalledTimes(1);
+    const mutation = notification.updateMany.mock.calls[0] as unknown as [{ where: any; data: any }];
+    expect(mutation[0].data).toEqual({ deliveredAt: expect.any(Date) });
+    expect(mutation[0].where).toMatchObject({ recipientUserId: 'viewer-1', deliveredAt: null,
+      createdAt: { lte: expect.any(Date) }, OR: [
+        { actorPost: { is: { kind: 'board' } } }, { subjectPost: { is: { kind: 'board' } } },
+      ] });
+    expect(mutation[0].where.readAt).toBeUndefined();
+  });
+
+  it('explicit bulk read reads and delivers Board activity through the invocation time', async () => {
     const { readState, notification, presenceRealtime } = build([7, 0, 2]);
 
     await readState.markReadByFilter('viewer-1', 'board');
 
-    expect(notification.updateMany).toHaveBeenCalledTimes(1);
+    expect(notification.updateMany).toHaveBeenCalledTimes(2);
     expect(notification.updateMany).toHaveBeenCalledWith({
       where: {
         recipientUserId: 'viewer-1',
         readAt: null,
+        createdAt: { lte: expect.any(Date) },
         kind: { notIn: ['message', 'community_group_post'] },
         OR: [
           { actorPost: { is: { kind: 'board' } } },
@@ -1467,6 +1495,7 @@ describe('NotificationReadStateService.markDelivered', () => {
       where: {
         recipientUserId: 'u1',
         deliveredAt: null,
+        createdAt: { lte: expect.any(Date) },
         kind: { notIn: ['message', 'community_group_post'] },
       },
       data: { deliveredAt: expect.any(Date) },

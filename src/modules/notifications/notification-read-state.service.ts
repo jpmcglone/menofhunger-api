@@ -101,7 +101,7 @@ export class NotificationReadStateService {
     void this.emitNavUnreadForUser(recipientUserId);
   }
 
-  /** Unread Board and Articles notifications (readAt, not deliveredAt): opening the thread or article clears them. */
+  /** Board counts unseen arrivals; Articles retain their existing unread semantics. */
   async getNavUnread(recipientUserId: string): Promise<{ boardUnreadCount: number; articlesUnreadCount: number }> {
     const base: Prisma.NotificationWhereInput = {
       recipientUserId,
@@ -109,7 +109,7 @@ export class NotificationReadStateService {
       kind: { notIn: BELL_EXCLUDED_KINDS },
     };
     const [boardUnreadCount, articlesUnreadCount] = await Promise.all([
-      this.prisma.notification.count({ where: { ...base, ...notificationFilterWhere('board') } }),
+      this.prisma.notification.count({ where: { ...base, deliveredAt: null, ...notificationFilterWhere('board') } }),
       this.prisma.notification.count({ where: { ...base, subjectArticleId: { not: null } } }),
     ]);
     return { boardUnreadCount, articlesUnreadCount };
@@ -265,11 +265,12 @@ export class NotificationReadStateService {
     this.dispatchLockScreenClear(recipientUserId, 'groups');
   }
 
-  async markDelivered(recipientUserId: string): Promise<void> {
+  async markDelivered(recipientUserId: string, filter?: 'board'): Promise<void> {
+    const now = new Date();
     const undeliveredCount = await this.prisma.$transaction(async (tx) => {
       const res = await tx.notification.updateMany({
-        where: this.undeliveredBellWhere(recipientUserId),
-        data: { deliveredAt: new Date() },
+        where: { ...this.undeliveredBellWhere(recipientUserId), ...(filter ? notificationFilterWhere(filter) : {}), createdAt: { lte: now } },
+        data: { deliveredAt: now },
       });
       if (res.count > 0) {
         // Clamp to 0 — decrement can't go below 0 even if the counter drifted.
@@ -286,7 +287,7 @@ export class NotificationReadStateService {
       undeliveredCount,
     });
     // Inbox only — group lock-screen banners stay until the user opens Groups.
-    this.dispatchLockScreenClear(recipientUserId, 'inbox');
+    if (!filter) this.dispatchLockScreenClear(recipientUserId, 'inbox');
   }
 
   async markNewPostsRead(recipientUserId: string): Promise<{ undeliveredCount: number }> {
@@ -331,6 +332,7 @@ export class NotificationReadStateService {
       boardThreadId?: string | null;
     },
   ): Promise<void> {
+    const openedAt = new Date();
     const { postId, userId, articleId, crewId, groupId, boardThreadId } = params;
     // Batch path for post-only clears (views, detail page).
     if (postId && !userId && !articleId && !crewId && !groupId && !boardThreadId) {
@@ -386,6 +388,7 @@ export class NotificationReadStateService {
     }
     const where = {
       recipientUserId,
+      ...(boardThreadId ? { createdAt: { lte: openedAt } } : {}),
       readAt: null,
       ...(or.length ? { OR: or } : {}),
     } as const;
@@ -401,6 +404,7 @@ export class NotificationReadStateService {
       const deliveredRes = await tx.notification.updateMany({
         where: {
           recipientUserId,
+          ...(boardThreadId ? { createdAt: { lte: openedAt } } : {}),
           deliveredAt: null,
           kind: { notIn: BELL_EXCLUDED_KINDS },
           ...(or.length ? { OR: or } : {}),
@@ -517,20 +521,26 @@ export class NotificationReadStateService {
     }
   }
 
-  /**
-   * Visiting Board reads every Board-scoped notification so the nav dot clears.
-   * Does not deliver them — the bell still uses deliveredAt until inbox open.
-   */
+  /** Explicit bulk read, including unloaded rows, bounded to activity existing at invocation. */
   async markReadByFilter(recipientUserId: string, filter: 'board'): Promise<void> {
+    const now = new Date();
     const where = {
       recipientUserId,
-      readAt: null,
+      createdAt: { lte: now },
       kind: { notIn: BELL_EXCLUDED_KINDS },
       ...notificationFilterWhere(filter),
     } as const;
     const undeliveredCount = await this.prisma.$transaction(async (tx) => {
-      const now = new Date();
-      await tx.notification.updateMany({ where, data: { readAt: now } });
+      const delivered = await tx.notification.updateMany({
+        where: { ...where, deliveredAt: null }, data: { deliveredAt: now },
+      });
+      await tx.notification.updateMany({ where: { ...where, readAt: null }, data: { readAt: now } });
+      if (delivered.count > 0) {
+        await tx.$executeRaw`
+          UPDATE "User" SET "undeliveredNotificationCount" = GREATEST(0, "undeliveredNotificationCount" - ${delivered.count})
+          WHERE id = ${recipientUserId}
+        `;
+      }
       return tx.notification.count({ where: this.undeliveredBellWhere(recipientUserId) });
     });
     this.emitBellUpdated(recipientUserId, { undeliveredCount });

@@ -1025,6 +1025,10 @@ export type BoardThreadDto = {
    * Null when signed out, on a first visit, or without access.
    */
   newCommentCount?: number | null;
+  /** Unread notification activity. Null after opening the discussion or an explicit bulk read. */
+  unreadActivity?: 'new' | 'comments' | 'reply' | 'mention' | null;
+  /** Distinct unread comments, independent of the last opened timestamp. */
+  unreadCommentCount?: number;
   /** Article Board posts only: estimated reading time of the article. */
   readingTimeMinutes?: number;
   showInFeed: boolean;

@@ -383,13 +383,49 @@ export class BoardService implements OnModuleInit {
     );
   }
 
+  private async unreadActivity(viewer: ViewerContext | null, ids: string[]) {
+    const result = new Map<string, { kind: NonNullable<BoardThreadDto['unreadActivity']>; commentIds: Set<string> }>();
+    if (!viewer) return result;
+    const excludedActors = [viewer.id, ...await this.hiddenAuthorIds(viewer, { includeMuted: true })];
+    const postScope = { kind: 'board' as const, OR: [{ id: { in: ids } }, { rootId: { in: ids } }] };
+    const notifications = await this.prisma.notification.findMany({
+      where: {
+        recipientUserId: viewer.id, readAt: null,
+        kind: { in: ['comment', 'mention', 'followed_post'] },
+        OR: [{ actorPost: { is: postScope } }, { subjectPost: { is: postScope } }],
+        NOT: { actorUserId: { in: excludedActors } },
+      },
+      distinct: ['kind', 'actorPostId', 'subjectPostId'],
+      select: {
+        kind: true,
+        actorPost: { select: { id: true, rootId: true, parentId: true, kind: true } },
+        subjectPost: { select: { id: true, rootId: true, parentId: true, kind: true } },
+      },
+    });
+    const priority = { new: 0, comments: 1, reply: 2, mention: 3 };
+    for (const notification of notifications) {
+      const post = notification.actorPost?.kind === 'board' ? notification.actorPost : notification.subjectPost;
+      if (!post) continue;
+      const id = post.rootId ?? post.parentId ?? post.id;
+      if (!ids.includes(id)) continue;
+      const activity = notification.kind === 'mention' ? 'mention'
+        : notification.kind === 'comment' && notification.subjectPost?.parentId ? 'reply'
+        : post.parentId ? 'comments' : 'new';
+      const entry = result.get(id) ?? { kind: activity, commentIds: new Set<string>() };
+      if (priority[activity] > priority[entry.kind]) entry.kind = activity;
+      if (post.parentId) entry.commentIds.add(post.id);
+      result.set(id, entry);
+    }
+    return result;
+  }
+
   private async hydrateThreads(
     viewer: ViewerContext | null,
     rows: ThreadRow[],
   ): Promise<BoardThreadDto[]> {
     if (rows.length === 0) return [];
     const ids = rows.map((r) => r.id);
-    const [boosted, bookmarks, lastSeen, hidden] = await Promise.all([
+    const [boosted, bookmarks, lastSeen, hidden, unread] = await Promise.all([
       viewer
         ? this.posts.viewerBoostedPostIds({
             viewerUserId: viewer.id,
@@ -415,6 +451,7 @@ export class BoardService implements OnModuleInit {
             select: { postId: true },
           })
         : Promise.resolve([] as Array<{ postId: string }>),
+      this.unreadActivity(viewer, ids),
     ]);
     const hiddenIds = new Set(hidden.map((h) => h.postId));
     const newCountById = await this.newCommentCounts(viewer, rows, lastSeen);
@@ -453,6 +490,8 @@ export class BoardService implements OnModuleInit {
           articleId: row.articleId ?? null,
         });
         if (viewer) {
+          dto.unreadActivity = canAccess ? unread.get(row.id)?.kind ?? null : null;
+          dto.unreadCommentCount = canAccess ? unread.get(row.id)?.commentIds.size ?? 0 : 0;
           dto.viewerLastSeenAt = lastSeen.get(row.id)?.toISOString() ?? null;
           dto.newCommentCount =
             canAccess && lastSeen.has(row.id)

@@ -72,6 +72,7 @@ function threadRow(overrides: Record<string, unknown> = {}) {
 
 function setup(viewer: Record<string, unknown> | null, row = threadRow()) {
   const prisma = {
+    notification: { findMany: jest.fn().mockResolvedValue([]) },
     post: {
       findFirst: jest.fn().mockResolvedValue(row),
       findMany: jest.fn().mockResolvedValue([]),
@@ -274,6 +275,25 @@ describe("BoardService list scope", () => {
     const where = JSON.stringify(prisma.post.findMany.mock.calls[0][0].where);
     expect(where).toContain('"userId":{"notIn":["b1","b2"]}');
     expect(where).not.toContain("m1");
+  });
+
+  it("projects unread row activity independently of visits, prioritizes mentions, and clears after reading", async () => {
+    const { service, prisma, posts } = setup({ id: 'viewer', premium: true, verifiedStatus: 'identity' });
+    posts.viewerLastSeenAtByPostId.mockResolvedValue(new Map());
+    const comment = { id: 'c1', rootId: 'thread-1', parentId: 'thread-1', kind: 'board' };
+    prisma.notification.findMany.mockResolvedValue([
+      { kind: 'followed_post', actorPost: null, subjectPost: { ...comment, id: 'thread-1', rootId: null, parentId: null } },
+      { kind: 'comment', actorPost: comment, subjectPost: comment },
+      { kind: 'mention', actorPost: comment, subjectPost: null },
+    ]);
+    const thread = await service.getThread('viewer', 'thread-1');
+    expect(thread.unreadActivity).toBe('mention');
+    expect(thread.unreadCommentCount).toBe(1);
+    expect(prisma.notification.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ recipientUserId: 'viewer', readAt: null, NOT: { actorUserId: { in: ['viewer'] } } }),
+    }));
+    prisma.notification.findMany.mockResolvedValue([]);
+    expect((await service.getThread('viewer', 'thread-1')).unreadActivity).toBeNull();
   });
 
   it("counts comments by others since the last visit, and reports null on a first visit", async () => {
