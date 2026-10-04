@@ -9,7 +9,6 @@ import { LandingService } from "../../landing/landing.service";
 import { readAdminAnalytics } from "../admin-analytics.read";
 import { DelegationPolicyService } from "./delegation-policy.service";
 import { sharedTools } from "../../mcp/mcp-tools";
-import { DelegationGithubService } from "./delegation-github.service";
 import { delegationId } from "./delegation.schemas";
 
 const schema = z
@@ -23,7 +22,6 @@ const schema = z
       "integration_spending",
       "integration_operations",
       "feedback",
-      "github_issues",
       "queues",
     ]),
     cursor: delegationId.optional(),
@@ -38,7 +36,7 @@ const allowed: Record<string, string[]> = {
   operations: schema.shape.area.options,
   retention: ["attention", "activation", "analytics", "content"],
   community: ["attention", "activation", "content"],
-  moderation: ["attention", "health", "feedback", "github_issues"],
+  moderation: ["attention", "health", "feedback"],
   export: schema.shape.area.options,
   personal: [],
   news: [],
@@ -54,7 +52,6 @@ export class DelegationReadsService {
     private readonly engagement: AdminEngagementService,
     private readonly prisma: PrismaService,
     private readonly landing: LandingService,
-    private readonly github: DelegationGithubService,
     private readonly jobs: JobsStatusService,
   ) {}
   tool(workflow: string) {
@@ -109,31 +106,6 @@ export class DelegationReadsService {
       case "integration_operations":
         result = await this.integrations.operations();
         break;
-      case "github_issues": {
-        const actions = await this.prisma.delegationAction.findMany({
-          where: {
-            operation: "github_issue",
-            status: "complete",
-            run: { job: { ownerId } },
-          },
-          orderBy: { createdAt: "desc" },
-          take: 10,
-          select: { path: true, input: true },
-        });
-        result = {
-          data: await Promise.all(
-            actions.map(async (a) => ({
-              feedbackId: (a.input as { feedbackId: string }).feedbackId,
-              ...(a.path
-                ? await this.github.read(a.path)
-                : { available: false }),
-            })),
-          ),
-          coverage:
-            "Latest ten issued feedback items; closure is reported, not automatically marked resolved.",
-        };
-        break;
-      }
       case "feedback": {
         const rows = await this.prisma.feedback.findMany({
           where: { status: { in: ["new", "triaged"] } },

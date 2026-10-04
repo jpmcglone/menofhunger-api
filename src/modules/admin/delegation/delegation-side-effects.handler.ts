@@ -6,6 +6,25 @@ import { NotificationsService } from "../../notifications/notifications.service"
 import { RedisService } from "../../redis/redis.service";
 import { scheduleSchema } from "./delegation.schemas";
 
+/** Notification authorization is captured when a run is created. Never backfill it
+ * from today's job settings: legacy runs and superseded work must remain quiet. */
+export function canNotifyDelegationRun(run: {
+  jobSnapshot: unknown;
+  job: { revision: number; status: string };
+}): boolean {
+  const snapshot = run.jobSnapshot as {
+    revision?: number;
+    schedule?: { notification?: string };
+  } | null;
+  return (
+    run.job.status !== "cancelled" &&
+    snapshot?.revision === run.job.revision &&
+    ["actionable", "all", "digest"].includes(
+      snapshot?.schedule?.notification ?? "none",
+    )
+  );
+}
+
 @Injectable()
 export class DelegationSideEffectsHandler implements OnModuleInit {
   constructor(
@@ -44,7 +63,7 @@ export class DelegationSideEffectsHandler implements OnModuleInit {
           return;
 
         const mode =
-          scheduleSchema.parse(run.job.schedule).notification ?? "actionable";
+          scheduleSchema.parse(run.job.schedule).notification ?? "none";
         const actionable = ["review", "failed", "uncertain"].includes(
           run.status,
         );
@@ -55,6 +74,7 @@ export class DelegationSideEffectsHandler implements OnModuleInit {
         )
           return;
         if (
+          !canNotifyDelegationRun(run) ||
           !run.job.owner.siteAdmin ||
           run.job.owner.bannedAt ||
           mode === "none" ||
@@ -96,8 +116,9 @@ export class DelegationSideEffectsHandler implements OnModuleInit {
           });
           const rows = batch.filter(
             (r) =>
-              (scheduleSchema.parse(r.job.schedule).notification ??
-                "actionable") === "digest",
+              canNotifyDelegationRun(r) &&
+              (scheduleSchema.parse(r.job.schedule).notification ?? "none") ===
+                "digest",
           );
           if (!rows.length) return;
           const digestKey = `delegation-digest-${run.job.ownerId}-${parts.year}-${parts.month}-${parts.day}`;

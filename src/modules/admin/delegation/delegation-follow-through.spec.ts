@@ -5,13 +5,13 @@ import { DelegationReadsService } from "./delegation-reads.service";
 import { DelegationService } from "./delegation.service";
 import { nextDelegationRun } from "./delegation.schedule";
 import {
+  actionSchema,
+  workflowOperations,
   scheduleSchema,
   jobControlSchema,
   jobEditSchema,
 } from "./delegation.schemas";
 import { DelegationSideEffectsHandler } from "./delegation-side-effects.handler";
-import { DelegationGithubService } from "./delegation-github.service";
-import { actionSubjectKey } from "./delegation-actions.service";
 
 describe("extended schedules", () => {
   const next = (s: object, after: string) =>
@@ -102,8 +102,11 @@ describe("durable result delivery", () => {
       status,
       notifiedAt: null,
       notificationKey: null,
+      jobSnapshot: { revision: 1, schedule: { notification: mode } },
       job: {
         ownerId: "admin",
+        revision: 1,
+        status: "active",
         schedule: { frequency: "daily", notification: mode },
         owner: { siteAdmin: true, bannedAt: null },
       },
@@ -125,6 +128,38 @@ describe("durable result delivery", () => {
     );
     return { handler, run, notifications, prisma };
   }
+  it.each(["failed", "review", "complete", "uncertain"])(
+    "never replays historical %s runs after notification settings are enabled",
+    async (status) => {
+      const { handler, notifications, run } = setup("all", status);
+      run.jobSnapshot = { revision: 1 }; // exact shape stored before the rollout
+      await handler.deliver("run");
+      expect(notifications.create).not.toHaveBeenCalled();
+      expect(run.notifiedAt).toBeTruthy();
+    },
+  );
+  it("requires explicit notification settings at run creation", async () => {
+    const { handler, notifications, run } = setup("all");
+    run.jobSnapshot.schedule = { frequency: "daily" };
+    await handler.deliver("run");
+    expect(notifications.create).not.toHaveBeenCalled();
+  });
+  it.each(["cancelled", "superseded"])(
+    "stays quiet for %s work",
+    async (state) => {
+      const { handler, notifications, run } = setup();
+      if (state === "cancelled") run.job.status = "cancelled";
+      else run.job.revision = 2;
+      await handler.deliver("run");
+      expect(notifications.create).not.toHaveBeenCalled();
+    },
+  );
+  it("does not enable delivery when a formerly muted run is edited", async () => {
+    const { handler, notifications, run } = setup("all");
+    run.jobSnapshot.schedule.notification = "none";
+    await handler.deliver("run");
+    expect(notifications.create).not.toHaveBeenCalled();
+  });
   it.each(["review", "failed", "uncertain"])(
     "delivers %s once with the job link",
     async (status) => {
@@ -164,6 +199,28 @@ describe("durable result delivery", () => {
     await expect(handler.deliver("run")).rejects.toThrow();
     expect(run.notifiedAt).toBeNull();
   });
+  it("excludes historical runs from an opted-in job's digest batch", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-04T13:00:00Z"));
+    try {
+      const { handler, run, prisma, notifications } = setup(
+        "digest",
+        "complete",
+      );
+      const historical = {
+        ...run,
+        id: "historical",
+        jobSnapshot: { revision: 1 },
+      };
+      prisma.delegationRun.findMany.mockResolvedValue([historical, run]);
+      await handler.deliver("run");
+      expect(notifications.create).toHaveBeenCalledTimes(1);
+      expect(prisma.delegationRun.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: { in: ["run"] } } }),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
   it("batches digest results only during the daily delivery hour", async () => {
     jest.useFakeTimers().setSystemTime(new Date("2026-10-04T12:00:00Z"));
     try {
@@ -179,78 +236,6 @@ describe("durable result delivery", () => {
     } finally {
       jest.useRealTimers();
     }
-  });
-});
-
-describe("reviewed GitHub issues", () => {
-  const fetchOriginal = global.fetch;
-  afterEach(() => {
-    global.fetch = fetchOriginal;
-  });
-  const setup = () =>
-    new DelegationGithubService(
-      {
-        delegationGithub: () => ({
-          repository: "owner/repo",
-          token: "test-token",
-        }),
-        frontendBaseUrl: () => "https://menofhunger.com",
-      } as any,
-      {
-        feedback: { findUnique: jest.fn(async () => ({ id: "feedback" })) },
-      } as any,
-    );
-  it("uses the configured repo and preserves the backlink", async () => {
-    global.fetch = jest.fn(async () => ({
-      ok: true,
-      status: 201,
-      json: async () => ({ number: 12 }),
-    })) as any;
-    expect(
-      await setup().create({
-        feedbackId: "feedback",
-        title: "Fix issue",
-        body: "Reviewed text",
-      }),
-    ).toEqual({
-      receipt: "GitHub issue #12 created.",
-      path: "https://github.com/owner/repo/issues/12",
-    });
-    expect(global.fetch).toHaveBeenCalledWith(
-      "https://api.github.com/repos/owner/repo/issues",
-      expect.objectContaining({
-        method: "POST",
-        body: expect.stringContaining("/admin/feedback?feedbackId=feedback"),
-      }),
-    );
-  });
-  it("does not retry an uncertain write", async () => {
-    global.fetch = jest.fn(async () => {
-      throw new Error("timeout");
-    }) as any;
-    await expect(
-      setup().create({ feedbackId: "feedback", title: "Fix", body: "Text" }),
-    ).rejects.toThrow("timeout");
-    expect(global.fetch).toHaveBeenCalledTimes(1);
-  });
-  it("does not send credentials to a supplied host", async () => {
-    global.fetch = jest.fn() as any;
-    await expect(setup().read("https://evil.com/issues/1")).rejects.toThrow();
-    expect(global.fetch).not.toHaveBeenCalled();
-  });
-  it("keeps stable subject keys across job reruns and page switches for GitHub", () => {
-    const input = {
-      operation: "github_issue" as const,
-      feedbackId: "f",
-      title: "a",
-      body: "a",
-    };
-    expect(actionSubjectKey("owner", "page1", input)).toBe(
-      actionSubjectKey("owner", "page2", { ...input, title: "b" }),
-    );
-    expect(actionSubjectKey("other", "page1", input)).not.toBe(
-      actionSubjectKey("owner", "page1", input),
-    );
   });
 });
 
@@ -288,7 +273,6 @@ describe("job lifecycle follow-through", () => {
       {} as any,
       {} as any,
       { emitAdminUpdated: jest.fn() } as any,
-      {} as any,
       {} as any,
       {} as any,
       {} as any,
@@ -387,7 +371,6 @@ describe("bounded investigative reads", () => {
       {} as any,
       {} as any,
       {} as any,
-      {} as any,
     );
     return { policy, operations, service };
   };
@@ -424,5 +407,37 @@ describe("bounded investigative reads", () => {
       service.read("admin", "operations", { area: "content" }),
     ).rejects.toThrow("revoked");
     expect(operations.content).not.toHaveBeenCalled();
+  });
+});
+
+describe("removed GitHub integration", () => {
+  it("rejects GitHub actions in every workflow", () => {
+    expect(
+      actionSchema.safeParse({
+        operation: "github_issue",
+        feedbackId: "f",
+        title: "Issue",
+        body: "Body",
+      }).success,
+    ).toBe(false);
+    for (const operations of Object.values(workflowOperations))
+      expect(operations).not.toContain("github_issue");
+  });
+  it("preserves historical receipts without offering pending issues for approval", () => {
+    const service = Object.create(
+      DelegationService.prototype,
+    ) as DelegationService;
+    const result = service.actionDto({
+      id: "old",
+      operation: "github_issue",
+      title: "Old issue",
+      input: {},
+      status: "pending",
+      receipt: null,
+      path: null,
+      createdAt: new Date(),
+    } as any);
+    expect(result.status).toBe("cancelled");
+    expect(result.preview).toContain("Linear");
   });
 });

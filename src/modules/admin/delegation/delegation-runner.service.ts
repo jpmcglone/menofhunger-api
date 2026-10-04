@@ -219,8 +219,8 @@ For news: use web search for today's major story, then fetch the original report
 For community: use public introductions and unanswered posts; prepare personalized public replies. Never send private messages. Suggest introductions in the summary without contacting people.
 For retention: compare canonical analytics with prior snapshots, identify one measurable intervention, and prepare a filtered newsletter or post. Never invent attribution. Report sample sizes and only mature weekly cohorts. Newsletter delivery is a separate reviewed action; do not prepare sending a newsletter unless this instruction explicitly requests it. Subsequent runs compare outcomes with the saved baseline.
 For personal: unread means readAt is null, not deliveredAt. Organize only the selected account's saved posts and profile. Do not mark activity read without a request. Event means the account's Men of Hunger Space and schedule. Never log a check-in as if the user actually completed it.
-Preserve the saved baseline; compare current evidence against it, with sample sizes and an explicit measurement date. Prior actions identify subjects already acted on: never propose the same reply or issue again. Use read_admin to investigate and paginate beyond previews. For operations: report what changed, what is stuck, and three priorities with evidence links. Quiet unchanged conditions should not produce actions. GitHub issue creation is a separately reviewed github_issue action tied to an exact feedbackId; do not claim an issue exists before its receipt.
-For moderation: report actionTaken only records a decision; it does not ban or delete anything. Verification decisions require evidence. For external work, prepare markdown issue/report exports, CSV reports or valid iCalendar files. Only the configured GitHub issue connection supports direct external actions. Other destinations use exports; never claim an export was uploaded.
+Preserve the saved baseline; compare current evidence against it, with sample sizes and an explicit measurement date. Prior actions identify subjects already acted on: never propose the same reply or issue again. Use read_admin to investigate and paginate beyond previews. For operations: report what changed, what is stuck, and three priorities with evidence links. Quiet unchanged conditions should not produce actions. Issue tracking uses Linear. Prepare a reviewed markdown issue export with the exact feedbackId; there is no direct issue-creation connection.
+For moderation: report actionTaken only records a decision; it does not ban or delete anything. Verification decisions require evidence. For external work, prepare markdown issue/report exports, CSV reports or valid iCalendar files. External destinations use exports; never claim an export was uploaded or an issue was created.
 Metric definitions: ${sharedTools.guidance()}`,
         userMessage: `Job: ${snapshot.title}\nInstruction: ${snapshot.instruction}\nCurrent evidence: ${JSON.stringify(evidence).slice(0, 50000)}\nPrevious runs and measurement baseline: ${JSON.stringify(prior).slice(0, 24000)}`,
         dispatchTool: async (name, raw, context) => {
@@ -302,13 +302,10 @@ Metric definitions: ${sharedTools.guidance()}`,
           if (
             proposals.some(
               (p) =>
-                (action.operation === "github_issue" &&
-                  p.input.operation === "github_issue" &&
-                  p.input.feedbackId === action.feedbackId) ||
-                (action.operation === "post_publish" &&
-                  action.parentId &&
-                  p.input.operation === "post_publish" &&
-                  p.input.parentId === action.parentId),
+                action.operation === "post_publish" &&
+                action.parentId &&
+                p.input.operation === "post_publish" &&
+                p.input.parentId === action.parentId,
             )
           )
             return JSON.stringify({ error: "duplicate_subject" });
@@ -417,6 +414,17 @@ Metric definitions: ${sharedTools.guidance()}`,
       where: {
         status: { in: ["review", "failed", "uncertain", "complete"] },
         notifiedAt: null,
+        // Ignore the pre-feature backlog and jobs that never opted into alerts.
+        AND: [
+          {
+            OR: ["actionable", "all", "digest"].map((notification) => ({
+              jobSnapshot: {
+                path: ["schedule", "notification"],
+                equals: notification,
+              },
+            })),
+          },
+        ],
         ...(!digestHour
           ? {
               OR: [

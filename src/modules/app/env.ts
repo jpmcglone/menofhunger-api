@@ -19,11 +19,6 @@ export const envSchema = z
         "PORT must be a number",
       ),
     MOH_LOCAL_BILLING_TESTS: z.enum(["0", "1"]).optional(),
-    MARV_GITHUB_REPOSITORY: z
-      .string()
-      .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)
-      .optional(),
-    MARV_GITHUB_TOKEN: z.string().min(1).optional(),
     DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
 
     // Redis (BullMQ). Default is dev-friendly; require explicit value in production.

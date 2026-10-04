@@ -9,7 +9,6 @@ import { BookmarksModule } from "../bookmarks/bookmarks.module";
 import { SpacesModule } from "../spaces/spaces.module";
 import { JobsModule } from "../jobs/jobs.module";
 import { AdminAvatarVideoController } from "./admin-avatar-video.controller";
-import { DelegationGithubService } from "./delegation/delegation-github.service";
 import { DelegationSideEffectsHandler } from "./delegation/delegation-side-effects.handler";
 import { DelegationReadsService } from "./delegation/delegation-reads.service";
 import { IntegrationAdminController } from "../x/integration-admin.controller";
@@ -131,7 +130,6 @@ import { AdminOperationsController } from "./admin-operations.controller";
     AdminIntroBriefController,
   ],
   providers: [
-    DelegationGithubService,
     DelegationSideEffectsHandler,
     DelegationReadsService,
     AdminOperationsController,

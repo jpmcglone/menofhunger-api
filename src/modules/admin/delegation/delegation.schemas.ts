@@ -113,14 +113,6 @@ export const sourceSchema = z
 export const actionSchema = z.discriminatedUnion("operation", [
   z
     .object({
-      operation: z.literal("github_issue"),
-      feedbackId: delegationId,
-      title: z.string().trim().min(1).max(200),
-      body: z.string().trim().min(1).max(12000),
-    })
-    .strict(),
-  z
-    .object({
       operation: z.literal("post_publish"),
       body,
       visibility: z
@@ -325,9 +317,8 @@ export const workflowOperations: Record<string, string[]> = {
     "report_update",
     "verification_approve",
     "verification_reject",
-    "github_issue",
     "export",
   ],
-  export: ["export", "github_issue"],
-  operations: ["export", "github_issue"],
+  export: ["export"],
+  operations: ["export"],
 };

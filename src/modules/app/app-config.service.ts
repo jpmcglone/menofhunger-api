@@ -151,11 +151,6 @@ export type MarvLimitsConfig = {
 
 @Injectable()
 export class AppConfigService {
-  delegationGithub() {
-    const repository = this.config.get("MARV_GITHUB_REPOSITORY");
-    const token = this.config.get("MARV_GITHUB_TOKEN");
-    return repository && token ? { repository, token } : null;
-  }
   xPublishing() {
     const ids = (key: string) =>
       (this.config.get<string>(key) ?? "")

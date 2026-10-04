@@ -15,7 +15,6 @@ import { VerificationService } from "../../verification/verification.service";
 import { NewslettersService } from "../../newsletters/newsletters.service";
 import { AppConfigService } from "../../app/app-config.service";
 import { PresenceRealtimeService } from "../../presence/presence-realtime.service";
-import { DelegationGithubService } from "./delegation-github.service";
 import { actionSchema, type DelegatedActionInput } from "./delegation.schemas";
 
 import { createHash } from "node:crypto";
@@ -25,11 +24,9 @@ export function actionSubjectKey(
   input: DelegatedActionInput,
 ): string | null {
   const subject =
-    input.operation === "github_issue"
-      ? `github:${ownerId}:${input.feedbackId}`
-      : input.operation === "post_publish" && input.parentId
-        ? `reply:${ownerId}:${actorId}:${input.parentId}`
-        : null;
+    input.operation === "post_publish" && input.parentId
+      ? `reply:${ownerId}:${actorId}:${input.parentId}`
+      : null;
   return subject ? createHash("sha256").update(subject).digest("hex") : null;
 }
 const json = (v: unknown) => JSON.parse(JSON.stringify(v));
@@ -58,7 +55,6 @@ export class DelegationActionsService {
     private readonly newsletters: NewslettersService,
     private readonly config: AppConfigService,
     private readonly realtime: PresenceRealtimeService,
-    private readonly github: DelegationGithubService,
   ) {}
 
   async assertFreshSubject(
@@ -68,11 +64,7 @@ export class DelegationActionsService {
     excludeId?: string,
   ) {
     const field =
-      input.operation === "github_issue"
-        ? "feedbackId"
-        : input.operation === "post_publish" && input.parentId
-          ? "parentId"
-          : null;
+      input.operation === "post_publish" && input.parentId ? "parentId" : null;
     if (!field) return;
     const value = (input as unknown as Record<string, unknown>)[
       field
@@ -150,17 +142,6 @@ export class DelegationActionsService {
             scheduledAt: true,
           },
         });
-        break;
-      case "github_issue":
-        row = await this.prisma.feedback.findUnique({
-          where: { id: input.feedbackId },
-          select: { id: true, subject: true, status: true, updatedAt: true },
-        });
-        if (row)
-          row = {
-            ...(row as object),
-            repository: this.github.availability().repository,
-          };
         break;
       case "feedback_update":
         row = await this.prisma.feedback.findUnique({
@@ -442,8 +423,6 @@ export class DelegationActionsService {
           `/admin/newsletters/${input.newsletterId}`,
         );
       }
-      case "github_issue":
-        return this.github.create(input);
       case "export":
         return link("Export prepared. Download it from this action.");
     }

@@ -1,5 +1,4 @@
 import { delegationTemplates } from "./delegation-templates";
-import { DelegationGithubService } from "./delegation-github.service";
 import { SideEffectsService } from "../../side-effects/side-effects.service";
 import { sharedTools } from "../../mcp/mcp-tools";
 import {
@@ -80,7 +79,6 @@ export class DelegationService {
     private readonly ai: MarvinAIService,
     private readonly marv: MarvinAdminService,
     private readonly sideEffects: SideEffectsService,
-    private readonly github: DelegationGithubService,
   ) {}
   async configured() {
     return (
@@ -138,14 +136,6 @@ export class DelegationService {
       })),
       integrations: [
         {
-          id: "github",
-          title: "GitHub issues",
-          available: this.github.availability().available,
-          reason:
-            this.github.availability().repository ??
-            "Configure MARV_GITHUB_REPOSITORY and MARV_GITHUB_TOKEN on the API. Issue text is reviewed before sending.",
-        },
-        {
           id: "news",
           title: "Web research",
           available:
@@ -163,6 +153,7 @@ export class DelegationService {
             "Delivery requires the existing email and newsletter address configuration. Drafts are always available.",
         },
         ...[
+          "Linear",
           "Google Docs / Sheets",
           "External calendar",
           "External social accounts",
@@ -616,6 +607,10 @@ export class DelegationService {
     const job = action.run.job;
     await this.policy.assertActor(ownerId, job.actorId);
     if (action.status !== "pending") return this.actionDto(action);
+    if (decision === "confirm" && action.operation === "github_issue")
+      throw new BadRequestException(
+        "GitHub issue creation has been removed. Issue tracking uses Linear.",
+      );
     if (decision === "cancel") {
       await this.prisma.delegationAction.updateMany({
         where: { id, status: "pending" },
@@ -752,6 +747,21 @@ export class DelegationService {
     });
   }
   actionDto(a: DelegationAction): DelegationActionDto {
+    // Read-only history survives removal; this operation cannot be executed.
+    if (a.operation === "github_issue")
+      return {
+        id: a.id,
+        operation: a.operation,
+        title: a.title,
+        preview:
+          "GitHub issue creation has been removed. Issue tracking uses Linear.",
+        body: null,
+        status: a.status === "pending" ? "cancelled" : a.status,
+        receipt: a.receipt,
+        path: a.path,
+        sources: [],
+        createdAt: a.createdAt.toISOString(),
+      };
     const input = actionSchema.parse(a.input);
     let preview = Object.entries(input)
       .filter(([k]) => k !== "operation" && k !== "sources")

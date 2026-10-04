@@ -4,7 +4,7 @@
 
 The [generated MCP/MARV inventory](mcp-capabilities.md) is authoritative for current tool availability. The implementation history below describes earlier releases and is not a current permission table.
 
-Ask MARV now reviews job edits and run/pause/resume/cancel/skip controls. Delegated work supports selected weekdays, monthly dates (missing days are skipped), end dates, temporary pauses, metric thresholds and cooldowns. Daily digests arrive at 09:00 America/New_York; actionable notifications link back to the job. Operations jobs can investigate canonical attention, activation, health, queues, analytics and integration spending, with bounded pagination. Baselines persist across runs; reply/feedback subjects are protected against duplicate proposals. GitHub issues use a single configured repository and separately reviewed issue text.
+Ask MARV now reviews job edits and run/pause/resume/cancel/skip controls. Delegated work supports selected weekdays, monthly dates (missing days are skipped), end dates, temporary pauses, metric thresholds and cooldowns. Daily digests arrive at 09:00 America/New_York; actionable notifications link back to the job. Operations jobs can investigate canonical attention, activation, health, queues, analytics and integration spending, with bounded pagination. Baselines persist across runs; reply subjects are protected against duplicate proposals. Issue tracking uses Linear; issue drafts are markdown exports until a direct Linear connection is configured. Historical runs and jobs without explicit notification settings stay silent.
 
 ## Implemented architecture
 

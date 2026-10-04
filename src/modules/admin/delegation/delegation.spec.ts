@@ -181,10 +181,18 @@ describe("review execution", () => {
       {} as any,
       {} as any,
       { dispatch: jest.fn() } as any,
-      {} as any,
     );
     return { action, job, prisma, policy, actions, service };
   };
+  it("rejects old GitHub confirmations before claiming or executing a write", async () => {
+    const { service, action, actions, prisma } = setup();
+    action.operation = "github_issue";
+    await expect(service.decide("admin", "action", "confirm")).rejects.toThrow(
+      "removed",
+    );
+    expect(actions.execute).not.toHaveBeenCalled();
+    expect(prisma.delegationAction.updateMany).not.toHaveBeenCalled();
+  });
   it("applies one action at most once even with concurrent confirms", async () => {
     const { service, actions } = setup();
     await Promise.all([
@@ -250,7 +258,6 @@ describe("canonical draft and media execution", () => {
     const service = new DelegationActionsService(
       prisma as any,
       posts as any,
-      {} as any,
       {} as any,
       {} as any,
       {} as any,
@@ -337,7 +344,6 @@ describe("canonical post audiences", () => {
         {} as any,
         {} as any,
         {} as any,
-        {} as any,
       );
       await service.execute("admin", "page", {
         operation: "post_publish",
@@ -355,7 +361,6 @@ describe("canonical post audiences", () => {
       {} as any,
       {} as any,
       scheduled as any,
-      {} as any,
       {} as any,
       {} as any,
       {} as any,
