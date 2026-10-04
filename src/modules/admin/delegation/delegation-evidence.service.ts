@@ -56,6 +56,13 @@ export class DelegationEvidenceService {
         this.landing,
         "30d",
       );
+      evidence.activation = await this.engagement.activation({
+        days: 30,
+        offset: 0,
+        limit: 50,
+      });
+      evidence.coverage =
+        "Activation baseline includes full cohort counts and the first 50 member rows. Use read_admin activation with offsets for more.";
       evidence.analytics = {
         asOf: data.asOf,
         summary: data.summary,

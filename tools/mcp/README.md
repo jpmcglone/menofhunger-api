@@ -92,8 +92,7 @@ accepts these exact redirect URIs (in addition to ChatGPT’s callbacks):
 
 Consent still happens on `api.menofhunger.com`. After connecting with write
 scope (`moh:write`), you can create a **draft** newsletter via MCP, then open
-`/admin/newsletters/:id` on the website to approve and send. MCP never sends
-or schedules newsletters.
+`/admin/newsletters/:id` on the website to approve and send. Reviewed delegated retention actions can send newsletters; scheduling remains in the newsletter editor.
 
 ### Connect Codex
 
@@ -142,7 +141,7 @@ After the API changes are deployed:
 5. Start a conversation, enable the connection in the tools menu, and ask:
    **“Give me a Men of Hunger briefing and three priorities, with evidence.”**
 
-The web connection exposes the **19 read tools**. The four local draft/decision
+The web connection exposes the scope-specific tools in [the generated capability inventory](../../docs/mcp-capabilities.md). The four local draft/decision
 file tools stay on the desktop/CLI; ChatGPT web can draft and reason in the conversation.
 Desktop login and web OAuth are separate sessions. Disconnecting the web connection
 revokes its dedicated session without signing you out of the website or CLI.
@@ -337,8 +336,7 @@ No publish request is automatically retried. A connection failure may happen
 after creation; inspect the feed before retrying. A confirmed post with a session
 restoration failure returns `published: true` plus a warning to sign in again.
 
-The hosted OAuth connector and in-product MARV retain their read-only shared tool
-catalog. Existing `moh:read` grants do not acquire publishing access.
+Hosted OAuth supports reviewed delegated writes with `moh:write`; existing read grants remain read-only. Ask MARV uses read tools and reviewed proposals. See the generated capability inventory for exact availability.
 
 ## Environments and credentials
 
@@ -412,7 +410,7 @@ to verify readiness. The briefing retains available sections when an optional
 endpoint is not yet deployed.
 
 Not connected in this version: payment receipts/revenue accounting, release
-history, HTTP error tracking, mobile crashes, scheduled monitoring, and unsupported writes. These need their actual source integrations or
+history, HTTP error tracking, mobile crashes, unsupported writes. Scheduled operational reviews are supported through delegated work. These need their actual source integrations or
 separately scoped tools. The integration never infers those facts from unrelated
 metrics. See `moh definitions` for metric-specific limits.
 
@@ -444,8 +442,8 @@ Web and iOS discover the same admin catalog through `admin_capabilities`. The ne
 `admin_workspace` tool reads additional named admin areas; use `moh call
 admin_workspace '{"workspace":"verification"}' --json` or discover its schema with
 `moh tools --json`. The dedicated admin assistant reuses these read tools and has
-12 additional proposal operations that require an in-product confirmation button.
-MCP and the CLI do not execute those mutations. Local draft/decision files remain local.
+the reviewed proposal operations listed in the generated inventory that require an in-product confirmation button.
+MCP and the CLI can separately prepare and confirm authorized delegated actions with write access. Local draft/decision files remain local.
 See [admin experience and coverage](../../docs/admin-experience.md).
 
 ### Attention and member activation

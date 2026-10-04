@@ -139,6 +139,7 @@ export function createTools({ api, store, localArtifacts = true, remoteWrites = 
     });
   }
   registerDelegationTools(tool, api, remoteWrites);
+  tool('tool_capabilities', 'Discover the exact tools and read/write permissions available in this connection. Durable job authorization persists until jobs are paused or cancelled.', {}, async () => ({ data: { localArtifacts, remoteWrites, tools: definitions.map(({ name, description, localWrite, remoteWrite }) => ({ name, description, permission: remoteWrite ? 'remote_write' : localWrite ? 'local_write' : 'read' })) } }));
   if (localArtifacts) {
     tool('publishing_accounts', 'List your personal administrator account and pages you operate. Use this to resolve an explicit publishing identity before publish_post.', {},
       () => publishingAccounts(api));

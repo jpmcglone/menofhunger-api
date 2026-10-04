@@ -5,10 +5,14 @@ export function nextDelegationRun(
   schedule: DelegationSchedule,
   after: Date,
 ): Date | null {
-  if (schedule.frequency === "once")
-    return schedule.at
+  if (schedule.endsAt && Date.parse(schedule.endsAt) <= after.getTime())
+    return null;
+  if (schedule.frequency === "once") {
+    const at = schedule.at
       ? new Date(Math.max(Date.parse(schedule.at), after.getTime()))
       : new Date(after);
+    return schedule.endsAt && at > new Date(schedule.endsAt) ? null : at;
+  }
   const format = new Intl.DateTimeFormat("en-US", {
     timeZone: schedule.timeZone,
     hourCycle: "h23",
@@ -25,15 +29,29 @@ export function nextDelegationRun(
   const prior = parts(after);
   for (
     let ms = Math.floor(after.getTime() / 60000) * 60000 + 60000,
-      end = ms + 9 * 86400000;
+      end = ms + 370 * 86400000;
     ms < end;
     ms += 60000
   ) {
     const d = new Date(ms);
+    if (schedule.endsAt && d > new Date(schedule.endsAt)) return null;
     const p = parts(d);
     if (
+      schedule.frequency !== "monthly" &&
+      schedule.weekdays &&
+      !schedule.weekdays.includes(days.indexOf(p.weekday))
+    )
+      continue;
+    if (
+      schedule.frequency === "monthly" &&
+      Number(p.day) !== (schedule.dayOfMonth ?? 1)
+    )
+      continue;
+    if (
       `${p.hour}:${p.minute}` !== schedule.time ||
-      (schedule.frequency === "weekly" && p.weekday !== days[schedule.weekday])
+      (schedule.frequency === "weekly" &&
+        !schedule.weekdays &&
+        p.weekday !== days[schedule.weekday])
     )
       continue;
     // Suppress the second copy of a repeated time on the same local date.

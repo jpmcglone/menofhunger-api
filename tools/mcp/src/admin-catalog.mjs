@@ -16,7 +16,7 @@ export const adminCapabilities = [
   { id: 'search', section: 'Platform', title: 'Search', path: '/admin/search', icon: 'tabler:search', summary: 'Review recent typed member searches', tools: ['admin_workspace'], ios: 'native' },
   { id: 'analytics', section: 'Platform', title: 'Analytics', path: '/admin/analytics', icon: 'tabler:chart-bar', summary: 'Growth, retention, activity, membership, AI, coins, and referrals', tools: ['analytics', 'referral_analytics'], ios: 'native' },
   { id: 'push', section: 'Platform', title: 'Push notifications', path: '/admin/push', icon: 'tabler:bell-ringing', summary: 'Send test iOS or web pushes to your own account', tools: [], ios: 'native' },
-  { id: 'integrations', section: 'Platform', title: 'Integration spending', path: '/admin/integrations', icon: 'tabler:chart-bar', summary: 'Spending controls, provider charge reconciliation, and operational alerts', tools: [], ios: 'native' },
+  { id: 'integrations', section: 'Platform', title: 'Integration spending', path: '/admin/integrations', icon: 'tabler:chart-bar', summary: 'Spending controls, provider charge reconciliation, and operational alerts', tools: ['admin_workspace'], ios: 'native' },
   { id: 'jobs', section: 'Platform', title: 'Jobs', path: '/admin/jobs', icon: 'tabler:terminal-2', summary: 'Queue health, cleanup, backfills, and daily content', tools: ['queue_health', 'operations_health', 'admin_workspace'], ios: 'web' },
   { id: 'site-settings', section: 'Platform', title: 'Site settings', path: '/admin/site-settings', icon: 'tabler:settings', summary: 'Post limits, automatic verification, and email samples', tools: ['admin_workspace'], ios: 'web' },
   { id: 'marv', section: 'AI & Monetization', title: 'MARV settings', path: '/admin/marv', icon: 'tabler:robot', summary: 'Models, credits, member controls, context cards, usage, and cost', tools: ['admin_workspace'], ios: 'web' },
@@ -29,6 +29,8 @@ export const adminCapabilities = [
 ];
 
 export const workspaceReads = {
+  integration_spending: { path: 'admin/integrations/spend' },
+  integration_operations: { path: 'admin/integrations/operations' },
   attention: { path: 'admin/operations/attention' },
   verification: { path: 'admin/verification', paginated: true },
   announcements: { path: 'admin/announcements' },

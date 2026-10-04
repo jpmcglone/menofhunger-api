@@ -19,6 +19,11 @@ export const envSchema = z
         "PORT must be a number",
       ),
     MOH_LOCAL_BILLING_TESTS: z.enum(["0", "1"]).optional(),
+    MARV_GITHUB_REPOSITORY: z
+      .string()
+      .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)
+      .optional(),
+    MARV_GITHUB_TOKEN: z.string().min(1).optional(),
     DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
 
     // Redis (BullMQ). Default is dev-friendly; require explicit value in production.
@@ -145,7 +150,11 @@ export const envSchema = z
     // SFU rollout is opt-in; credentials alone must never change live call routing.
     CLOUDFLARE_SFU_APP_ID: z.string().optional(),
     CLOUDFLARE_SFU_APP_SECRET: z.string().optional(),
-    CALLS_BUDGET_BYTES_PER_SECOND: z.coerce.number().int().positive().default(1_000_000),
+    CALLS_BUDGET_BYTES_PER_SECOND: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(1_000_000),
     CALLS_SFU_ENABLED: z.enum(["true", "false"]).optional().default("false"),
 
     // Cloudflare R2 (S3-compatible) for public assets (avatars/banners).

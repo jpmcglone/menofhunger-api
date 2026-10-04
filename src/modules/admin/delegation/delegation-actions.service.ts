@@ -15,8 +15,23 @@ import { VerificationService } from "../../verification/verification.service";
 import { NewslettersService } from "../../newsletters/newsletters.service";
 import { AppConfigService } from "../../app/app-config.service";
 import { PresenceRealtimeService } from "../../presence/presence-realtime.service";
+import { DelegationGithubService } from "./delegation-github.service";
 import { actionSchema, type DelegatedActionInput } from "./delegation.schemas";
 
+import { createHash } from "node:crypto";
+export function actionSubjectKey(
+  ownerId: string,
+  actorId: string,
+  input: DelegatedActionInput,
+): string | null {
+  const subject =
+    input.operation === "github_issue"
+      ? `github:${ownerId}:${input.feedbackId}`
+      : input.operation === "post_publish" && input.parentId
+        ? `reply:${ownerId}:${actorId}:${input.parentId}`
+        : null;
+  return subject ? createHash("sha256").update(subject).digest("hex") : null;
+}
 const json = (v: unknown) => JSON.parse(JSON.stringify(v));
 export function publicationBody(
   input: Extract<DelegatedActionInput, { operation: "post_publish" }>,
@@ -43,8 +58,40 @@ export class DelegationActionsService {
     private readonly newsletters: NewslettersService,
     private readonly config: AppConfigService,
     private readonly realtime: PresenceRealtimeService,
+    private readonly github: DelegationGithubService,
   ) {}
 
+  async assertFreshSubject(
+    ownerId: string,
+    actorId: string,
+    input: DelegatedActionInput,
+    excludeId?: string,
+  ) {
+    const field =
+      input.operation === "github_issue"
+        ? "feedbackId"
+        : input.operation === "post_publish" && input.parentId
+          ? "parentId"
+          : null;
+    if (!field) return;
+    const value = (input as unknown as Record<string, unknown>)[
+      field
+    ] as string;
+    const existing = await this.prisma.delegationAction.findFirst({
+      where: {
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+        operation: input.operation,
+        status: { in: ["pending", "applying", "complete", "uncertain"] },
+        run: { job: { ownerId, actorId } },
+        input: { path: [field], equals: value },
+      },
+      select: { id: true },
+    });
+    if (existing)
+      throw new BadRequestException(
+        "This subject already has a pending or completed action. Inspect its existing receipt.",
+      );
+  }
   async drafts(actorId: string) {
     return this.posts.listDrafts({ userId: actorId, limit: 30, cursor: null });
   }
@@ -103,6 +150,17 @@ export class DelegationActionsService {
             scheduledAt: true,
           },
         });
+        break;
+      case "github_issue":
+        row = await this.prisma.feedback.findUnique({
+          where: { id: input.feedbackId },
+          select: { id: true, subject: true, status: true, updatedAt: true },
+        });
+        if (row)
+          row = {
+            ...(row as object),
+            repository: this.github.availability().repository,
+          };
         break;
       case "feedback_update":
         row = await this.prisma.feedback.findUnique({
@@ -180,14 +238,19 @@ export class DelegationActionsService {
             "A draft cannot be published as a reply.",
           );
         if (input.draftId && input.visibility === "onlyMe")
-          throw new BadRequestException("Use draft editing to keep this draft in Only me.");
+          throw new BadRequestException(
+            "Use draft editing to keep this draft in Only me.",
+          );
         const body = publicationBody(input);
         const result = input.draftId
           ? await this.posts.publishFromOnlyMe({
               userId: actorId,
               sourcePostId: input.draftId,
               body,
-              visibility: input.visibility as "public" | "verifiedOnly" | "premiumOnly",
+              visibility: input.visibility as
+                | "public"
+                | "verifiedOnly"
+                | "premiumOnly",
             })
           : await this.posts.createPost({
               userId: actorId,
@@ -198,8 +261,14 @@ export class DelegationActionsService {
               poll: null,
             });
         return link(
-          input.visibility === "onlyMe" ? "Post saved to Only me for this account." : input.parentId ? "Reply published." : "Post published.",
-          input.visibility === "onlyMe" && actorId !== ownerId ? null : `/p/${"post" in result ? result.post.id : result.id}`,
+          input.visibility === "onlyMe"
+            ? "Post saved to Only me for this account."
+            : input.parentId
+              ? "Reply published."
+              : "Post published.",
+          input.visibility === "onlyMe" && actorId !== ownerId
+            ? null
+            : `/p/${"post" in result ? result.post.id : result.id}`,
         );
       }
       case "post_draft": {
@@ -373,6 +442,8 @@ export class DelegationActionsService {
           `/admin/newsletters/${input.newsletterId}`,
         );
       }
+      case "github_issue":
+        return this.github.create(input);
       case "export":
         return link("Export prepared. Download it from this action.");
     }

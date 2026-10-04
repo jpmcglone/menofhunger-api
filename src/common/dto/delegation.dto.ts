@@ -5,7 +5,20 @@ export type DelegationAccountDto = {
   accountKind: string;
 };
 export type DelegationScheduleDto = {
-  frequency: "once" | "daily" | "weekly";
+  frequency: "once" | "daily" | "weekly" | "monthly";
+  weekdays?: number[];
+  dayOfMonth?: number;
+  endsAt?: string;
+  notification?: "actionable" | "digest" | "all" | "none";
+  condition?: {
+    metric:
+      | "verification_wait_hours"
+      | "pending_reports"
+      | "open_feedback"
+      | "integration_alerts";
+    threshold: number;
+    cooldownHours: number;
+  };
   time: string;
   timeZone: string;
   weekday: number;
@@ -33,6 +46,8 @@ export type DelegationRunDto = {
   actions: DelegationActionDto[];
 };
 export type DelegationJobDto = {
+  baseline?: string | null;
+  resumeAt?: string | null;
   pendingCount?: number;
   nextRunCursor?: string | null;
   id: string;
@@ -48,7 +63,15 @@ export type DelegationJobDto = {
   createdAt: string;
   runs: DelegationRunDto[];
 };
+export type DelegationTemplateDto = {
+  id: string;
+  title: string;
+  workflow: string;
+  instruction: string;
+  schedule: DelegationScheduleDto;
+};
 export type DelegationWorkspaceDto = {
+  templates: DelegationTemplateDto[];
   actionSchema: Record<string, unknown>;
   operations: Record<string, string[]>;
   configured: boolean;

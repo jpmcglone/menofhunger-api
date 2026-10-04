@@ -8,6 +8,7 @@ import { DelegationPolicyService } from "./delegation-policy.service";
 import {
   DelegationActionsService,
   publicationBody,
+  actionSubjectKey,
 } from "./delegation-actions.service";
 import { DelegationEvidenceService } from "./delegation-evidence.service";
 import {
@@ -21,6 +22,9 @@ import {
   type DelegatedActionInput,
 } from "./delegation.schemas";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
+import { DelegationReadsService } from "./delegation-reads.service";
+import { scheduleSchema } from "./delegation.schemas";
 
 @Injectable()
 export class DelegationRunnerService {
@@ -34,6 +38,7 @@ export class DelegationRunnerService {
     private readonly ai: MarvinAIService,
     private readonly tools: MarvinToolHandlersService,
     private readonly usage: MarvinUsageService,
+    private readonly reads: DelegationReadsService,
   ) {}
   async run(id: string) {
     const run = await this.prisma.delegationRun.findUnique({
@@ -72,6 +77,79 @@ export class DelegationRunnerService {
         job.ownerId,
         snapshot.actorId,
       );
+      const schedule = scheduleSchema.parse(snapshot.schedule ?? job.schedule);
+      if (schedule.condition) {
+        const metrics = await this.reads.metrics(job.ownerId);
+        const recent = await this.prisma.delegationRun.findFirst({
+          where: {
+            jobId: job.id,
+            id: { not: id },
+            status: { in: ["complete", "review"] },
+            createdAt: {
+              gte: new Date(
+                Date.now() - schedule.condition.cooldownHours * 3600000,
+              ),
+            },
+          },
+        });
+        if (
+          metrics[schedule.condition.metric] < schedule.condition.threshold ||
+          recent
+        ) {
+          await this.prisma.delegationRun.update({
+            where: { id },
+            data: {
+              status: "skipped",
+              summary: recent
+                ? "Condition cooldown is active."
+                : "Condition threshold was not reached.",
+              evidence: delegationJson({ metrics }),
+              completedAt: new Date(),
+            },
+          });
+          return;
+        }
+        evidence.conditionMetrics = metrics;
+      }
+      if (snapshot.workflow === "operations") {
+        evidence.attention = await this.reads.read(
+          job.ownerId,
+          snapshot.workflow,
+          { area: "attention" },
+        );
+        evidence.spending = await this.reads.read(
+          job.ownerId,
+          snapshot.workflow,
+          { area: "integration_spending" },
+        );
+        evidence.activation = await this.reads.read(
+          job.ownerId,
+          snapshot.workflow,
+          { area: "activation" },
+        );
+      }
+      const previousActions = await this.prisma.delegationAction.findMany({
+        where: {
+          run: { jobId: job.id },
+          status: { in: ["complete", "pending", "applying", "uncertain"] },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+        select: { input: true, status: true, path: true, createdAt: true },
+      });
+      evidence.previousActions = previousActions;
+      evidence.baseline = job.baseline;
+      if (!job.baseline)
+        await this.prisma.delegationJob.updateMany({
+          where: { id: job.id, baseline: { equals: Prisma.DbNull } },
+          data: {
+            baseline: delegationJson({
+              capturedAt: new Date().toISOString(),
+              revision: job.revision,
+              evidence,
+            }),
+          },
+        });
       const prior = await this.prisma.delegationRun.findMany({
         where: {
           jobId: job.id,
@@ -111,6 +189,7 @@ export class DelegationRunnerService {
         cacheKey: "moh-delegated-work",
         toolContext: { requesterUserId: job.ownerId },
         adminTools: [
+          this.reads.tool(snapshot.workflow),
           {
             type: "function",
             name: "prepare_action",
@@ -140,13 +219,26 @@ For news: use web search for today's major story, then fetch the original report
 For community: use public introductions and unanswered posts; prepare personalized public replies. Never send private messages. Suggest introductions in the summary without contacting people.
 For retention: compare canonical analytics with prior snapshots, identify one measurable intervention, and prepare a filtered newsletter or post. Never invent attribution. Report sample sizes and only mature weekly cohorts. Newsletter delivery is a separate reviewed action; do not prepare sending a newsletter unless this instruction explicitly requests it. Subsequent runs compare outcomes with the saved baseline.
 For personal: unread means readAt is null, not deliveredAt. Organize only the selected account's saved posts and profile. Do not mark activity read without a request. Event means the account's Men of Hunger Space and schedule. Never log a check-in as if the user actually completed it.
-For moderation: report actionTaken only records a decision; it does not ban or delete anything. Verification decisions require evidence. For external work, prepare markdown issue/report exports, CSV reports or valid iCalendar files. There are no direct external integrations. Never claim a GitHub issue or Google document was created.
+Preserve the saved baseline; compare current evidence against it, with sample sizes and an explicit measurement date. Prior actions identify subjects already acted on: never propose the same reply or issue again. Use read_admin to investigate and paginate beyond previews. For operations: report what changed, what is stuck, and three priorities with evidence links. Quiet unchanged conditions should not produce actions. GitHub issue creation is a separately reviewed github_issue action tied to an exact feedbackId; do not claim an issue exists before its receipt.
+For moderation: report actionTaken only records a decision; it does not ban or delete anything. Verification decisions require evidence. For external work, prepare markdown issue/report exports, CSV reports or valid iCalendar files. Only the configured GitHub issue connection supports direct external actions. Other destinations use exports; never claim an export was uploaded.
 Metric definitions: ${sharedTools.guidance()}`,
         userMessage: `Job: ${snapshot.title}\nInstruction: ${snapshot.instruction}\nCurrent evidence: ${JSON.stringify(evidence).slice(0, 50000)}\nPrevious runs and measurement baseline: ${JSON.stringify(prior).slice(0, 24000)}`,
         dispatchTool: async (name, raw, context) => {
           await assertCurrent();
           if (++calls > 12)
             return JSON.stringify({ error: "tool_budget_reached" });
+          if (name === "read_admin") {
+            try {
+              return JSON.stringify(
+                await this.reads.read(job.ownerId, snapshot.workflow, raw),
+              );
+            } catch (error) {
+              return JSON.stringify({
+                error:
+                  error instanceof Error ? error.message : "read_unavailable",
+              });
+            }
+          }
           if (name === "fetch_url_content") {
             const { url } = z
               .object({ url: z.string().url() })
@@ -202,6 +294,24 @@ Metric definitions: ${sharedTools.guidance()}`,
               error:
                 "fetch_sources_and_prepare_one_top_level_post_under_1000_characters",
             });
+          await this.actions.assertFreshSubject(
+            job.ownerId,
+            snapshot.actorId,
+            action,
+          );
+          if (
+            proposals.some(
+              (p) =>
+                (action.operation === "github_issue" &&
+                  p.input.operation === "github_issue" &&
+                  p.input.feedbackId === action.feedbackId) ||
+                (action.operation === "post_publish" &&
+                  action.parentId &&
+                  p.input.operation === "post_publish" &&
+                  p.input.parentId === action.parentId),
+            )
+          )
+            return JSON.stringify({ error: "duplicate_subject" });
           const before = await this.actions.snapshot(snapshot.actorId, action);
           if (JSON.stringify(before).length > 40000)
             return JSON.stringify({ error: "target_too_large" });
@@ -250,6 +360,11 @@ Metric definitions: ${sharedTools.guidance()}`,
             completedAt: new Date(),
             actions: {
               create: proposals.map(({ input, before }) => ({
+                subjectKey: actionSubjectKey(
+                  job.ownerId,
+                  snapshot.actorId,
+                  input,
+                ),
                 operation: input.operation,
                 title: input.operation.replace(/_/g, " "),
                 input: delegationJson(input),
@@ -285,12 +400,46 @@ Metric definitions: ${sharedTools.guidance()}`,
         },
       });
     } finally {
+      this.service.deliver(id);
       this.service.notify(job.ownerId, job.id);
     }
   }
   async sweep() {
     // An interrupted write is uncertain, never silently replayed after a worker restart.
     const stale = new Date(Date.now() - 10 * 60000);
+    const digestHour =
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/New_York",
+        hour: "2-digit",
+        hourCycle: "h23",
+      }).format(new Date()) === "09";
+    const undelivered = await this.prisma.delegationRun.findMany({
+      where: {
+        status: { in: ["review", "failed", "uncertain", "complete"] },
+        notifiedAt: null,
+        ...(!digestHour
+          ? {
+              OR: [
+                {
+                  job: {
+                    schedule: {
+                      path: ["notification"],
+                      equals: Prisma.AnyNull,
+                    },
+                  },
+                },
+                {
+                  job: { schedule: { path: ["notification"], not: "digest" } },
+                },
+              ],
+            }
+          : {}),
+      },
+      orderBy: { createdAt: "asc" },
+      take: 100,
+      select: { id: true },
+    });
+    for (const run of undelivered) this.service.deliver(run.id);
     const interruptedActions = await this.prisma.delegationAction.findMany({
       where: { status: "applying", startedAt: { lt: stale } },
       include: { run: { include: { job: true } } },
@@ -332,6 +481,23 @@ Metric definitions: ${sharedTools.guidance()}`,
         },
       });
       this.service.notify(run.job.ownerId, run.jobId);
+    }
+    const resuming = await this.prisma.delegationJob.findMany({
+      where: { status: "paused", resumeAt: { lte: new Date() } },
+      take: 30,
+    });
+    for (const job of resuming) {
+      try {
+        await this.service.control(
+          job.ownerId,
+          job.id,
+          "resume",
+          `resume-${job.id}`,
+          job.revision,
+        );
+      } catch {
+        /* Revoked jobs remain paused. */
+      }
     }
     const due = await this.prisma.delegationJob.findMany({
       where: { status: "active", nextRunAt: { lte: new Date() } },

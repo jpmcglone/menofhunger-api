@@ -31,8 +31,8 @@ The companion [experience review](admin-experience.md) records assistant actions
 | POST /v1/admin/daily-content/refresh | jobs | [source](../src/modules/admin/admin-daily-content.controller.ts#L24) |
 | GET /v1/admin/daily-content/today | jobs | [source](../src/modules/admin/admin-daily-content.controller.ts#L18) |
 | GET /v1/admin/delegation | delegation | [source](../src/modules/admin/delegation/delegation.controller.ts#L23) |
-| POST /v1/admin/delegation/actions/:id | delegation | [source](../src/modules/admin/delegation/delegation.controller.ts#L118) |
-| GET /v1/admin/delegation/actions/:id/export | delegation | [source](../src/modules/admin/delegation/delegation.controller.ts#L140) |
+| POST /v1/admin/delegation/actions/:id | delegation | [source](../src/modules/admin/delegation/delegation.controller.ts#L114) |
+| GET /v1/admin/delegation/actions/:id/export | delegation | [source](../src/modules/admin/delegation/delegation.controller.ts#L136) |
 | POST /v1/admin/delegation/jobs | delegation | [source](../src/modules/admin/delegation/delegation.controller.ts#L31) |
 | GET /v1/admin/delegation/jobs/:id | delegation | [source](../src/modules/admin/delegation/delegation.controller.ts#L35) |
 | PATCH /v1/admin/delegation/jobs/:id | delegation | [source](../src/modules/admin/delegation/delegation.controller.ts#L77) |
@@ -40,8 +40,8 @@ The companion [experience review](admin-experience.md) records assistant actions
 | GET /v1/admin/delegation/jobs/:id/drafts | delegation | [source](../src/modules/admin/delegation/delegation.controller.ts#L51) |
 | POST /v1/admin/delegation/jobs/:id/proposals | delegation | [source](../src/modules/admin/delegation/delegation.controller.ts#L58) |
 | POST /v1/admin/email-samples/send | site-settings | [source](../src/modules/admin/admin-email-samples.controller.ts#L31) |
-| GET /v1/admin/feedback | feedback | [source](../src/modules/admin/admin-feedback.controller.ts#L32) |
-| PATCH /v1/admin/feedback/:id | feedback | [source](../src/modules/admin/admin-feedback.controller.ts#L52) |
+| GET /v1/admin/feedback | feedback | [source](../src/modules/admin/admin-feedback.controller.ts#L46) |
+| PATCH /v1/admin/feedback/:id | feedback | [source](../src/modules/admin/admin-feedback.controller.ts#L67) |
 | POST /v1/admin/impersonate | impersonate | [source](../src/modules/admin/admin-impersonation.controller.ts#L26) |
 | POST /v1/admin/integrations/controls | integrations | [source](../src/modules/x/integration-admin.controller.ts#L84) |
 | GET /v1/admin/integrations/operations | integrations | [source](../src/modules/x/integration-admin.controller.ts#L32) |

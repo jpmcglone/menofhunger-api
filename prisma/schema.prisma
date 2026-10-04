@@ -2265,6 +2265,7 @@ model AdminIntroBrief {
 }
 
 model Notification {
+  actionPath String?
   id           String    @id @default(cuid())
   createdAt    DateTime  @default(now())
   deliveredAt  DateTime?
@@ -3905,6 +3906,8 @@ model DelegationJob {
   revision Int @default(1)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  baseline Json?
+  resumeAt DateTime?
   runs DelegationRun[]
   @@index([ownerId, createdAt(sort: Desc)])
   @@index([status, nextRunAt])
@@ -3922,12 +3925,15 @@ model DelegationRun {
   createdAt DateTime @default(now())
   startedAt DateTime?
   completedAt DateTime?
+  notificationKey String?
+  notifiedAt DateTime?
   actions DelegationAction[]
   @@index([jobId, createdAt(sort: Desc)])
   @@index([status, createdAt])
 }
 
 model DelegationAction {
+  subjectKey String? @unique
   id String @id @default(uuid())
   runId String
   run DelegationRun @relation(fields: [runId], references: [id], onDelete: Cascade)

@@ -1,3 +1,6 @@
+import { delegationTemplates } from "./delegation-templates";
+import { DelegationGithubService } from "./delegation-github.service";
+import { SideEffectsService } from "../../side-effects/side-effects.service";
 import { sharedTools } from "../../mcp/mcp-tools";
 import {
   BadRequestException,
@@ -26,11 +29,15 @@ import type {
   DelegationWorkspaceDto,
 } from "../../../common/dto/delegation.dto";
 import { DelegationPolicyService } from "./delegation-policy.service";
-import { DelegationActionsService } from "./delegation-actions.service";
+import {
+  DelegationActionsService,
+  actionSubjectKey,
+} from "./delegation-actions.service";
 import {
   actionSchema,
   jobInputSchema,
   scheduleSchema,
+  jobEditSchema,
   workflows,
   workflowOperations,
   type JobInput,
@@ -59,6 +66,7 @@ export type RunSnapshot = Pick<
   | "instruction"
   | "permission"
   | "revision"
+  | "schedule"
 >;
 @Injectable()
 export class DelegationService {
@@ -71,6 +79,8 @@ export class DelegationService {
     private readonly jobs: JobsService,
     private readonly ai: MarvinAIService,
     private readonly marv: MarvinAdminService,
+    private readonly sideEffects: SideEffectsService,
+    private readonly github: DelegationGithubService,
   ) {}
   async configured() {
     return (
@@ -108,6 +118,7 @@ export class DelegationService {
     return {
       configured: await this.configured(),
       access: "admin",
+      templates: delegationTemplates,
       actionSchema: sharedTools.schema(actionSchema),
       operations: workflowOperations,
       accounts,
@@ -127,6 +138,14 @@ export class DelegationService {
       })),
       integrations: [
         {
+          id: "github",
+          title: "GitHub issues",
+          available: this.github.availability().available,
+          reason:
+            this.github.availability().repository ??
+            "Configure MARV_GITHUB_REPOSITORY and MARV_GITHUB_TOKEN on the API. Issue text is reviewed before sending.",
+        },
+        {
           id: "news",
           title: "Web research",
           available:
@@ -144,7 +163,6 @@ export class DelegationService {
             "Delivery requires the existing email and newsletter address configuration. Drafts are always available.",
         },
         ...[
-          "GitHub",
           "Google Docs / Sheets",
           "External calendar",
           "External social accounts",
@@ -235,7 +253,25 @@ export class DelegationService {
       );
   }
   async edit(ownerId: string, id: string, revision: number, raw: unknown) {
-    const input = jobInputSchema.parse({ ...(raw as object), id });
+    const current = await this.prisma.delegationJob.findFirst({
+      where: { id, ownerId },
+    });
+    if (!current) throw new NotFoundException();
+    let fields = raw as Record<string, unknown>;
+    if ("changes" in fields) {
+      const patch = jobEditSchema.parse({ revision, ...fields });
+      const actor = await this.policy.assertActor(ownerId, current.actorId);
+      fields = {
+        title: current.title,
+        workflow: current.workflow,
+        instruction: current.instruction,
+        actorUsername: actor.username ?? undefined,
+        permission: current.permission,
+        schedule: current.schedule,
+        ...patch.changes,
+      };
+    }
+    const input = jobInputSchema.parse({ ...fields, id });
     const actor = await this.policy.actor(ownerId, input.actorUsername);
     this.validatePermission(input);
     const result = await this.prisma.delegationJob.updateMany({
@@ -253,21 +289,60 @@ export class DelegationService {
     });
     if (!result.count)
       throw new ConflictException("This job changed. Refresh before editing.");
+    await this.prisma.delegationAction.updateMany({
+      where: {
+        run: { jobId: id, jobSnapshot: { path: ["revision"], lte: revision } },
+        status: "pending",
+      },
+      data: { status: "cancelled", subjectKey: null },
+    });
     this.notify(ownerId, id);
     return this.get(ownerId, id);
   }
   async control(
     ownerId: string,
     id: string,
-    command: "pause" | "resume" | "cancel" | "run",
+    command: "pause" | "resume" | "cancel" | "run" | "skip",
     requestId: string,
+    revision?: number,
+    resumeAt?: string,
   ) {
     const job = await this.prisma.delegationJob.findFirst({
       where: { id, ownerId },
     });
     if (!job) throw new NotFoundException();
     await this.policy.assertAdmin(ownerId);
-    if (command === "run") {
+    if (revision !== undefined && revision !== job.revision)
+      throw new ConflictException("This job changed. Review it again.");
+    if (resumeAt && (command !== "pause" || Date.parse(resumeAt) <= Date.now()))
+      throw new BadRequestException("Choose a future resume time for a pause.");
+    if (command === "skip") {
+      if (job.status !== "active" || !job.nextRunAt)
+        throw new BadRequestException(
+          "There is no scheduled occurrence to skip.",
+        );
+      const schedule = scheduleSchema.parse(job.schedule);
+      const result = await this.prisma.delegationJob.updateMany({
+        where: {
+          id,
+          ownerId,
+          revision: job.revision,
+          nextRunAt: job.nextRunAt,
+        },
+        data: {
+          nextRunAt:
+            schedule.frequency === "once"
+              ? null
+              : nextDelegationRun(
+                  schedule,
+                  new Date(Math.max(Date.now(), job.nextRunAt.getTime())),
+                ),
+          revision: { increment: 1 },
+        },
+      });
+      if (!result.count)
+        throw new ConflictException("This job changed. Refresh it.");
+    } else if (command === "run") {
       await this.policy.assertActor(ownerId, job.actorId);
       await this.queue(job, requestId);
     } else {
@@ -280,10 +355,11 @@ export class DelegationService {
           : command === "resume"
             ? "active"
             : "cancelled";
-      await this.prisma.delegationJob.updateMany({
+      const changed = await this.prisma.delegationJob.updateMany({
         where: { id, ownerId, revision: job.revision },
         data: {
           status,
+          resumeAt: command === "pause" && resumeAt ? new Date(resumeAt) : null,
           revision: { increment: 1 },
           nextRunAt:
             command === "resume"
@@ -294,13 +370,32 @@ export class DelegationService {
               : null,
         },
       });
+      if (!changed.count)
+        throw new ConflictException(
+          "This job changed. Refresh before continuing.",
+        );
       if (command !== "resume") {
         await this.prisma.delegationRun.updateMany({
-          where: { jobId: id, status: "queued" },
+          where: {
+            jobId: id,
+            status: "queued",
+            jobSnapshot: { path: ["revision"], lte: job.revision },
+          },
           data: { status: "cancelled", completedAt: new Date() },
         });
       }
     }
+    if (command !== "run")
+      await this.prisma.delegationAction.updateMany({
+        where: {
+          run: {
+            jobId: id,
+            jobSnapshot: { path: ["revision"], lte: job.revision },
+          },
+          status: "pending",
+        },
+        data: { status: "cancelled", subjectKey: null },
+      });
     this.notify(ownerId, id);
     return this.get(ownerId, id);
   }
@@ -418,6 +513,7 @@ export class DelegationService {
       actorId,
       title,
       workflow,
+      schedule,
       instruction,
       permission,
       revision,
@@ -427,6 +523,7 @@ export class DelegationService {
       actorId,
       title,
       workflow,
+      schedule,
       instruction,
       permission,
       revision,
@@ -481,6 +578,7 @@ export class DelegationService {
       throw new BadRequestException(
         "The hourly limit of 30 delegated runs has been reached.",
       );
+    await this.actions.assertFreshSubject(ownerId, job.actorId, input);
     const before = await this.actions.snapshot(job.actorId, input);
     await this.prisma.delegationRun.create({
       data: {
@@ -492,6 +590,7 @@ export class DelegationService {
         completedAt: new Date(),
         actions: {
           create: {
+            subjectKey: actionSubjectKey(ownerId, job.actorId, input),
             operation: input.operation,
             title: input.operation.replace(/_/g, " "),
             input: delegationJson(input),
@@ -520,7 +619,11 @@ export class DelegationService {
     if (decision === "cancel") {
       await this.prisma.delegationAction.updateMany({
         where: { id, status: "pending" },
-        data: { status: "cancelled", completedAt: new Date() },
+        data: {
+          status: "cancelled",
+          subjectKey: null,
+          completedAt: new Date(),
+        },
       });
     } else {
       const snapshot = action.run.jobSnapshot as unknown as RunSnapshot;
@@ -545,6 +648,7 @@ export class DelegationService {
         throw new BadRequestException(
           "This operation is outside the job’s permission.",
         );
+      await this.actions.assertFreshSubject(ownerId, job.actorId, input, id);
       const before = await this.actions.snapshot(job.actorId, input);
       if (!isDeepStrictEqual(delegationJson(before), action.before))
         throw new ConflictException(
@@ -577,13 +681,18 @@ export class DelegationService {
             data: { ...receipt, status: "complete", completedAt: new Date() },
           });
         } catch (error) {
-          const rejected = error instanceof HttpException && error.getStatus() >= 400 && error.getStatus() < 500;
+          const rejected =
+            error instanceof HttpException &&
+            error.getStatus() >= 400 &&
+            error.getStatus() < 500;
           await this.prisma.delegationAction.update({
             where: { id },
             data: {
               status: rejected ? "failed" : "uncertain",
-              receipt: rejected ? error.message :
-                "The result could not be confirmed. Check the destination before taking further action.",
+              ...(rejected ? { subjectKey: null } : {}),
+              receipt: rejected
+                ? error.message
+                : "The result could not be confirmed. Check the destination before taking further action.",
               completedAt: new Date(),
             },
           });
@@ -591,6 +700,7 @@ export class DelegationService {
       }
     }
     await this.settleRun(action.runId);
+    this.deliver(action.runId);
     this.notify(ownerId, job.id);
     return this.actionDto(
       await this.prisma.delegationAction.findUniqueOrThrow({ where: { id } }),
@@ -607,10 +717,18 @@ export class DelegationService {
       ? "uncertain"
       : actions.some((a) => a.status === "pending")
         ? "review"
-        : "complete";
+        : actions.some((a) => a.status === "failed")
+          ? "failed"
+          : "complete";
     await this.prisma.delegationRun.updateMany({
-      where: { id: runId, status: { in: ["review", "complete", "uncertain"] } },
-      data: { status },
+      where: {
+        id: runId,
+        status: {
+          in: ["review", "complete", "uncertain", "failed"],
+          not: status,
+        },
+      },
+      data: { status, notifiedAt: null },
     });
   }
   async export(ownerId: string, id: string) {
@@ -622,6 +740,9 @@ export class DelegationService {
     const input = actionSchema.parse(action.input);
     if (input.operation !== "export") throw new NotFoundException();
     return input;
+  }
+  deliver(runId: string) {
+    this.sideEffects.dispatch("delegation.result", { runId });
   }
   notify(ownerId: string, id: string) {
     this.realtime.emitAdminUpdated(ownerId, {
@@ -663,6 +784,8 @@ export class DelegationService {
   }
   dto(j: FullJob): DelegationJobDto {
     return {
+      baseline: j.baseline ? JSON.stringify(j.baseline) : null,
+      resumeAt: j.resumeAt?.toISOString() ?? null,
       id: j.id,
       title: j.title,
       workflow: j.workflow,

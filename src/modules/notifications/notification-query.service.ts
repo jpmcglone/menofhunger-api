@@ -1,35 +1,50 @@
-import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import { Injectable, Optional } from '@nestjs/common';
-import { type NotificationKind, type VerifiedStatus } from '@prisma/client';
-import { MutesService } from '../mutes/mutes.service';
-import { PrismaService } from '../prisma/prisma.service';
-import { AppConfigService } from '../app/app-config.service';
-import { publicAssetUrl } from '../../common/assets/public-asset-url';
-import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
-import { PostVisibilityReadService } from '../viewer/post-visibility-read.service';
-import { NotificationReadStateService } from './notification-read-state.service';
-import { notificationCategory, notificationCategoryCounts, notificationFilterWhere } from './notification-category';
-import { CacheService } from '../redis/cache.service';
-import { CacheInvalidationService } from '../redis/cache-invalidation.service';
-import { CacheTtl } from '../redis/cache-ttl';
-import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
-import type { NotificationActorDto, NotificationDto, SubjectPostPreviewDto, SubjectArticlePreviewDto, SubjectPostVisibility, SubjectTier } from './notification.dto';
+import { toAvatarVideoDto } from "../../common/dto/avatar-video.dto";
+import { Injectable, Optional } from "@nestjs/common";
+import { type NotificationKind, type VerifiedStatus } from "@prisma/client";
+import { MutesService } from "../mutes/mutes.service";
+import { PrismaService } from "../prisma/prisma.service";
+import { AppConfigService } from "../app/app-config.service";
+import { publicAssetUrl } from "../../common/assets/public-asset-url";
+import { createdAtIdCursorWhere } from "../../common/pagination/created-at-id-cursor";
+import { PostVisibilityReadService } from "../viewer/post-visibility-read.service";
+import { NotificationReadStateService } from "./notification-read-state.service";
+import {
+  notificationCategory,
+  notificationCategoryCounts,
+  notificationFilterWhere,
+} from "./notification-category";
+import { CacheService } from "../redis/cache.service";
+import { CacheInvalidationService } from "../redis/cache-invalidation.service";
+import { CacheTtl } from "../redis/cache-ttl";
+import { RedisKeys, stableJsonHash } from "../redis/redis-keys";
+import type {
+  NotificationActorDto,
+  NotificationDto,
+  SubjectPostPreviewDto,
+  SubjectArticlePreviewDto,
+  SubjectPostVisibility,
+  SubjectTier,
+} from "./notification.dto";
 import type {
   NotificationFeedItemDto,
   NotificationGroupDto,
   NotificationGroupKind,
-} from '../../common/dto/notification-feed.dto';
-import type { PostDto } from '../../common/dto/post.dto';
-import { collapseFeedByRoot, type FeedCollapseMode, type FeedCollapsePrefer } from '../../common/feed-collapse/collapse-by-root';
+} from "../../common/dto/notification-feed.dto";
+import type { PostDto } from "../../common/dto/post.dto";
+import {
+  collapseFeedByRoot,
+  type FeedCollapseMode,
+  type FeedCollapsePrefer,
+} from "../../common/feed-collapse/collapse-by-root";
 
 /** Kinds that embed a full PostDto card in the bell. Everything else uses subjectPostPreview. */
 const NOTIFICATION_POST_CARD_KINDS = new Set<NotificationKind>([
-  'comment',
-  'mention',
-  'followed_post',
-  'checkin_post',
-  'community_group_post',
-  'repost',
+  "comment",
+  "mention",
+  "followed_post",
+  "checkin_post",
+  "community_group_post",
+  "repost",
 ]);
 
 /**
@@ -49,13 +64,21 @@ export class NotificationQueryService {
     @Optional() private readonly mutes?: MutesService,
   ) {}
 
-  notificationPostId(
-    n: { kind: NotificationKind; actorPostId?: string | null; subjectPostId?: string | null },
-  ): string | null {
-    if (n.kind === 'followed_post' || n.kind === 'checkin_post' || n.kind === 'community_group_post') return (n.subjectPostId ?? '').trim() || null;
-    if (n.kind === 'comment') return (n.actorPostId ?? '').trim() || null;
-    if (n.kind === 'mention') return (n.actorPostId ?? '').trim() || null;
-    if (n.kind === 'repost') return (n.actorPostId ?? n.subjectPostId ?? '').trim() || null;
+  notificationPostId(n: {
+    kind: NotificationKind;
+    actorPostId?: string | null;
+    subjectPostId?: string | null;
+  }): string | null {
+    if (
+      n.kind === "followed_post" ||
+      n.kind === "checkin_post" ||
+      n.kind === "community_group_post"
+    )
+      return (n.subjectPostId ?? "").trim() || null;
+    if (n.kind === "comment") return (n.actorPostId ?? "").trim() || null;
+    if (n.kind === "mention") return (n.actorPostId ?? "").trim() || null;
+    if (n.kind === "repost")
+      return (n.actorPostId ?? n.subjectPostId ?? "").trim() || null;
     // marv_not_in_group navigates via actorPostId on the DTO; no embedded post row.
     return null;
   }
@@ -64,15 +87,17 @@ export class NotificationQueryService {
     recipientUserId: string;
     limit: number;
     cursor: string | null;
-    kind?: NotificationKind | 'other' | 'board' | 'articles';
+    kind?: NotificationKind | "other" | "board" | "articles";
     unreadOnly?: boolean;
   }) {
-    const firstPage = !(params.cursor ?? '').trim();
+    const firstPage = !(params.cursor ?? "").trim();
     if (!firstPage || !this.cache || !this.cacheInvalidation) {
       return this.listUncached(params);
     }
 
-    const ver = await this.cacheInvalidation.notificationsListVersion(params.recipientUserId);
+    const ver = await this.cacheInvalidation.notificationsListVersion(
+      params.recipientUserId,
+    );
     const paramsHash = stableJsonHash({
       limit: params.limit,
       kind: params.kind ?? null,
@@ -84,7 +109,11 @@ export class NotificationQueryService {
       enabled: true,
       key: RedisKeys.notificationsList(params.recipientUserId, paramsHash, ver),
       ttlSeconds: CacheTtl.authNotificationsPage1Seconds,
-      lockKey: RedisKeys.notificationsListLock(params.recipientUserId, paramsHash, ver),
+      lockKey: RedisKeys.notificationsListLock(
+        params.recipientUserId,
+        paramsHash,
+        ver,
+      ),
       lockTtlMs: 10_000,
       lockWaitMs: 750,
       computeAndSet: () => this.listUncached(params),
@@ -96,7 +125,7 @@ export class NotificationQueryService {
     recipientUserId: string;
     limit: number;
     cursor: string | null;
-    kind?: NotificationKind | 'other' | 'board' | 'articles';
+    kind?: NotificationKind | "other" | "board" | "articles";
     unreadOnly?: boolean;
   }) {
     const { recipientUserId, limit, cursor, kind } = params;
@@ -115,26 +144,47 @@ export class NotificationQueryService {
             .then((r) => (r ? { id: r.id, createdAt: r.createdAt } : null)),
       }),
       this.postVisibility.viewerBlockSets(recipientUserId),
-      this.mutes ? this.mutes.mutedIds(recipientUserId) : Promise.resolve(new Set<string>()),
+      this.mutes
+        ? this.mutes.mutedIds(recipientUserId)
+        : Promise.resolve(new Set<string>()),
     ]);
-    const blockedActorIds = [...blockSets.blockedByViewer, ...blockSets.viewerBlockedBy, ...mutedIds];
+    const blockedActorIds = [
+      ...blockSets.blockedByViewer,
+      ...blockSets.viewerBlockedBy,
+      ...mutedIds,
+    ];
     const notifications = await this.prisma.notification.findMany({
       where: {
         recipientUserId,
         ...notificationFilterWhere(kind),
         ...(params.unreadOnly ? { readAt: null } : {}),
-        ...(blockedActorIds.length > 0 ? { NOT: { AND: [{ actorUserId: { not: null } }, { actorUserId: { in: blockedActorIds } }] } } : {}),
+        ...(blockedActorIds.length > 0
+          ? {
+              NOT: {
+                AND: [
+                  { actorUserId: { not: null } },
+                  { actorUserId: { in: blockedActorIds } },
+                ],
+              },
+            }
+          : {}),
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },
       include: {
-        subjectPost: { select: { id: true, parentId: true, kind: true, rootId: true } },
-        actorPost: { select: { id: true, parentId: true, kind: true, rootId: true } },
+        subjectPost: {
+          select: { id: true, parentId: true, kind: true, rootId: true },
+        },
+        actorPost: {
+          select: { id: true, parentId: true, kind: true, rootId: true },
+        },
         actor: {
           select: {
             id: true,
             username: true,
             name: true,
-            avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
+            avatarKey: true,
+            avatarVideoKey: true,
+            avatarVideoDurationMs: true,
             avatarUpdatedAt: true,
             premium: true,
             isOrganization: true,
@@ -143,7 +193,7 @@ export class NotificationQueryService {
           },
         },
       },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: rawFetchLimit + 1,
     });
 
@@ -156,30 +206,46 @@ export class NotificationQueryService {
 
     const followedReplies = await this.prisma.notification.count({
       where: {
-        recipientUserId, readAt: null, kind: 'followed_post',
+        recipientUserId,
+        readAt: null,
+        kind: "followed_post",
         subjectPost: { is: { parentId: { not: null } } },
-        ...(blockedActorIds.length ? { NOT: { AND: [{ actorUserId: { not: null } }, { actorUserId: { in: blockedActorIds } }] } } : {}),
+        ...(blockedActorIds.length
+          ? {
+              NOT: {
+                AND: [
+                  { actorUserId: { not: null } },
+                  { actorUserId: { in: blockedActorIds } },
+                ],
+              },
+            }
+          : {}),
       },
     });
-    const unreadByCategory = notificationCategoryCounts(unreadByKind, followedReplies ?? 0);
+    const unreadByCategory = notificationCategoryCounts(
+      unreadByKind,
+      followedReplies ?? 0,
+    );
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const previewPostIds = [
       ...new Set(
         raw
-          .flatMap((n) => (
-            n.kind === 'repost' && n.actorPostId
+          .flatMap((n) =>
+            n.kind === "repost" && n.actorPostId
               ? [n.actorPostId, n.subjectPostId]
-              : [n.subjectPostId]
-          ))
+              : [n.subjectPostId],
+          )
           .filter(Boolean),
       ),
     ] as string[];
-    const subjectUserIds = [...new Set(raw.map((n) => n.subjectUserId).filter(Boolean))] as string[];
+    const subjectUserIds = [
+      ...new Set(raw.map((n) => n.subjectUserId).filter(Boolean)),
+    ] as string[];
     const subjectArticleIds = [
       ...new Set(
         raw
-          .filter((n) => n.kind === 'followed_article' && n.subjectArticleId)
+          .filter((n) => n.kind === "followed_article" && n.subjectArticleId)
           .map((n) => n.subjectArticleId as string),
       ),
     ];
@@ -189,7 +255,7 @@ export class NotificationQueryService {
           .flatMap((n) => {
             if (!NOTIFICATION_POST_CARD_KINDS.has(n.kind)) return [];
             const primary = this.notificationPostId(n);
-            const fallback = n.kind === 'repost' ? n.subjectPostId : null;
+            const fallback = n.kind === "repost" ? n.subjectPostId : null;
             return [primary, fallback].filter(Boolean);
           })
           .filter(Boolean),
@@ -203,7 +269,9 @@ export class NotificationQueryService {
       ),
     ];
     const subjectCrewInviteIds = [
-      ...new Set(raw.map((n) => n.subjectCrewInviteId).filter(Boolean) as string[]),
+      ...new Set(
+        raw.map((n) => n.subjectCrewInviteId).filter(Boolean) as string[],
+      ),
     ];
     const subjectCrewIds = [
       ...new Set(
@@ -213,7 +281,11 @@ export class NotificationQueryService {
       ),
     ];
     const subjectCommunityGroupInviteIds = [
-      ...new Set(raw.map((n) => n.subjectCommunityGroupInviteId).filter(Boolean) as string[]),
+      ...new Set(
+        raw
+          .map((n) => n.subjectCommunityGroupInviteId)
+          .filter(Boolean) as string[],
+      ),
     ];
     const subjectSpaceIds = [
       ...new Set(raw.map((n) => n.subjectSpaceId).filter(Boolean) as string[]),
@@ -237,7 +309,16 @@ export class NotificationQueryService {
               id: true,
               body: true,
               visibility: true,
-              media: { where: { deletedAt: null }, orderBy: { position: 'asc' }, select: { kind: true, r2Key: true, thumbnailR2Key: true, url: true } },
+              media: {
+                where: { deletedAt: null },
+                orderBy: { position: "asc" },
+                select: {
+                  kind: true,
+                  r2Key: true,
+                  thumbnailR2Key: true,
+                  url: true,
+                },
+              },
             },
           })
         : Promise.resolve([]),
@@ -250,16 +331,29 @@ export class NotificationQueryService {
       subjectArticleIds.length > 0
         ? this.prisma.article.findMany({
             where: { id: { in: subjectArticleIds } },
-            select: { id: true, title: true, excerpt: true, thumbnailR2Key: true, visibility: true },
+            select: {
+              id: true,
+              title: true,
+              excerpt: true,
+              thumbnailR2Key: true,
+              visibility: true,
+            },
           })
         : Promise.resolve([]),
       notificationPostIds.length > 0
-        ? this.postVisibility.getVisiblePostsByIds({
-            viewerUserId: recipientUserId,
-            ids: notificationPostIds,
-            includeDeleted: false,
-            excludeBannedAuthors: true,
-          }).then((posts) => this.postVisibility.composePostDtoMapForViewer(recipientUserId, posts))
+        ? this.postVisibility
+            .getVisiblePostsByIds({
+              viewerUserId: recipientUserId,
+              ids: notificationPostIds,
+              includeDeleted: false,
+              excludeBannedAuthors: true,
+            })
+            .then((posts) =>
+              this.postVisibility.composePostDtoMapForViewer(
+                recipientUserId,
+                posts,
+              ),
+            )
         : Promise.resolve(new Map<string, PostDto>()),
       subjectGroupIds.length > 0
         ? this.prisma.communityGroup.findMany({
@@ -302,35 +396,64 @@ export class NotificationQueryService {
     const subjectTierByPostId = new Map<string, SubjectTier>();
     const subjectVisibilityByPostId = new Map<string, SubjectPostVisibility>();
     for (const p of subjectPosts) {
-      const bodySnippet = (p.body ?? '').trim().slice(0, 150) || null;
+      const bodySnippet = (p.body ?? "").trim().slice(0, 150) || null;
       const media = (p.media ?? [])
         .map((m) => {
           const url =
             (m as { url?: string }).url?.trim() ||
-            (publicAssetUrl({ publicBaseUrl, key: (m as { r2Key?: string }).r2Key ?? null }) ?? '');
+            (publicAssetUrl({
+              publicBaseUrl,
+              key: (m as { r2Key?: string }).r2Key ?? null,
+            }) ??
+              "");
           const thumbnailUrl =
             (publicAssetUrl({
               publicBaseUrl,
               key: (m as { thumbnailR2Key?: string }).thumbnailR2Key ?? null,
-            }) ?? null) || null;
-          return { url: url || '', thumbnailUrl, kind: (m as { kind: string }).kind };
+            }) ??
+              null) ||
+            null;
+          return {
+            url: url || "",
+            thumbnailUrl,
+            kind: (m as { kind: string }).kind,
+          };
         })
         .filter((m) => m.url);
       subjectPreviewByPostId.set(p.id, { bodySnippet, media });
       const vis = (p as { visibility?: string }).visibility;
-      subjectTierByPostId.set(p.id, vis === 'premiumOnly' ? 'premium' : vis === 'verifiedOnly' ? 'verified' : null);
-      if (vis === 'public' || vis === 'verifiedOnly' || vis === 'premiumOnly' || vis === 'onlyMe') {
+      subjectTierByPostId.set(
+        p.id,
+        vis === "premiumOnly"
+          ? "premium"
+          : vis === "verifiedOnly"
+            ? "verified"
+            : null,
+      );
+      if (
+        vis === "public" ||
+        vis === "verifiedOnly" ||
+        vis === "premiumOnly" ||
+        vis === "onlyMe"
+      ) {
         subjectVisibilityByPostId.set(p.id, vis);
       }
     }
 
     const subjectTierByUserId = new Map<string, SubjectTier>();
     for (const u of subjectUsers) {
-      const tier: SubjectTier = u.premium ? 'premium' : u.verifiedStatus !== 'none' ? 'verified' : null;
+      const tier: SubjectTier = u.premium
+        ? "premium"
+        : u.verifiedStatus !== "none"
+          ? "verified"
+          : null;
       subjectTierByUserId.set(u.id, tier);
     }
 
-    const subjectArticlePreviewById = new Map<string, SubjectArticlePreviewDto>();
+    const subjectArticlePreviewById = new Map<
+      string,
+      SubjectArticlePreviewDto
+    >();
     for (const a of subjectArticles) {
       const thumbnailUrl = a.thumbnailR2Key
         ? (publicAssetUrl({ publicBaseUrl, key: a.thumbnailR2Key }) ?? null)
@@ -343,56 +466,85 @@ export class NotificationQueryService {
       });
     }
 
-    const subjectGroupById = new Map(subjectGroups.map((g) => [g.id, g] as const));
+    const subjectGroupById = new Map(
+      subjectGroups.map((g) => [g.id, g] as const),
+    );
     const subjectCrewInviteStatusById = new Map(
       subjectCrewInvites.map((inv) => [inv.id, inv.status] as const),
     );
     const subjectCrewNameByInviteId = new Map(
       subjectCrewInvites.map(
         (inv) =>
-          [inv.id, ((inv.crew?.name ?? inv.crewNameOnAccept ?? '') as string).trim() || null] as const,
+          [
+            inv.id,
+            ((inv.crew?.name ?? inv.crewNameOnAccept ?? "") as string).trim() ||
+              null,
+          ] as const,
       ),
     );
     const subjectCrewNameByCrewId = new Map(
-      subjectCrews.map((c) => [c.id, (c.name ?? '').trim() || null] as const),
+      subjectCrews.map((c) => [c.id, (c.name ?? "").trim() || null] as const),
     );
     const subjectCommunityGroupInviteStatusById = new Map(
       subjectCommunityGroupInvites.map((inv) => [inv.id, inv.status] as const),
     );
     const subjectSpaceOwnerUsernameById = new Map(
-      subjectSpaces.map((s) => [s.id, (s.owner.username ?? '').trim() || null] as const),
+      subjectSpaces.map(
+        (s) => [s.id, (s.owner.username ?? "").trim() || null] as const,
+      ),
     );
 
     const dtos: NotificationDto[] = raw.map((n) => {
-      const actorPreview = n.kind === 'repost' && n.actorPostId ? subjectPreviewByPostId.get(n.actorPostId) ?? null : null;
-      const hasActorPreview = Boolean(actorPreview?.bodySnippet || actorPreview?.media?.length);
+      const actorPreview =
+        n.kind === "repost" && n.actorPostId
+          ? (subjectPreviewByPostId.get(n.actorPostId) ?? null)
+          : null;
+      const hasActorPreview = Boolean(
+        actorPreview?.bodySnippet || actorPreview?.media?.length,
+      );
       const previewPostId = hasActorPreview ? n.actorPostId : n.subjectPostId;
-      const preview = previewPostId ? subjectPreviewByPostId.get(previewPostId) ?? null : null;
-      const articlePreview = n.subjectArticleId ? subjectArticlePreviewById.get(n.subjectArticleId) ?? null : null;
-      const subjectPostVisibility = previewPostId ? subjectVisibilityByPostId.get(previewPostId) ?? null : null;
+      const preview = previewPostId
+        ? (subjectPreviewByPostId.get(previewPostId) ?? null)
+        : null;
+      const articlePreview = n.subjectArticleId
+        ? (subjectArticlePreviewById.get(n.subjectArticleId) ?? null)
+        : null;
+      const subjectPostVisibility = previewPostId
+        ? (subjectVisibilityByPostId.get(previewPostId) ?? null)
+        : null;
       let subjectTier: SubjectTier = null;
-      if (previewPostId) subjectTier = subjectTierByPostId.get(previewPostId) ?? null;
-      else if (n.subjectUserId) subjectTier = subjectTierByUserId.get(n.subjectUserId) ?? null;
-      const subjectGroup = n.subjectGroupId ? subjectGroupById.get(n.subjectGroupId) ?? null : null;
+      if (previewPostId)
+        subjectTier = subjectTierByPostId.get(previewPostId) ?? null;
+      else if (n.subjectUserId)
+        subjectTier = subjectTierByUserId.get(n.subjectUserId) ?? null;
+      const subjectGroup = n.subjectGroupId
+        ? (subjectGroupById.get(n.subjectGroupId) ?? null)
+        : null;
       const subjectCrewInviteStatus = n.subjectCrewInviteId
-        ? subjectCrewInviteStatusById.get(n.subjectCrewInviteId) ?? null
+        ? (subjectCrewInviteStatusById.get(n.subjectCrewInviteId) ?? null)
         : null;
       // Prefer the live crew name; fall back to the founding invite's
       // `crewNameOnAccept` so even pre-accept invites show the chosen name.
       const subjectCrewName = n.subjectCrewId
-        ? subjectCrewNameByCrewId.get(n.subjectCrewId) ?? null
+        ? (subjectCrewNameByCrewId.get(n.subjectCrewId) ?? null)
         : n.subjectCrewInviteId
-          ? subjectCrewNameByInviteId.get(n.subjectCrewInviteId) ?? null
+          ? (subjectCrewNameByInviteId.get(n.subjectCrewInviteId) ?? null)
           : null;
       const subjectCommunityGroupInviteStatus = n.subjectCommunityGroupInviteId
-        ? subjectCommunityGroupInviteStatusById.get(n.subjectCommunityGroupInviteId) ?? null
+        ? (subjectCommunityGroupInviteStatusById.get(
+            n.subjectCommunityGroupInviteId,
+          ) ?? null)
         : null;
       const notificationPostId = this.notificationPostId(n);
       const notificationPost =
-        (notificationPostId ? notificationPostDtoById.get(notificationPostId) ?? null : null)
-        ?? (n.kind === 'repost' && n.subjectPostId ? notificationPostDtoById.get(n.subjectPostId) ?? null : null);
+        (notificationPostId
+          ? (notificationPostDtoById.get(notificationPostId) ?? null)
+          : null) ??
+        (n.kind === "repost" && n.subjectPostId
+          ? (notificationPostDtoById.get(n.subjectPostId) ?? null)
+          : null);
       const subjectSpaceOwnerUsername = n.subjectSpaceId
-        ? subjectSpaceOwnerUsernameById.get(n.subjectSpaceId) ?? null
+        ? (subjectSpaceOwnerUsernameById.get(n.subjectSpaceId) ?? null)
         : null;
       return this.toNotificationDto(
         n,
@@ -417,34 +569,46 @@ export class NotificationQueryService {
     // (Bell-enabled follows still receive reply/comment notifications separately.)
 
     function groupKey(n: NotificationDto): string | null {
-      if (n.kind === 'boost' && n.subjectPostId) {
-        const tier = n.actor?.isOrganization ? 'organization'
-          : n.actor?.premium ? 'premium'
-          : n.actor?.verifiedStatus && n.actor.verifiedStatus !== 'none' ? 'verified' : 'normal';
+      if (n.kind === "boost" && n.subjectPostId) {
+        const tier = n.actor?.isOrganization
+          ? "organization"
+          : n.actor?.premium
+            ? "premium"
+            : n.actor?.verifiedStatus && n.actor.verifiedStatus !== "none"
+              ? "verified"
+              : "normal";
         // A group has one arrow: keep each boost tier separate so its color remains truthful.
         return `boost:post:${n.subjectPostId}:tier:${tier}`;
       }
-      if (n.kind === 'comment' && n.subjectPostId) return `comment:post:${n.subjectPostId}`;
-      if (n.kind === 'community_group_member_joined' && n.subjectGroupId) return `community_group_member_joined:group:${n.subjectGroupId}`;
-      if (n.kind === 'crew_member_joined' && n.subjectCrewId) return `crew_member_joined:crew:${n.subjectCrewId}`;
-      if (n.kind === 'crew_member_left' && n.subjectCrewId) return `crew_member_left:crew:${n.subjectCrewId}`;
-      if (n.kind === 'follow') return 'follow';
-      if (n.kind === 'nudge' && n.actor?.id) return `nudge:actor:${n.actor.id}`;
+      if (n.kind === "comment" && n.subjectPostId)
+        return `comment:post:${n.subjectPostId}`;
+      if (n.kind === "community_group_member_joined" && n.subjectGroupId)
+        return `community_group_member_joined:group:${n.subjectGroupId}`;
+      if (n.kind === "crew_member_joined" && n.subjectCrewId)
+        return `crew_member_joined:crew:${n.subjectCrewId}`;
+      if (n.kind === "crew_member_left" && n.subjectCrewId)
+        return `crew_member_left:crew:${n.subjectCrewId}`;
+      if (n.kind === "follow") return "follow";
+      if (n.kind === "nudge" && n.actor?.id) return `nudge:actor:${n.actor.id}`;
       return null;
     }
 
     function groupKindFromKey(key: string): NotificationGroupKind | null {
-      if (key.startsWith('boost:')) return 'boost';
-      if (key.startsWith('repost:')) return 'repost';
-      if (key.startsWith('comment:')) return 'comment';
-      if (key === 'follow') return 'follow';
-      if (key.startsWith('nudge:')) return 'nudge';
+      if (key.startsWith("boost:")) return "boost";
+      if (key.startsWith("repost:")) return "repost";
+      if (key.startsWith("comment:")) return "comment";
+      if (key === "follow") return "follow";
+      if (key.startsWith("nudge:")) return "nudge";
       return null;
     }
 
-    function buildGroup(members: NotificationDto[], key: string): NotificationGroupDto {
+    function buildGroup(
+      members: NotificationDto[],
+      key: string,
+    ): NotificationGroupDto {
       const newest = members[0]!;
-      const kind = groupKindFromKey(key) ?? (newest.kind as NotificationGroupKind);
+      const kind =
+        groupKindFromKey(key) ?? (newest.kind as NotificationGroupKind);
       const anyUndelivered = members.some((m) => m.deliveredAt == null);
       const anyUnread = members.some((m) => m.readAt == null);
 
@@ -459,15 +623,20 @@ export class NotificationQueryService {
       }
 
       const latestBody =
-        kind === 'comment' ? (members.find((m) => (m.body ?? '').trim())?.body ?? null) : null;
-
-      const subjectPostId = (kind === 'boost' || kind === 'repost' || kind === 'comment') ? (newest.subjectPostId ?? null) : null;
-      const subjectUserId =
-        kind === 'follow'
-          ? (newest.actor?.id ?? newest.subjectUserId ?? null)
-          : kind === 'nudge'
-            ? (newest.actor?.id ?? newest.subjectUserId ?? null)
+        kind === "comment"
+          ? (members.find((m) => (m.body ?? "").trim())?.body ?? null)
           : null;
+
+      const subjectPostId =
+        kind === "boost" || kind === "repost" || kind === "comment"
+          ? (newest.subjectPostId ?? null)
+          : null;
+      const subjectUserId =
+        kind === "follow"
+          ? (newest.actor?.id ?? newest.subjectUserId ?? null)
+          : kind === "nudge"
+            ? (newest.actor?.id ?? newest.subjectUserId ?? null)
+            : null;
 
       return {
         id: newest.id,
@@ -484,16 +653,21 @@ export class NotificationQueryService {
         latestSubjectPostPreview: newest.subjectPostPreview ?? null,
         subjectPostVisibility: newest.subjectPostVisibility ?? null,
         subjectTier: newest.subjectTier ?? null,
-        ...(newest.boardThreadId ? { boardThreadId: newest.boardThreadId } : {}),
+        ...(newest.boardThreadId
+          ? { boardThreadId: newest.boardThreadId }
+          : {}),
       };
     }
 
     // Group supported events, but never drop distinct notification IDs for the same post.
     const seenNotificationIds = new Set<string>();
-    const pushSingle = (target: NotificationFeedItemDto[], n: NotificationDto): void => {
+    const pushSingle = (
+      target: NotificationFeedItemDto[],
+      n: NotificationDto,
+    ): void => {
       if (seenNotificationIds.has(n.id)) return;
       seenNotificationIds.add(n.id);
-      target.push({ type: 'single', notification: n });
+      target.push({ type: "single", notification: n });
     };
 
     if (kind) {
@@ -506,7 +680,11 @@ export class NotificationQueryService {
       const hasMore = dtos.length > page.length || hasMoreRaw;
       return {
         items: page,
-        nextCursor: hasMore ? (lastItem?.type === 'single' ? lastItem.notification.id : null) : null,
+        nextCursor: hasMore
+          ? lastItem?.type === "single"
+            ? lastItem.notification.id
+            : null
+          : null,
         undeliveredCount,
         unreadByKind,
         unreadByCategory,
@@ -520,13 +698,20 @@ export class NotificationQueryService {
 
       // followed_post / checkin_post notifications always appear as standalone items regardless of bell setting.
       // The bell only controls whether reply notifications from followed users are delivered.
-      if (n.kind === 'followed_post' || n.kind === 'checkin_post' || n.kind === 'community_group_post') {
+      if (
+        n.kind === "followed_post" ||
+        n.kind === "checkin_post" ||
+        n.kind === "community_group_post"
+      ) {
         pushSingle(items, n);
         i += 1;
         continue;
       }
 
-      if (n.post && (n.kind === 'comment' || n.kind === 'mention' || n.kind === 'repost')) {
+      if (
+        n.post &&
+        (n.kind === "comment" || n.kind === "mention" || n.kind === "repost")
+      ) {
         pushSingle(items, n);
         i += 1;
         continue;
@@ -541,7 +726,11 @@ export class NotificationQueryService {
 
       const members: NotificationDto[] = [n];
       let j = i + 1;
-      while (j < dtos.length && groupKey(dtos[j]!) === key && members.length < maxGroupNotifications) {
+      while (
+        j < dtos.length &&
+        groupKey(dtos[j]!) === key &&
+        members.length < maxGroupNotifications
+      ) {
         members.push(dtos[j]!);
         j += 1;
       }
@@ -552,11 +741,11 @@ export class NotificationQueryService {
         continue;
       }
 
-      items.push({ type: 'group', group: buildGroup(members, key) });
+      items.push({ type: "group", group: buildGroup(members, key) });
       i = j;
     }
 
-    const lastConsumedId = i > 0 ? dtos[i - 1]?.id ?? null : null;
+    const lastConsumedId = i > 0 ? (dtos[i - 1]?.id ?? null) : null;
     const hasMore = i < dtos.length || hasMoreRaw;
     const nextCursor = hasMore ? lastConsumedId : null;
 
@@ -594,7 +783,9 @@ export class NotificationQueryService {
 
     // Keep notification and feed behavior consistent: hide items from blocked users.
     const blockRows = await this.prisma.userBlock.findMany({
-      where: { OR: [{ blockerId: recipientUserId }, { blockedId: recipientUserId }] },
+      where: {
+        OR: [{ blockerId: recipientUserId }, { blockedId: recipientUserId }],
+      },
       select: { blockerId: true, blockedId: true },
     });
     const blockedActorIds = blockRows.map((r) =>
@@ -608,7 +799,7 @@ export class NotificationQueryService {
       select: { followingId: true },
     });
     const followedActorIds = followedRows
-      .map((r) => (r.followingId ?? '').trim())
+      .map((r) => (r.followingId ?? "").trim())
       .filter(Boolean);
 
     const notifications = await this.prisma.notification.findMany({
@@ -616,30 +807,39 @@ export class NotificationQueryService {
         recipientUserId,
         OR: [
           // Canonical "new post from someone you follow".
-          { kind: 'followed_post', subjectPostId: { not: null } },
-          { kind: 'checkin_post', subjectPostId: { not: null } },
+          { kind: "followed_post", subjectPostId: { not: null } },
+          { kind: "checkin_post", subjectPostId: { not: null } },
           // Replies can show up as comment/mention notifications for the same action.
           // Include them when the actor is someone the viewer follows so /new-posts
           // remains "posts from followed users", regardless of notification kind.
           ...(followedActorIds.length > 0
             ? [
                 {
-                  kind: 'comment' as const,
+                  kind: "comment" as const,
                   actorPostId: { not: null },
                   actorUserId: { in: followedActorIds },
                 },
                 {
-                  kind: 'mention' as const,
+                  kind: "mention" as const,
                   actorPostId: { not: null },
                   actorUserId: { in: followedActorIds },
                 },
               ]
             : []),
         ],
-        ...(blockedActorIds.length > 0 ? { NOT: { AND: [{ actorUserId: { not: null } }, { actorUserId: { in: blockedActorIds } }] } } : {}),
+        ...(blockedActorIds.length > 0
+          ? {
+              NOT: {
+                AND: [
+                  { actorUserId: { not: null } },
+                  { actorUserId: { in: blockedActorIds } },
+                ],
+              },
+            }
+          : {}),
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
       },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: rawFetchLimit + 1,
       select: { id: true, kind: true, subjectPostId: true, actorPostId: true },
     });
@@ -650,9 +850,13 @@ export class NotificationQueryService {
     const orderedSubjectPostIds: string[] = [];
     const seenSubjectPostIds = new Set<string>();
     for (const n of raw) {
-      const postId = (n.kind === 'followed_post' || n.kind === 'checkin_post' || n.kind === 'community_group_post'
-        ? (n.subjectPostId ?? '')
-        : (n.actorPostId ?? '')).trim();
+      const postId = (
+        n.kind === "followed_post" ||
+        n.kind === "checkin_post" ||
+        n.kind === "community_group_post"
+          ? (n.subjectPostId ?? "")
+          : (n.actorPostId ?? "")
+      ).trim();
       if (!postId || seenSubjectPostIds.has(postId)) continue;
       seenSubjectPostIds.add(postId);
       orderedSubjectPostIds.push(postId);
@@ -671,37 +875,49 @@ export class NotificationQueryService {
 
     // Preserve notification-event ordering for /new-posts: if both a root and a reply
     // are notified, both can appear in the feed (UI layer handles thread collapsing).
-    const { items: collapsedVisiblePosts } = collapseFeedByRoot(orderedVisiblePosts, {
-      collapseByRoot: params.collapseByRoot ?? false,
-      collapseMode: params.collapseMode ?? 'root',
-      prefer: params.prefer ?? 'reply',
-      getId: (post) => post.id,
-      getParentId: (post) => post.parentId ?? null,
-    });
+    const { items: collapsedVisiblePosts } = collapseFeedByRoot(
+      orderedVisiblePosts,
+      {
+        collapseByRoot: params.collapseByRoot ?? false,
+        collapseMode: params.collapseMode ?? "root",
+        prefer: params.prefer ?? "reply",
+        getId: (post) => post.id,
+        getParentId: (post) => post.parentId ?? null,
+      },
+    );
     const pagePosts = collapsedVisiblePosts.slice(0, desiredPostLimit);
     const returnedPostIds = new Set(pagePosts.map((p) => p.id));
 
     let boundaryIndex = -1;
     for (let i = 0; i < raw.length; i++) {
       const row = raw[i];
-      const postId = (row?.kind === 'followed_post' || row?.kind === 'checkin_post'
-        ? (row?.subjectPostId ?? '')
-        : (row?.actorPostId ?? '')).trim();
+      const postId = (
+        row?.kind === "followed_post" || row?.kind === "checkin_post"
+          ? (row?.subjectPostId ?? "")
+          : (row?.actorPostId ?? "")
+      ).trim();
       if (postId && returnedPostIds.has(postId)) boundaryIndex = i;
     }
     if (boundaryIndex < 0 && raw.length > 0) boundaryIndex = raw.length - 1;
 
-    const hasMore = hasMoreRaw || (boundaryIndex >= 0 && boundaryIndex < raw.length - 1);
-    const nextCursor = hasMore && boundaryIndex >= 0 ? raw[boundaryIndex]!.id : null;
+    const hasMore =
+      hasMoreRaw || (boundaryIndex >= 0 && boundaryIndex < raw.length - 1);
+    const nextCursor =
+      hasMore && boundaryIndex >= 0 ? raw[boundaryIndex]!.id : null;
 
     if (pagePosts.length === 0) {
       return { posts: [], nextCursor };
     }
 
-    const postDtoById = await this.postVisibility.composePostDtoMapForViewer(recipientUserId, pagePosts);
+    const postDtoById = await this.postVisibility.composePostDtoMapForViewer(
+      recipientUserId,
+      pagePosts,
+    );
 
     return {
-      posts: pagePosts.map((p) => postDtoById.get(p.id)).filter((p): p is PostDto => Boolean(p)),
+      posts: pagePosts
+        .map((p) => postDtoById.get(p.id))
+        .filter((p): p is PostDto => Boolean(p)),
       nextCursor,
     };
   }
@@ -711,8 +927,18 @@ export class NotificationQueryService {
       id: string;
       createdAt: Date;
       kind: NotificationKind;
-      subjectPost?: { parentId: string | null; id?: string; kind?: string; rootId?: string | null } | null;
-      actorPost?: { parentId: string | null; id: string; kind: string; rootId: string | null } | null;
+      subjectPost?: {
+        parentId: string | null;
+        id?: string;
+        kind?: string;
+        rootId?: string | null;
+      } | null;
+      actorPost?: {
+        parentId: string | null;
+        id: string;
+        kind: string;
+        rootId: string | null;
+      } | null;
       deliveredAt: Date | null;
       readAt: Date | null;
       ignoredAt: Date | null;
@@ -727,6 +953,7 @@ export class NotificationQueryService {
       subjectCrewInviteId?: string | null;
       subjectCommunityGroupInviteId?: string | null;
       subjectConversationId?: string | null;
+      actionPath?: string | null;
       subjectSpaceId?: string | null;
       title: string | null;
       body: string | null;
@@ -734,7 +961,9 @@ export class NotificationQueryService {
         id: string;
         username: string | null;
         name: string | null;
-        avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
+        avatarKey: string | null;
+        avatarVideoKey?: string | null;
+        avatarVideoDurationMs?: number | null;
         avatarUpdatedAt: Date | null;
         premium: boolean;
         isOrganization: boolean;
@@ -749,9 +978,9 @@ export class NotificationQueryService {
     subjectGroupSlug: string | null = null,
     subjectGroupName: string | null = null,
     subjectGroupAvatarUrl: string | null = null,
-    subjectCrewInviteStatus: NotificationDto['subjectCrewInviteStatus'] = null,
+    subjectCrewInviteStatus: NotificationDto["subjectCrewInviteStatus"] = null,
     subjectCrewName: string | null = null,
-    subjectCommunityGroupInviteStatus: NotificationDto['subjectCommunityGroupInviteStatus'] = null,
+    subjectCommunityGroupInviteStatus: NotificationDto["subjectCommunityGroupInviteStatus"] = null,
     post: PostDto | null = null,
     subjectSpaceOwnerUsername: string | null = null,
   ): NotificationDto {
@@ -765,7 +994,8 @@ export class NotificationQueryService {
           publicBaseUrl,
           key: n.actor.avatarKey,
           updatedAt: n.actor.avatarUpdatedAt,
-        }), avatarVideo: toAvatarVideoDto(n.actor, publicBaseUrl),
+        }),
+        avatarVideo: toAvatarVideoDto(n.actor, publicBaseUrl),
         premium: n.actor.premium,
         isOrganization: Boolean((n.actor as any).isOrganization),
         verifiedStatus: n.actor.verifiedStatus,
@@ -775,7 +1005,10 @@ export class NotificationQueryService {
       id: n.id,
       createdAt: n.createdAt.toISOString(),
       kind: n.kind,
-      category: notificationCategory(n.kind, n.subjectPost?.parentId ?? post?.parentId),
+      category: notificationCategory(
+        n.kind,
+        n.subjectPost?.parentId ?? post?.parentId,
+      ),
       deliveredAt: n.deliveredAt ? n.deliveredAt.toISOString() : null,
       readAt: n.readAt ? n.readAt.toISOString() : null,
       ignoredAt: n.ignoredAt ? n.ignoredAt.toISOString() : null,
@@ -795,8 +1028,10 @@ export class NotificationQueryService {
       subjectCrewInviteStatus: subjectCrewInviteStatus ?? null,
       subjectCrewName: subjectCrewName ?? null,
       subjectCommunityGroupInviteId: n.subjectCommunityGroupInviteId ?? null,
-      subjectCommunityGroupInviteStatus: subjectCommunityGroupInviteStatus ?? null,
+      subjectCommunityGroupInviteStatus:
+        subjectCommunityGroupInviteStatus ?? null,
       subjectConversationId: n.subjectConversationId ?? null,
+      actionPath: n.actionPath ?? null,
       subjectSpaceId: n.subjectSpaceId ?? null,
       subjectSpaceOwnerUsername: subjectSpaceOwnerUsername ?? null,
       title: n.title,
@@ -816,22 +1051,45 @@ export class NotificationQueryService {
     notificationId: string;
   }): Promise<NotificationDto | null> {
     const { recipientUserId, notificationId } = params;
-    const id = (notificationId ?? '').trim();
+    const id = (notificationId ?? "").trim();
     if (!id) return null;
 
-    const blockSets = await this.postVisibility.viewerBlockSets(recipientUserId);
-    const blockedActorIds = [...blockSets.blockedByViewer, ...blockSets.viewerBlockedBy];
+    const blockSets =
+      await this.postVisibility.viewerBlockSets(recipientUserId);
+    const blockedActorIds = [
+      ...blockSets.blockedByViewer,
+      ...blockSets.viewerBlockedBy,
+    ];
     const n = await this.prisma.notification.findFirst({
-      where: { id, recipientUserId, ...(blockedActorIds.length ? { NOT: { AND: [{ actorUserId: { not: null } }, { actorUserId: { in: blockedActorIds } }] } } : {}) },
+      where: {
+        id,
+        recipientUserId,
+        ...(blockedActorIds.length
+          ? {
+              NOT: {
+                AND: [
+                  { actorUserId: { not: null } },
+                  { actorUserId: { in: blockedActorIds } },
+                ],
+              },
+            }
+          : {}),
+      },
       include: {
-        subjectPost: { select: { id: true, parentId: true, kind: true, rootId: true } },
-        actorPost: { select: { id: true, parentId: true, kind: true, rootId: true } },
+        subjectPost: {
+          select: { id: true, parentId: true, kind: true, rootId: true },
+        },
+        actorPost: {
+          select: { id: true, parentId: true, kind: true, rootId: true },
+        },
         actor: {
           select: {
             id: true,
             username: true,
             name: true,
-            avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
+            avatarKey: true,
+            avatarVideoKey: true,
+            avatarVideoDurationMs: true,
             avatarUpdatedAt: true,
             premium: true,
             isOrganization: true,
@@ -851,9 +1109,12 @@ export class NotificationQueryService {
     let post: PostDto | null = null;
 
     const previewPostIds = [
-      n.kind === 'repost' && n.actorPostId ? n.actorPostId : null,
+      n.kind === "repost" && n.actorPostId ? n.actorPostId : null,
       n.subjectPostId,
-    ].filter((postId, index, arr): postId is string => Boolean(postId) && arr.indexOf(postId) === index);
+    ].filter(
+      (postId, index, arr): postId is string =>
+        Boolean(postId) && arr.indexOf(postId) === index,
+    );
     if (previewPostIds.length > 0) {
       const posts = await this.prisma.post.findMany({
         where: { id: { in: previewPostIds } },
@@ -864,36 +1125,64 @@ export class NotificationQueryService {
           visibility: true,
           media: {
             where: { deletedAt: null },
-            orderBy: { position: 'asc' },
-            select: { kind: true, r2Key: true, thumbnailR2Key: true, url: true },
+            orderBy: { position: "asc" },
+            select: {
+              kind: true,
+              r2Key: true,
+              thumbnailR2Key: true,
+              url: true,
+            },
           },
         },
       });
       const postById = new Map(posts.map((post) => [post.id, post] as const));
-      const actorPost = n.kind === 'repost' && n.actorPostId ? postById.get(n.actorPostId) ?? null : null;
-      const actorBodySnippet = (actorPost?.body ?? '').trim().slice(0, 150) || null;
-      const actorHasMedia = Boolean(actorPost?.media?.some((m) => {
-        const url =
-          (m as { url?: string }).url?.trim() ||
-          (publicAssetUrl({ publicBaseUrl, key: (m as { r2Key?: string }).r2Key ?? null }) ?? '');
-        return Boolean(url);
-      }));
-      const p = actorBodySnippet || actorHasMedia
-        ? actorPost
-        : (n.subjectPostId ? postById.get(n.subjectPostId) ?? null : actorPost);
+      const actorPost =
+        n.kind === "repost" && n.actorPostId
+          ? (postById.get(n.actorPostId) ?? null)
+          : null;
+      const actorBodySnippet =
+        (actorPost?.body ?? "").trim().slice(0, 150) || null;
+      const actorHasMedia = Boolean(
+        actorPost?.media?.some((m) => {
+          const url =
+            (m as { url?: string }).url?.trim() ||
+            (publicAssetUrl({
+              publicBaseUrl,
+              key: (m as { r2Key?: string }).r2Key ?? null,
+            }) ??
+              "");
+          return Boolean(url);
+        }),
+      );
+      const p =
+        actorBodySnippet || actorHasMedia
+          ? actorPost
+          : n.subjectPostId
+            ? (postById.get(n.subjectPostId) ?? null)
+            : actorPost;
       if (p) {
-        const bodySnippet = (p.body ?? '').trim().slice(0, 150) || null;
+        const bodySnippet = (p.body ?? "").trim().slice(0, 150) || null;
         const media = (p.media ?? [])
           .map((m) => {
             const url =
               (m as { url?: string }).url?.trim() ||
-              (publicAssetUrl({ publicBaseUrl, key: (m as { r2Key?: string }).r2Key ?? null }) ?? '');
+              (publicAssetUrl({
+                publicBaseUrl,
+                key: (m as { r2Key?: string }).r2Key ?? null,
+              }) ??
+                "");
             const thumbnailUrl =
               (publicAssetUrl({
                 publicBaseUrl,
                 key: (m as { thumbnailR2Key?: string }).thumbnailR2Key ?? null,
-              }) ?? null) || null;
-            return { url: url || '', thumbnailUrl, kind: (m as { kind: string }).kind };
+              }) ??
+                null) ||
+              null;
+            return {
+              url: url || "",
+              thumbnailUrl,
+              kind: (m as { kind: string }).kind,
+            };
           })
           .filter((m) => m.url);
         subjectPostPreview = {
@@ -902,8 +1191,18 @@ export class NotificationQueryService {
           kind: (p as { kind?: string }).kind ?? null,
         };
         const vis = (p as { visibility?: string }).visibility;
-        subjectTier = vis === 'premiumOnly' ? 'premium' : vis === 'verifiedOnly' ? 'verified' : null;
-        if (vis === 'public' || vis === 'verifiedOnly' || vis === 'premiumOnly' || vis === 'onlyMe') {
+        subjectTier =
+          vis === "premiumOnly"
+            ? "premium"
+            : vis === "verifiedOnly"
+              ? "verified"
+              : null;
+        if (
+          vis === "public" ||
+          vis === "verifiedOnly" ||
+          vis === "premiumOnly" ||
+          vis === "onlyMe"
+        ) {
           subjectPostVisibility = vis;
         }
       }
@@ -913,7 +1212,11 @@ export class NotificationQueryService {
         select: { id: true, premium: true, verifiedStatus: true },
       });
       if (u) {
-        subjectTier = u.premium ? 'premium' : u.verifiedStatus !== 'none' ? 'verified' : null;
+        subjectTier = u.premium
+          ? "premium"
+          : u.verifiedStatus !== "none"
+            ? "verified"
+            : null;
       }
     }
 
@@ -921,8 +1224,11 @@ export class NotificationQueryService {
     const notificationPostIds = NOTIFICATION_POST_CARD_KINDS.has(n.kind)
       ? [
           notificationPostId,
-          n.kind === 'repost' ? n.subjectPostId : null,
-        ].filter((postId, index, arr): postId is string => Boolean(postId) && arr.indexOf(postId) === index)
+          n.kind === "repost" ? n.subjectPostId : null,
+        ].filter(
+          (postId, index, arr): postId is string =>
+            Boolean(postId) && arr.indexOf(postId) === index,
+        )
       : [];
     if (notificationPostIds.length > 0) {
       const visiblePosts = await this.postVisibility.getVisiblePostsByIds({
@@ -931,10 +1237,17 @@ export class NotificationQueryService {
         includeDeleted: false,
         excludeBannedAuthors: true,
       });
-      const postDtoById = await this.postVisibility.composePostDtoMapForViewer(recipientUserId, visiblePosts);
+      const postDtoById = await this.postVisibility.composePostDtoMapForViewer(
+        recipientUserId,
+        visiblePosts,
+      );
       post =
-        (notificationPostId ? postDtoById.get(notificationPostId) ?? null : null)
-        ?? (n.kind === 'repost' && n.subjectPostId ? postDtoById.get(n.subjectPostId) ?? null : null);
+        (notificationPostId
+          ? (postDtoById.get(notificationPostId) ?? null)
+          : null) ??
+        (n.kind === "repost" && n.subjectPostId
+          ? (postDtoById.get(n.subjectPostId) ?? null)
+          : null);
     }
 
     let subjectGroupSlug: string | null = null;
@@ -950,7 +1263,8 @@ export class NotificationQueryService {
       subjectGroupAvatarUrl = g?.avatarImageUrl ?? null;
     }
 
-    let subjectCrewInviteStatus: NotificationDto['subjectCrewInviteStatus'] = null;
+    let subjectCrewInviteStatus: NotificationDto["subjectCrewInviteStatus"] =
+      null;
     let subjectCrewName: string | null = null;
     if (n.subjectCrewInviteId) {
       const inv = await this.prisma.crewInvite.findUnique({
@@ -964,7 +1278,7 @@ export class NotificationQueryService {
       subjectCrewInviteStatus = inv?.status ?? null;
       // Fall back to the founding `crewNameOnAccept` so even pre-accept invites
       // have a display name when the recipient's `subjectCrewId` isn't set yet.
-      const candidate = (inv?.crew?.name ?? inv?.crewNameOnAccept ?? '').trim();
+      const candidate = (inv?.crew?.name ?? inv?.crewNameOnAccept ?? "").trim();
       if (candidate) subjectCrewName = candidate;
     }
     if (!subjectCrewName && n.subjectCrewId) {
@@ -972,12 +1286,12 @@ export class NotificationQueryService {
         where: { id: n.subjectCrewId },
         select: { name: true },
       });
-      const candidate = (c?.name ?? '').trim();
+      const candidate = (c?.name ?? "").trim();
       if (candidate) subjectCrewName = candidate;
     }
 
-    let subjectCommunityGroupInviteStatus:
-      NotificationDto['subjectCommunityGroupInviteStatus'] = null;
+    let subjectCommunityGroupInviteStatus: NotificationDto["subjectCommunityGroupInviteStatus"] =
+      null;
     if (n.subjectCommunityGroupInviteId) {
       const inv = await this.prisma.communityGroupInvite.findUnique({
         where: { id: n.subjectCommunityGroupInviteId },
@@ -992,7 +1306,7 @@ export class NotificationQueryService {
         where: { id: n.subjectSpaceId },
         select: { owner: { select: { username: true } } },
       });
-      subjectSpaceOwnerUsername = (space?.owner?.username ?? '').trim() || null;
+      subjectSpaceOwnerUsername = (space?.owner?.username ?? "").trim() || null;
     }
 
     return this.toNotificationDto(
@@ -1014,13 +1328,26 @@ export class NotificationQueryService {
   }
 }
 
-type BoardRefPost = { id?: string; parentId: string | null; kind?: string; rootId?: string | null } | null;
+type BoardRefPost = {
+  id?: string;
+  parentId: string | null;
+  kind?: string;
+  rootId?: string | null;
+} | null;
 
 /** Board thread/comment ids when the causing or subject post lives on the Board. */
-export function boardNotificationRefs(actorPost: BoardRefPost, subjectPost: BoardRefPost): Pick<NotificationDto, 'boardThreadId' | 'boardCommentId'> {
-  const ref = [actorPost, subjectPost].find((p) => p?.kind === 'board' && p.id);
+export function boardNotificationRefs(
+  actorPost: BoardRefPost,
+  subjectPost: BoardRefPost,
+): Pick<NotificationDto, "boardThreadId" | "boardCommentId"> {
+  const ref = [actorPost, subjectPost].find((p) => p?.kind === "board" && p.id);
   if (!ref?.id) return {};
   const threadId = ref.parentId ? (ref.rootId ?? ref.parentId) : ref.id;
-  const commentPost = actorPost?.kind === 'board' && actorPost.parentId ? actorPost : ref.parentId ? ref : null;
+  const commentPost =
+    actorPost?.kind === "board" && actorPost.parentId
+      ? actorPost
+      : ref.parentId
+        ? ref
+        : null;
   return { boardThreadId: threadId, boardCommentId: commentPost?.id ?? null };
 }

@@ -258,7 +258,7 @@ test('hosted MCP performs real HTTP handshake and reads via the shared API tools
   }));
   const catalog = (await client.listTools()).tools;
   // Consent always grants write on this founder MCP (drafts / delegated actions).
-  assert.equal(catalog.length, 28);
+  assert.equal(catalog.length, 29);
   assert.equal(catalog.some((tool) => tool.name === 'create_newsletter_draft'), true);
   assert.equal(catalog.some((tool) => tool.name === 'save_draft'), false);
   const result = await client.callTool({ name: 'feedback', arguments: { limit: 2 } });

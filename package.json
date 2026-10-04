@@ -55,7 +55,9 @@
     "check:partner-database": "bash scripts/check-partner-database.sh",
     "emit:partner-reference": "ts-node --files scripts/emit-partner-reference.ts",
     "check:partner-reference": "ts-node --files scripts/emit-partner-reference.ts --check",
-    "check:partner-docs": "node scripts/sync-partner-docs.mjs --check"
+    "check:partner-docs": "node scripts/sync-partner-docs.mjs --check",
+    "emit:mcp-capabilities": "ts-node --transpile-only scripts/emit-mcp-capabilities.ts",
+    "check:mcp-capabilities": "npm run emit:mcp-capabilities -- --check"
   },
   "dependencies": {
     "@apple/app-store-server-library": "^3.1.0",

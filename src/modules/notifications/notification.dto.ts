@@ -1,15 +1,26 @@
-export type NotificationCategory = 'posts' | 'replies' | 'mentions' | 'statuses' | 'follows' | 'boosts' | 'other';
-export type NotificationUnreadByCategory = Record<NotificationCategory | 'all', number>;
+export type NotificationCategory =
+  | "posts"
+  | "replies"
+  | "mentions"
+  | "statuses"
+  | "follows"
+  | "boosts"
+  | "other";
+export type NotificationUnreadByCategory = Record<
+  NotificationCategory | "all",
+  number
+>;
 
-import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import type { NotificationKind, VerifiedStatus } from '@prisma/client';
-import type { PostDto } from '../../common/dto/post.dto';
+import type { AvatarVideoDto } from "../../common/dto/avatar-video.dto";
+import type { NotificationKind, VerifiedStatus } from "@prisma/client";
+import type { PostDto } from "../../common/dto/post.dto";
 
 export type NotificationActorDto = {
   id: string;
   username: string | null;
   name: string | null;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
   premium: boolean;
   isOrganization: boolean;
   verifiedStatus: VerifiedStatus;
@@ -31,12 +42,17 @@ export type SubjectArticlePreviewDto = {
   visibility: string | null;
 };
 
-export type SubjectPostVisibility = 'public' | 'verifiedOnly' | 'premiumOnly' | 'onlyMe';
+export type SubjectPostVisibility =
+  | "public"
+  | "verifiedOnly"
+  | "premiumOnly"
+  | "onlyMe";
 
 /** Tier of the notification subject (post visibility or user tier) for unseen row highlight. */
-export type SubjectTier = 'premium' | 'verified' | null;
+export type SubjectTier = "premium" | "verified" | null;
 
 export type NotificationDto = {
+  actionPath?: string | null;
   id: string;
   createdAt: string;
   kind: NotificationKind;
@@ -74,7 +90,13 @@ export type NotificationDto = {
    * to call /crew/invites/inbox just to figure out whether the invite is still
    * actionable.
    */
-  subjectCrewInviteStatus: 'pending' | 'accepted' | 'declined' | 'cancelled' | 'expired' | null;
+  subjectCrewInviteStatus:
+    | "pending"
+    | "accepted"
+    | "declined"
+    | "cancelled"
+    | "expired"
+    | null;
   /**
    * Display name for the crew this notification refers to, if known. For founding
    * invites (no crew yet) this falls back to the inviter's chosen
@@ -93,11 +115,11 @@ export type NotificationDto = {
    * state ("Joined", "Declined", "No longer available") on a fresh load.
    */
   subjectCommunityGroupInviteStatus:
-    | 'pending'
-    | 'accepted'
-    | 'declined'
-    | 'cancelled'
-    | 'expired'
+    | "pending"
+    | "accepted"
+    | "declined"
+    | "cancelled"
+    | "expired"
     | null;
   /** Conversation this notification is about (used for `message` kind). */
   subjectConversationId: string | null;

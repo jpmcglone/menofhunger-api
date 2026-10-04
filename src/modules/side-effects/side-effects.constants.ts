@@ -23,6 +23,7 @@ export const MOH_SIDE_EFFECTS_QUEUE = "moh_side_effects";
  * or switch statement to update.
  */
 export interface SideEffectPayloads {
+  "delegation.result": { runId: string };
   "integrations.monitor": Record<string, never>;
   "x.news.refresh": { slot: string };
   "outbound.deliver": { deliveryId: string };

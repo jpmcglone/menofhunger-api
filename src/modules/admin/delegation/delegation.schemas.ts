@@ -9,10 +9,28 @@ export const workflowSchema = z.enum([
   "personal",
   "moderation",
   "export",
+  "operations",
 ]);
 export const scheduleSchema = z
   .object({
-    frequency: z.enum(["once", "daily", "weekly"]),
+    frequency: z.enum(["once", "daily", "weekly", "monthly"]),
+    weekdays: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
+    dayOfMonth: z.number().int().min(1).max(31).optional(),
+    endsAt: z.string().datetime().optional(),
+    notification: z.enum(["actionable", "digest", "all", "none"]).optional(),
+    condition: z
+      .object({
+        metric: z.enum([
+          "verification_wait_hours",
+          "pending_reports",
+          "open_feedback",
+          "integration_alerts",
+        ]),
+        threshold: z.number().min(0),
+        cooldownHours: z.number().min(1).max(720).default(24),
+      })
+      .strict()
+      .optional(),
     time: z
       .string()
       .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
@@ -51,6 +69,31 @@ export const jobInputSchema = z
     (v) => v.permission !== "publish_news" || v.workflow === "news",
     "Automatic publishing is available only for sourced news.",
   );
+export const jobEditSchema = z
+  .object({
+    revision: z.number().int().positive(),
+    changes: z
+      .object({
+        title: z.string().trim().min(1).max(100).optional(),
+        instruction: z.string().trim().min(1).max(6000).optional(),
+        schedule: scheduleSchema.optional(),
+        actorUsername: z
+          .string()
+          .regex(/^@?[A-Za-z0-9_]{1,40}$/)
+          .optional(),
+        permission: z.enum(["review", "publish_news"]).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+export const jobControlSchema = z
+  .object({
+    command: z.enum(["pause", "resume", "cancel", "run", "skip"]),
+    requestId: z.string().uuid(),
+    revision: z.number().int().positive().optional(),
+    resumeAt: z.string().datetime().optional(),
+  })
+  .strict();
 export type JobInput = z.infer<typeof jobInputSchema>;
 export type DelegationSchedule = z.infer<typeof scheduleSchema>;
 const body = z.string().trim().min(1).max(1000);
@@ -70,9 +113,19 @@ export const sourceSchema = z
 export const actionSchema = z.discriminatedUnion("operation", [
   z
     .object({
+      operation: z.literal("github_issue"),
+      feedbackId: delegationId,
+      title: z.string().trim().min(1).max(200),
+      body: z.string().trim().min(1).max(12000),
+    })
+    .strict(),
+  z
+    .object({
       operation: z.literal("post_publish"),
       body,
-      visibility: z.enum(["public", "verifiedOnly", "premiumOnly", "onlyMe"]).default("public"),
+      visibility: z
+        .enum(["public", "verifiedOnly", "premiumOnly", "onlyMe"])
+        .default("public"),
       sources: z.array(sourceSchema).max(8).default([]),
       parentId: delegationId.optional(),
       draftId: delegationId.optional(),
@@ -94,7 +147,9 @@ export const actionSchema = z.discriminatedUnion("operation", [
       operation: z.literal("post_schedule"),
       body,
       scheduledAt: z.string().datetime(),
-      visibility: z.enum(["public", "verifiedOnly", "premiumOnly"]).default("public"),
+      visibility: z
+        .enum(["public", "verifiedOnly", "premiumOnly"])
+        .default("public"),
       draftId: delegationId.optional(),
     })
     .strict(),
@@ -197,6 +252,12 @@ export const actionSchema = z.discriminatedUnion("operation", [
 export type DelegatedActionInput = z.infer<typeof actionSchema>;
 export const workflows = [
   {
+    id: "operations",
+    title: "Founder operations",
+    description:
+      "Investigate attention, activation, queues and integration spending; prepare a report.",
+  },
+  {
     id: "news",
     title: "Sourced news",
     description: "Research, draft, edit and publish with source links.",
@@ -264,7 +325,9 @@ export const workflowOperations: Record<string, string[]> = {
     "report_update",
     "verification_approve",
     "verification_reject",
+    "github_issue",
     "export",
   ],
-  export: ["export"],
+  export: ["export", "github_issue"],
+  operations: ["export", "github_issue"],
 };

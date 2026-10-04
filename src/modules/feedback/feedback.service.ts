@@ -1,8 +1,8 @@
-import type { FeedbackCategory, FeedbackStatus, Prisma } from '@prisma/client';
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
-import { SlackService } from '../../common/slack/slack.service';
+import type { FeedbackCategory, FeedbackStatus, Prisma } from "@prisma/client";
+import { HttpException, HttpStatus, Injectable } from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { createdAtIdCursorWhere } from "../../common/pagination/created-at-id-cursor";
+import { SlackService } from "../../common/slack/slack.service";
 
 @Injectable()
 export class FeedbackService {
@@ -19,11 +19,14 @@ export class FeedbackService {
     userId?: string | null;
     submitterIp?: string | null;
   }) {
-    const submitterIp = (input.submitterIp ?? '').trim() || null;
+    const submitterIp = (input.submitterIp ?? "").trim() || null;
 
     const throwRateLimit = () => {
       throw new HttpException(
-        { message: 'Too many feedback submissions. Please try again later.', error: 'feedback_rate_limit' },
+        {
+          message: "Too many feedback submissions. Please try again later.",
+          error: "feedback_rate_limit",
+        },
         HttpStatus.TOO_MANY_REQUESTS,
       );
     };
@@ -56,10 +59,20 @@ export class FeedbackService {
     } else {
       const user = await this.prisma.user.findUnique({
         where: { id: input.userId },
-        select: { verifiedStatus: true, premium: true, premiumPlus: true, siteAdmin: true },
+        select: {
+          verifiedStatus: true,
+          premium: true,
+          premiumPlus: true,
+          siteAdmin: true,
+        },
       });
-      const isUnverified = !user || user.verifiedStatus === 'none';
-      const isExempt = Boolean(user?.siteAdmin || user?.premium || user?.premiumPlus || (user?.verifiedStatus && user.verifiedStatus !== 'none'));
+      const isUnverified = !user || user.verifiedStatus === "none";
+      const isExempt = Boolean(
+        user?.siteAdmin ||
+        user?.premium ||
+        user?.premiumPlus ||
+        (user?.verifiedStatus && user.verifiedStatus !== "none"),
+      );
       if (isUnverified && !isExempt) {
         const count = await this.prisma.feedback.count({
           where: { userId: input.userId, createdAt: { gt: since } },
@@ -98,6 +111,7 @@ export class FeedbackService {
     status?: FeedbackStatus;
     category?: FeedbackCategory;
     q?: string;
+    feedbackId?: string;
   }) {
     const cursorWhere = await createdAtIdCursorWhere({
       cursor: params.cursor,
@@ -109,17 +123,18 @@ export class FeedbackService {
     });
 
     const whereParts: Prisma.FeedbackWhereInput[] = [];
+    if (params.feedbackId) whereParts.push({ id: params.feedbackId });
     if (cursorWhere) whereParts.push(cursorWhere);
     if (params.status) whereParts.push({ status: params.status });
     if (params.category) whereParts.push({ category: params.category });
 
-    const q = (params.q ?? '').trim();
+    const q = (params.q ?? "").trim();
     if (q) {
       whereParts.push({
         OR: [
-          { subject: { contains: q, mode: 'insensitive' } },
-          { details: { contains: q, mode: 'insensitive' } },
-          { email: { contains: q, mode: 'insensitive' } },
+          { subject: { contains: q, mode: "insensitive" } },
+          { details: { contains: q, mode: "insensitive" } },
+          { email: { contains: q, mode: "insensitive" } },
         ],
       });
     }
@@ -128,28 +143,54 @@ export class FeedbackService {
 
     const rows = await this.prisma.feedback.findMany({
       where,
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: params.limit + 1,
       include: {
-        user: { select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true } },
+        user: {
+          select: {
+            id: true,
+            username: true,
+            name: true,
+            avatarKey: true,
+            avatarVideoKey: true,
+            avatarVideoDurationMs: true,
+            avatarUpdatedAt: true,
+          },
+        },
       },
     });
 
     const slice = rows.slice(0, params.limit);
-    const nextCursor = rows.length > params.limit ? slice[slice.length - 1]?.id ?? null : null;
+    const nextCursor =
+      rows.length > params.limit ? (slice[slice.length - 1]?.id ?? null) : null;
 
     return { rows: slice, nextCursor };
   }
 
-  async updateAdmin(id: string, input: { status?: FeedbackStatus; adminNote?: string | null }) {
+  async updateAdmin(
+    id: string,
+    input: { status?: FeedbackStatus; adminNote?: string | null },
+  ) {
     return await this.prisma.feedback.update({
       where: { id },
       data: {
         ...(input.status ? { status: input.status } : {}),
-        ...(input.adminNote !== undefined ? { adminNote: input.adminNote } : {}),
+        ...(input.adminNote !== undefined
+          ? { adminNote: input.adminNote }
+          : {}),
       },
       include: {
-        user: { select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true } },
+        user: {
+          select: {
+            id: true,
+            username: true,
+            name: true,
+            avatarKey: true,
+            avatarVideoKey: true,
+            avatarVideoDurationMs: true,
+            avatarUpdatedAt: true,
+          },
+        },
       },
     });
   }

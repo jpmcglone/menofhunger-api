@@ -15,7 +15,7 @@ import type { Response } from "express";
 import { z } from "zod";
 import { AdminGuard, type AdminRequest } from "../admin.guard";
 import { DelegationService } from "./delegation.service";
-import { delegationId } from "./delegation.schemas";
+import { delegationId, jobControlSchema } from "./delegation.schemas";
 @UseGuards(AdminGuard)
 @Controller("admin/delegation")
 export class DelegationController {
@@ -99,19 +99,15 @@ export class DelegationController {
     @Param("id") id: string,
     @Body() raw: unknown,
   ) {
-    const body = z
-      .object({
-        command: z.enum(["pause", "resume", "cancel", "run"]),
-        requestId: z.string().uuid(),
-      })
-      .strict()
-      .parse(raw);
+    const body = jobControlSchema.parse(raw);
     return {
       data: await this.service.control(
         req.user!.id,
         delegationId.parse(id),
         body.command,
         body.requestId,
+        body.revision,
+        body.resumeAt,
       ),
     };
   }
