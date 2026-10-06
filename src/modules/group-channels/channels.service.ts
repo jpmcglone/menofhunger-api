@@ -31,12 +31,14 @@ export class ChannelsService {
     this.provisioned.add(groupId);
   }
 
-  private toDto(row: Prisma.GroupChannelGetPayload<object>, role: Parameters<typeof channelCapabilities>[1], viewer: { preference: string; readThrough: number; updatedAt: Date } | undefined, personalCount: number, hasUnread: boolean): GroupChannelDto {
+  private toDto(row: Prisma.GroupChannelGetPayload<object>, role: Parameters<typeof channelCapabilities>[1], viewer: { preference: string; readThrough: number; updatedAt: Date; mutedUntil?: Date | null; hidden?: boolean } | undefined, personalCount: number, hasUnread: boolean): GroupChannelDto {
     return {
       id: row.id, groupId: row.groupId, name: row.name, displayName: row.displayName, topic: row.topic, icon: row.defaultPurpose ? defaultChannelIcon(row.defaultPurpose) : row.icon, privacy: row.privacy,
       defaultPurpose: row.defaultPurpose, archivedAt: row.archivedAt?.toISOString() ?? null, revision: row.revision,
       preference: (viewer?.preference ?? 'mentions') as GroupChannelDto['preference'],
       hasUnread,
+      mutedUntil: viewer?.mutedUntil && viewer.mutedUntil > new Date() ? viewer.mutedUntil.toISOString() : null,
+      hidden: viewer?.hidden ?? false,
       readThrough: viewer?.readThrough ?? 0,
       viewerUpdatedAt: viewer?.updatedAt.toISOString() ?? null,
       personalCount, capabilities: channelCapabilities(row, role),
@@ -56,6 +58,7 @@ export class ChannelsService {
       LEFT JOIN "GroupChannelViewerState" v ON v."channelId" = c.id AND v."userId" = ${userId}
       WHERE c.id IN (${Prisma.join(rows.map(row => row.id))})
         AND COALESCE(v.preference, 'mentions') <> 'off'
+        AND NOT (v."mutedUntil" IS NOT NULL AND v."mutedUntil" > NOW())
         AND EXISTS (
           SELECT 1 FROM "Message" m
           LEFT JOIN "GroupChannelThreadState" t ON t."rootMessageId" = m."threadRootId" AND t."userId" = ${userId}
@@ -93,6 +96,7 @@ export class ChannelsService {
         SELECT u.id AS "userId" FROM "User" u
         LEFT JOIN "GroupChannelViewerState" v ON v."channelId" = ${channelId} AND v."userId" = u.id
         WHERE u.id IN (${ids}) AND COALESCE(v.preference, 'mentions') <> 'off'
+          AND NOT (v."mutedUntil" IS NOT NULL AND v."mutedUntil" > NOW())
           AND EXISTS (
             SELECT 1 FROM "Message" m
             LEFT JOIN "GroupChannelThreadState" t ON t."rootMessageId" = m."threadRootId" AND t."userId" = u.id

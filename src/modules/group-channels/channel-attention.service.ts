@@ -72,6 +72,44 @@ export class ChannelAttentionService {
     await this.channels.viewerChanged(userId, groupId, channelId);
   }
 
+  /** Mutes silences activity dots and ordinary delivery; mentions still reach the member. */
+  async mute(userId: string, groupId: string, channelId: string, until: Date | null) {
+    await this.prisma.$transaction(async tx => {
+      await this.access.lockGroup(tx, groupId);
+      await this.access.channel(userId, groupId, channelId, tx);
+      await tx.groupChannelViewerState.upsert({ where: { channelId_userId: { channelId, userId } }, create: { channelId, userId, mutedUntil: until }, update: { mutedUntil: until } });
+    });
+    await this.channels.viewerChanged(userId, groupId, channelId);
+    this.effects.dispatch('account.cluster.badge', { userId });
+  }
+
+  async hide(userId: string, groupId: string, channelId: string, hidden: boolean) {
+    await this.prisma.$transaction(async tx => {
+      await this.access.lockGroup(tx, groupId);
+      await this.access.channel(userId, groupId, channelId, tx);
+      await tx.groupChannelViewerState.upsert({ where: { channelId_userId: { channelId, userId } }, create: { channelId, userId, hidden }, update: { hidden } });
+    });
+    await this.channels.viewerChanged(userId, groupId, channelId);
+  }
+
+  /** Marks everything in the channel (and its threads) read, including personal attention. */
+  async markAllRead(userId: string, groupId: string, channelId: string) {
+    const advanced = await this.prisma.$transaction(async tx => {
+      await this.access.lockGroup(tx, groupId);
+      const { channel } = await this.access.channel(userId, groupId, channelId, tx);
+      const from = (await tx.groupChannelViewerState.findUnique({ where: { channelId_userId: { channelId, userId } }, select: { readThrough: true } }))?.readThrough ?? 0;
+      await tx.groupChannelViewerState.upsert({ where: { channelId_userId: { channelId, userId } }, create: { channelId, userId, readThrough: channel.lastSequence }, update: {} });
+      await tx.groupChannelViewerState.updateMany({ where: { channelId, userId, readThrough: { lt: channel.lastSequence } }, data: { readThrough: channel.lastSequence } });
+      await tx.groupChannelAttention.updateMany({ where: { userId, channelId, readAt: null }, data: { readAt: new Date() } });
+      await tx.groupChannelThreadState.updateMany({ where: { userId, root: { conversationId: channel.conversationId }, readThrough: { lt: channel.lastSequence } }, data: { readThrough: channel.lastSequence } });
+      return channel.lastSequence > from ? { from, through: channel.lastSequence } : null;
+    });
+    await this.channels.viewerChanged(userId, groupId, channelId, { readThrough: advanced?.through });
+    this.effects.dispatch('notification.badge.sync', { recipientUserId: userId });
+    this.effects.dispatch('account.cluster.badge', { userId });
+    return advanced;
+  }
+
   async markUnread(userId: string, groupId: string, channelId: string, messageId: string) {
     await this.prisma.$transaction(async tx => {
       await this.access.lockGroup(tx, groupId);

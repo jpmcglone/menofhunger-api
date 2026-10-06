@@ -4308,6 +4308,10 @@ model GroupChannelViewerState {
   userId String
   readThrough Int @default(0)
   preference GroupChannelPreference @default(mentions)
+  /// Silences activity dots and ordinary delivery until this time (far future = until turned back on).
+  mutedUntil DateTime?
+  /// Removes the channel from this member's list. Mentions still reach For you.
+  hidden Boolean @default(false)
   updatedAt DateTime @updatedAt
   channel GroupChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

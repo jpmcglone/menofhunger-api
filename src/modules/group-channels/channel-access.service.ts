@@ -67,6 +67,7 @@ export class ChannelAccessService {
           AND (c.privacy = 'normal' OR EXISTS (
             SELECT 1 FROM "GroupChannelAccess" a WHERE a."channelId" = c.id AND a."userId" = ${userId}))
           AND COALESCE(v.preference, 'mentions') <> 'off'
+          AND NOT (v."mutedUntil" IS NOT NULL AND v."mutedUntil" > NOW())
           AND EXISTS (
             SELECT 1 FROM "Message" m
             LEFT JOIN "GroupChannelThreadState" t ON t."rootMessageId" = m."threadRootId" AND t."userId" = ${userId}

@@ -15,6 +15,10 @@ export type GroupChannelDto = {
   viewerUpdatedAt: string | null;
   readThrough: number;
   hasUnread: boolean; personalCount: number; preference: 'all' | 'mentions' | 'off';
+  /** ISO time the viewer's mute ends; null when not muted. Far future means until turned back on. */
+  mutedUntil: string | null;
+  /** The viewer removed this channel from their list. */
+  hidden: boolean;
   capabilities: GroupChannelCapabilitiesDto;
 };
 /** Counts only, visible to the sender; never identifies readers. */

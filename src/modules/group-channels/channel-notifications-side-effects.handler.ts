@@ -46,7 +46,7 @@ export class ChannelNotificationsSideEffectsHandler implements OnModuleInit {
       if (blocked || muted || isViewing || viewer?.preference === 'off') return null;
       const personal = attention && !attention.readAt && (attention.mentioned || attention.followedReply);
       if (personal ? !(attention.mentioned ? prefs.pushMention : prefs.pushMessage) : !prefs.pushMessage) return null;
-      if (!personal && (input.edited || viewer?.preference !== 'all' || (viewer.readThrough >= (message.channelSequence ?? 0)))) return null;
+      if (!personal && (input.edited || viewer?.preference !== 'all' || (viewer.mutedUntil != null && viewer.mutedUntil > new Date()) || (viewer.readThrough >= (message.channelSequence ?? 0)))) return null;
       return { channel, message, reason: personal ? 'personal' : 'message' };
     } catch (error) {
       if (error instanceof NotFoundException) return null;

@@ -1,6 +1,6 @@
 import { ChannelAnalyticsService } from './channel-analytics.service';
 import { ChannelMarvScopeService } from './channel-marv-scope.service';
-import { Body, Controller, Headers, Res, StreamableFile, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Headers, Res, StreamableFile, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import type { Readable } from 'node:stream';
 import { ChannelViewingService } from './channel-viewing.service';
@@ -170,6 +170,33 @@ export class GroupChannelsController {
   @Post(':channelId/unread')
   async unread(@CurrentUserId() user: string, @Param('groupId') group: string, @Param('channelId') channel: string, @Body() body: unknown) {
     await this.attention.markUnread(user, group, channel, z.object({ messageId: id }).strict().parse(body).messageId);
+    return { data: {} };
+  }
+
+  @Post(':channelId/read-all')
+  async readAll(@CurrentUserId() user: string, @IsImpersonating() impersonating: boolean, @Param('groupId') group: string, @Param('channelId') channel: string) {
+    if (!impersonating) {
+      const advanced = await this.attention.markAllRead(user, group, channel);
+      if (advanced) await this.messages.broadcastReceipts(group, channel, user, advanced).catch(() => undefined);
+    }
+    return { data: {} };
+  }
+
+  /** `until` is an ISO time, `forever`, or null to unmute. */
+  @Put(':channelId/mute')
+  async mute(@CurrentUserId() user: string, @Param('groupId') group: string, @Param('channelId') channel: string, @Body() body: unknown) {
+    const { until } = z.object({ until: z.union([z.literal('forever'), z.string().datetime(), z.null()]) }).strict().parse(body);
+    const at = until === 'forever' ? new Date('9999-12-31T00:00:00Z') : until ? new Date(until) : null;
+    if (at && at.getTime() <= Date.now()) throw new BadRequestException('Choose a time in the future.');
+    await this.attention.mute(user, group, channel, at);
+    this.analytics.capture(user, 'channel_preference_changed', at ? 'muted' : 'unmuted');
+    return { data: {} };
+  }
+
+  @Put(':channelId/hidden')
+  async hidden(@CurrentUserId() user: string, @Param('groupId') group: string, @Param('channelId') channel: string, @Body() body: unknown) {
+    const { hidden } = z.object({ hidden: z.boolean() }).strict().parse(body);
+    await this.attention.hide(user, group, channel, hidden);
     return { data: {} };
   }
 
