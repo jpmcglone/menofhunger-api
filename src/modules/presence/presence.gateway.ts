@@ -23,6 +23,7 @@ import { GatewayContextService } from './gateway/gateway-context.service';
 import { PresenceStatusHandler } from './gateway/gateway-presence.handler';
 import { SpacesGatewayHandler } from './gateway/gateway-spaces.handler';
 import { RadioGatewayHandler } from './gateway/gateway-radio.handler';
+import { ChannelsGatewayHandler } from './gateway/gateway-channels.handler';
 import { ContentSubscriptionsHandler } from './gateway/gateway-subscriptions.handler';
 import { MessagingGatewayHandler } from './gateway/gateway-messaging.handler';
 import { CallsGatewayHandler, type CallsStatePayload } from './gateway/gateway-calls.handler';
@@ -54,6 +55,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     private readonly radioHandler: RadioGatewayHandler,
     private readonly subscriptionsHandler: ContentSubscriptionsHandler,
     private readonly messagingHandler: MessagingGatewayHandler,
+    private readonly channelsHandler: ChannelsGatewayHandler,
     private readonly callsHandler: CallsGatewayHandler,
   ) {}
 
@@ -371,6 +373,21 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   @SubscribeMessage('messages:typing')
   handleMessagesTyping(client: Socket, payload: { conversationId?: string; typing?: boolean }): Promise<void> {
     return this.messagingHandler.handleMessagesTyping(client, payload);
+  }
+
+  @SubscribeMessage('group-channels:subscribe')
+  handleChannelsSubscribe(client: Socket, payload: { groupId?: string }): Promise<void> {
+    return this.channelsHandler.handleSubscribe(client, payload);
+  }
+
+  @SubscribeMessage('group-channels:unsubscribe')
+  handleChannelsUnsubscribe(client: Socket, payload: { groupId?: string }): void {
+    this.channelsHandler.handleUnsubscribe(client, payload);
+  }
+
+  @SubscribeMessage('group-channels:typing')
+  handleChannelsTyping(client: Socket, payload: { channelId?: string; threadRootId?: string | null; typing?: boolean }): void {
+    this.channelsHandler.handleTyping(client, payload);
   }
 
   @SubscribeMessage('posts:typing')

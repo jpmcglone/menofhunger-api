@@ -9,6 +9,16 @@ export const ALLOWED_REACTIONS: SpaceReactionDto[] = [
   { id: 'cross',    emoji: '✝️', label: 'Cross' },
   { id: 'joy',      emoji: '😂', label: 'Haha' },
   { id: 'sad',      emoji: '😢', label: 'Sad' },
+  { id: 'check',    emoji: '✅', label: 'Done' },
+  { id: 'eyes',     emoji: '👀', label: 'Looking' },
+  { id: 'raised_hands', emoji: '🙌', label: 'Celebrate' },
+  { id: 'clap',     emoji: '👏', label: 'Applause' },
+  { id: 'hundred',  emoji: '💯', label: 'One hundred' },
+  { id: 'fist',     emoji: '👊', label: 'Fist bump' },
+  { id: 'think',    emoji: '🤔', label: 'Thinking' },
+  { id: 'laugh',    emoji: '🤣', label: 'Laughing' },
+  { id: 'party',    emoji: '🎉', label: 'Party' },
+  { id: 'wave',     emoji: '👋', label: 'Wave' },
 ];
 
 export function findReactionById(reactionId: string): SpaceReactionDto | null {

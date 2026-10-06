@@ -1,5 +1,5 @@
 import { toAvatarVideoDto, type AvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import type { Message, MessageConversation, MessageMedia, MessageParticipantStatus, MessageParticipantRole } from '@prisma/client';
+import type { Message, MessageMedia, MessageParticipantStatus, MessageParticipantRole } from '@prisma/client';
 import { toUserListDto, type UserListDto, type UserListRow } from '../../common/dto';
 import type { CallSessionDto, MessageCallDto } from '../../common/dto/call.dto';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
@@ -40,6 +40,9 @@ export type MessageMediaDto = {
   height: number | null;
   durationSeconds: number | null;
   alt: string | null;
+  /** Audio only: `pending` until the transcript is ready. Null when never requested. */
+  transcriptStatus: 'pending' | 'ready' | 'failed' | null;
+  transcript: string | null;
 };
 
 export type MessageDto = {
@@ -77,7 +80,7 @@ export type MessageConversationCrewSummaryDto = {
 
 export type MessageConversationDto = {
   id: string;
-  type: MessageConversation['type'];
+  type: 'direct' | 'group' | 'crew_wall';
   title: string | null;
   createdAt: string;
   updatedAt: string;
@@ -265,6 +268,13 @@ export function toLastMessagePreviewDto(
   };
 }
 
+export function transcriptFields(m: Pick<MessageMedia, 'transcriptStatus' | 'transcript'>): Pick<MessageMediaDto, 'transcriptStatus' | 'transcript'> {
+  const status = m.transcriptStatus;
+  if (status === 'ready') return { transcriptStatus: 'ready', transcript: m.transcript?.trim() || null };
+  if (status === 'failed') return { transcriptStatus: 'failed', transcript: null };
+  return { transcriptStatus: status ? 'pending' : null, transcript: null };
+}
+
 function toMessageMediaDto(m: MessageMedia, publicBaseUrl: string | null): MessageMediaDto {
   const url =
     m.source === 'upload'
@@ -285,6 +295,7 @@ function toMessageMediaDto(m: MessageMedia, publicBaseUrl: string | null): Messa
     height: m.height ?? null,
     durationSeconds: m.durationSeconds ?? null,
     alt: m.alt ?? null,
+    ...transcriptFields(m),
   };
 }
 

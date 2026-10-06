@@ -1,3 +1,7 @@
+import { ChannelAccessService } from '../group-channels/channel-access.service';
+import { prepareChannelDeparture, emitChannelAccessChange } from '../group-channels/channel-lifecycle';
+import { provisionDefaultChannels } from '../group-channels/channel-provisioning';
+import { transferGroupOwnership } from './group-ownership';
 import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import {
   BadRequestException,
@@ -123,7 +127,23 @@ export class GroupsService {
     private readonly redis: RedisService,
     private readonly marvIdentity: MarvinBotIdentityService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly channelAccess?: ChannelAccessService,
   ) {}
+
+  private async channelSummary(userId: string | null, groupId: string) {
+    if (!userId || !this.channelAccess?.enabled(groupId)) return { channelsAvailable: false, channelPersonalCount: 0, channelHasUnread: false };
+    try {
+      await this.channelAccess.member(userId, groupId);
+      const [channelPersonalCount, channelHasUnread] = await Promise.all([
+        this.channelAccess.personalCount(userId, groupId),
+        this.channelAccess.hasUnread(userId, groupId),
+      ]);
+      return { channelsAvailable: true, channelPersonalCount, channelHasUnread };
+    } catch (error) {
+      if (error instanceof NotFoundException) return { channelsAvailable: false, channelPersonalCount: 0, channelHasUnread: false };
+      throw error;
+    }
+  }
 
   private async ensureUniqueSlug(base: string): Promise<string> {
     let slug = base || 'group';
@@ -211,6 +231,7 @@ export class GroupsService {
     }
 
     const dto = toCommunityGroupShellDto(g, viewerMembership as Parameters<typeof toCommunityGroupShellDto>[1]);
+    Object.assign(dto, await this.channelSummary(params.viewerUserId, g.id));
     // Don't expose rules to anonymous viewers
     if (!params.viewerUserId) dto.rules = null;
 
@@ -327,7 +348,7 @@ export class GroupsService {
         lastViewerPostAt: lastPostByGroupId.get(m.groupId)?.toISOString() ?? null,
       }));
 
-    return { data };
+    return { data: await Promise.all(data.map(async group => ({ ...group, ...await this.channelSummary(params.viewerUserId, group.id) }))) };
   }
 
   async create(params: {
@@ -373,6 +394,7 @@ export class GroupsService {
           status: 'active',
         },
       });
+      await provisionDefaultChannels(tx, created.id, params.viewerUserId);
       return created;
     });
 
@@ -555,30 +577,15 @@ export class GroupsService {
   }
 
   async leave(params: { viewerUserId: string; groupId: string }) {
-    const g = await this.prisma.communityGroup.findFirst({
-      where: { id: params.groupId, deletedAt: null },
+    await this.prisma.$transaction(async tx => {
+      await prepareChannelDeparture(tx, params.groupId, params.viewerUserId, { forced: false });
+      const mem = await tx.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: params.groupId, userId: params.viewerUserId } } });
+      if (!mem) return;
+      if (mem.role === 'owner') throw new BadRequestException('Transfer ownership before leaving, or delete the group.');
+      await tx.communityGroupMember.delete({ where: { groupId_userId: { groupId: params.groupId, userId: params.viewerUserId } } });
+      if (mem.status === 'active') await tx.communityGroup.update({ where: { id: params.groupId }, data: { memberCount: { decrement: 1 } } });
     });
-    if (!g) throw new NotFoundException('Group not found.');
-
-    const mem = await this.prisma.communityGroupMember.findUnique({
-      where: { groupId_userId: { groupId: g.id, userId: params.viewerUserId } },
-    });
-    if (!mem) return { data: { ok: true as const } };
-    if (mem.role === 'owner') {
-      throw new BadRequestException('Transfer ownership before leaving, or delete the group.');
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.communityGroupMember.delete({
-        where: { groupId_userId: { groupId: g.id, userId: params.viewerUserId } },
-      });
-      if (mem.status === 'active') {
-        await tx.communityGroup.update({
-          where: { id: g.id },
-          data: { memberCount: { decrement: 1 } },
-        });
-      }
-    });
+    await emitChannelAccessChange(this.prisma, this.presenceRealtime, params.groupId, params.viewerUserId);
     return { data: { ok: true as const } };
   }
 
@@ -691,6 +698,11 @@ export class GroupsService {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      await prepareChannelDeparture(tx, params.groupId, params.userId, { forced: true });
+      const actor = await tx.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: params.groupId, userId: params.viewerUserId } } });
+      const current = await tx.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: params.groupId, userId: params.userId } } });
+      if (!actor || actor.status !== 'active' || !['owner', 'moderator'].includes(actor.role) || !current || current.role === 'owner' || (current.role === 'moderator' && actor.role !== 'owner')) throw new ForbiddenException('You cannot remove this member.');
+
       await tx.communityGroupMember.delete({
         where: { groupId_userId: { groupId: params.groupId, userId: params.userId } },
       });
@@ -699,6 +711,8 @@ export class GroupsService {
         data: { memberCount: { decrement: 1 } },
       });
     });
+
+    await emitChannelAccessChange(this.prisma, this.presenceRealtime, params.groupId, params.userId);
 
     // Skip the notification if the removed user is the Marv bot — he's a machine; sending him
     // a "you were removed" push is meaningless.
@@ -800,6 +814,12 @@ export class GroupsService {
     return { data: { ok: true as const } };
   }
 
+  async transferOwnership(params: { viewerUserId: string; groupId: string; userId: string }) {
+    await transferGroupOwnership(this.prisma, params.groupId, params.viewerUserId, params.userId);
+    await emitChannelAccessChange(this.prisma, this.presenceRealtime, params.groupId, params.userId);
+    return { data: { ok: true as const } };
+  }
+
   async demoteModerator(params: { viewerUserId: string; isSiteAdmin: boolean; groupId: string; userId: string }) {
     const group = await this.prisma.communityGroup.findFirst({
       where: { id: params.groupId, deletedAt: null },
@@ -823,10 +843,15 @@ export class GroupsService {
       throw new NotFoundException('Moderator not found.');
     }
 
-    await this.prisma.communityGroupMember.update({
-      where: { groupId_userId: { groupId: group.id, userId: params.userId } },
-      data: { role: 'member' },
+    await this.prisma.$transaction(async tx => {
+      await prepareChannelDeparture(tx, group.id, params.userId, { forced: false, demotion: true });
+      const actor = await tx.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: group.id, userId: params.viewerUserId } } });
+      if (!params.isSiteAdmin && (actor?.status !== 'active' || actor.role !== 'owner')) throw new ForbiddenException('Only the owner can demote moderators.');
+      const current = await tx.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: group.id, userId: params.userId } } });
+      if (current?.status !== 'active' || current.role !== 'moderator') throw new NotFoundException('Moderator not found.');
+      await tx.communityGroupMember.update({ where: { groupId_userId: { groupId: group.id, userId: params.userId } }, data: { role: 'member' } });
     });
+    await emitChannelAccessChange(this.prisma, this.presenceRealtime, group.id, params.userId);
     return { data: { ok: true as const } };
   }
 

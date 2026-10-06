@@ -6,32 +6,18 @@ import { CurrentUserId } from '../users/users.decorator';
 import { ReportsService } from './reports.service';
 import { toReportDto } from '../../common/dto';
 
-const createSchema = z
-  .object({
-    targetType: z.enum(['post', 'user']),
-    subjectPostId: z.string().cuid().optional(),
-    subjectUserId: z.string().cuid().optional(),
-    reason: z.enum(['spam', 'harassment', 'hate', 'sexual', 'violence', 'illegal', 'other']),
-    details: z.union([z.string().trim().min(1).max(5000), z.null()]).optional(),
-  })
-  .superRefine((val, ctx) => {
-    if (val.targetType === 'post') {
-      if (!val.subjectPostId) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'subjectPostId is required.', path: ['subjectPostId'] });
-      }
-      if (val.subjectUserId) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'subjectUserId is not allowed.', path: ['subjectUserId'] });
-      }
-      return;
-    }
-
-    if (!val.subjectUserId) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'subjectUserId is required.', path: ['subjectUserId'] });
-    }
-    if (val.subjectPostId) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'subjectPostId is not allowed.', path: ['subjectPostId'] });
-    }
-  });
+const createSchema = z.object({
+  targetType: z.enum(['post', 'user', 'message', 'article']),
+  subjectPostId: z.string().cuid().optional(), subjectUserId: z.string().cuid().optional(),
+  subjectMessageId: z.string().cuid().optional(), subjectArticleId: z.string().cuid().optional(),
+  reason: z.enum(['spam', 'harassment', 'hate', 'sexual', 'violence', 'illegal', 'other']),
+  details: z.union([z.string().trim().min(1).max(5000), z.null()]).optional(),
+}).strict().superRefine((value, context) => {
+  const keys = { post: 'subjectPostId', user: 'subjectUserId', message: 'subjectMessageId', article: 'subjectArticleId' } as const;
+  for (const key of Object.values(keys)) {
+    if (key === keys[value.targetType] ? !value[key] : Boolean(value[key])) context.addIssue({ code: z.ZodIssueCode.custom, message: `Provide only the ${value.targetType} being reported.`, path: [key] });
+  }
+});
 
 @ApiTags('Moderation')
 @UseGuards(AuthGuard)
@@ -39,7 +25,7 @@ const createSchema = z
 export class ReportsController {
   constructor(private readonly reports: ReportsService) {}
 
-  @ApiOperation({ summary: 'Create a report for a post or a user (spam, harassment, hate, etc.)' })
+  @ApiOperation({ summary: 'Create a report for a post, user, message or article (spam, harassment, hate, etc.)' })
   @Post()
   async create(@Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = createSchema.parse(body);
@@ -49,6 +35,8 @@ export class ReportsController {
       targetType: parsed.targetType,
       subjectPostId: parsed.subjectPostId ?? null,
       subjectUserId: parsed.subjectUserId ?? null,
+      subjectMessageId: parsed.subjectMessageId ?? null,
+      subjectArticleId: parsed.subjectArticleId ?? null,
       reason: parsed.reason,
       details: parsed.details ?? null,
     });

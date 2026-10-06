@@ -44,11 +44,16 @@ describe('NotificationSideEffectsHandler.onBadgeSync', () => {
     return { apns, redis, presenceRedis, sideEffects, badgeHandler, clusterHandler, accountSwitch, presenceRealtime };
   }
 
-  it('emits accounts:badge-updated to the operator cluster and skips solo accounts', async () => {
+  it('emits accounts:badge-updated to the operator cluster, including solo accounts', async () => {
     const { clusterHandler, accountSwitch, presenceRealtime } = makeHandler();
     accountSwitch.listClusterUserIds.mockResolvedValueOnce(['john']);
     await clusterHandler({ userId: 'john' });
-    expect(presenceRealtime.emitAccountsBadgeUpdated).not.toHaveBeenCalled();
+    expect(presenceRealtime.emitAccountsBadgeUpdated).toHaveBeenCalledWith('john', {
+      userId: 'john',
+      unreadBadgeCount: 0,
+      hasUnreadNotifications: false,
+    });
+    presenceRealtime.emitAccountsBadgeUpdated.mockClear();
 
     accountSwitch.listClusterUserIds.mockResolvedValueOnce(['john', 'news']);
     accountSwitch.badgeSummaryForUser.mockResolvedValueOnce({ unreadBadgeCount: 5, hasUnreadNotifications: true });

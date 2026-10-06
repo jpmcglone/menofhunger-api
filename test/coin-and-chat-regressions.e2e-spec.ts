@@ -27,6 +27,7 @@ databaseTests('coin concurrency and chat deletion (PostgreSQL)', () => {
       `CREATE TABLE "User" (id text PRIMARY KEY, coins integer NOT NULL DEFAULT 0)`,
       `CREATE TABLE "CoinTransfer" (id text PRIMARY KEY, "createdAt" timestamp NOT NULL DEFAULT now(), "senderId" text NOT NULL REFERENCES "User"(id), "recipientId" text NOT NULL REFERENCES "User"(id), "postId" text, kind "${schema}"."CoinTransferKind" NOT NULL, amount integer NOT NULL CHECK (amount < 100), note text)`,
       `CREATE INDEX ON "CoinTransfer" ("recipientId", "createdAt" DESC)`,
+      `CREATE TABLE "MessageConversation" (id text PRIMARY KEY, type text NOT NULL)`,
       `CREATE TABLE "Message" (id text PRIMARY KEY, "conversationId" text NOT NULL, body text NOT NULL, "createdAt" timestamp NOT NULL, "deletedForAll" boolean NOT NULL DEFAULT false)`,
       `CREATE TABLE "MessageParticipant" ("conversationId" text NOT NULL, "userId" text NOT NULL, status text NOT NULL, PRIMARY KEY ("conversationId", "userId"))`,
       `CREATE TABLE "MessageDeletion" ("messageId" text NOT NULL, "userId" text NOT NULL, PRIMARY KEY ("messageId", "userId"))`,
@@ -44,7 +45,7 @@ databaseTests('coin concurrency and chat deletion (PostgreSQL)', () => {
 
   beforeEach(async () => {
     emitMeUpdated.mockClear();
-    await db.$executeRaw`TRUNCATE "CoinTransfer", "User", "Message", "MessageParticipant", "MessageDeletion"`;
+    await db.$executeRaw`TRUNCATE "CoinTransfer", "User", "MessageConversation", "Message", "MessageParticipant", "MessageDeletion"`;
     await db.$executeRaw`INSERT INTO "User" (id, coins) VALUES ('admin', 0), ('recipient', 10)`;
   });
 
@@ -79,8 +80,11 @@ databaseTests('coin concurrency and chat deletion (PostgreSQL)', () => {
   });
 
   it('finds the next visible search hit, excluding only the viewer’s personal deletions', async () => {
-    await db.$executeRaw`INSERT INTO "MessageParticipant" VALUES ('conversation', 'viewer', 'accepted'), ('conversation', 'other', 'accepted')`;
+    await db.$executeRaw`INSERT INTO "MessageConversation" VALUES ('conversation', 'direct'), ('channel-conversation', 'channel')`;
+    // A stale participant row must never surface channel messages in Chat search.
+    await db.$executeRaw`INSERT INTO "MessageParticipant" VALUES ('conversation', 'viewer', 'accepted'), ('conversation', 'other', 'accepted'), ('channel-conversation', 'viewer', 'accepted')`;
     await db.$executeRaw`INSERT INTO "Message" (id, "conversationId", body, "createdAt", "deletedForAll") VALUES
+      ('channel', 'channel-conversation', 'needle channel', '2026-01-05', false),
       ('global', 'conversation', 'needle global', '2026-01-04', true),
       ('hidden', 'conversation', 'needle hidden', '2026-01-03', false),
       ('visible', 'conversation', 'needle visible', '2026-01-02', false)`;
@@ -92,6 +96,7 @@ databaseTests('coin concurrency and chat deletion (PostgreSQL)', () => {
       _getBlockedUserIds: async () => new Set(),
       getUnreadCountByConversationId: async () => new Map(),
       appConfig: { r2: () => null },
+      chatConversationType: (MessagesService.prototype as any).chatConversationType,
     };
     const result = await MessagesService.prototype.searchConversations.call(search as any, { userId: 'viewer', query: 'needle', limit: 1 });
     expect(result.conversations[0]?.matchedMessage).toMatchObject({ id: 'visible', body: 'needle visible' });

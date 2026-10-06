@@ -1,3 +1,6 @@
+import { GroupChannelsModule } from '../group-channels/group-channels.module';
+import { MarvinChannelDispatchService } from './marvin-channel-dispatch.service';
+import { MarvinChannelReplyProcessor } from './jobs/marvin-channel-reply.processor';
 import { MarvinMemoryService } from './services/marvin-memory.service';
 import { BookmarksModule } from '../bookmarks/bookmarks.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -56,6 +59,7 @@ import { ScriptureModule } from '../scripture/scripture.module';
  */
 @Module({
   imports: [
+    GroupChannelsModule,
     BookmarksModule, NotificationsModule,
     AppConfigModule,
     AuthModule,
@@ -69,6 +73,7 @@ import { ScriptureModule } from '../scripture/scripture.module';
   ],
   controllers: [MarvinController, MarvinPersonalController],
   providers: [
+    MarvinChannelDispatchService, MarvinChannelReplyProcessor,
     MarvinMemoryService,
     MarvinPersonalService, MarvinParticipationService,
     AdminGuard,

@@ -180,6 +180,8 @@ enum FeedbackStatus {
 enum ReportTargetType {
   post
   user
+  message
+  article
 }
 
 enum ReportReason {
@@ -206,6 +208,7 @@ enum VerificationRequestStatus {
 }
 
 enum MessageConversationType {
+  channel
   direct
   group
   crew_wall
@@ -679,6 +682,13 @@ model User {
   fitnessGoals                 FitnessGoal[]
   fitnessShares                FitnessShare[]
 
+  channelAccess GroupChannelAccess[]
+  channelStates GroupChannelViewerState[]
+  channelThreads GroupChannelThreadState[]
+  channelAttention GroupChannelAttention[]
+  channelUploads GroupChannelUpload[]
+  channelDeliveries GroupChannelDelivery[]
+
   @@index([phone])
   @@index([accountKind])
   @@index([lastSeenAt])
@@ -1079,6 +1089,7 @@ model CommunityGroup {
    */
   memberCount   Int     @default(0)
 
+  channels          GroupChannel[]
   members           CommunityGroupMember[]
   invites           CommunityGroupInvite[]
   posts             Post[]
@@ -2565,6 +2576,7 @@ model MessageConversation {
    * When this conversation is a crew wall (type: crew_wall), links back to the owning crew.
    */
   crewWall Crew? @relation("Crew_wallConversation")
+  groupChannel GroupChannel?
 
   notifications Notification[] @relation("Notification_subjectConversation")
 
@@ -2596,6 +2608,19 @@ model MessageParticipant {
 }
 
 model Message {
+  channelRevision Int @default(0)
+  /// Link URLs in a channel message whose rich previews the author removed.
+  hiddenPreviews String[] @default([])
+  channelSequence Int?
+  clientRequestId String?
+  requestHash String?
+  threadRootId String?
+  threadRoot Message? @relation("ChannelThread", fields: [threadRootId], references: [id], onDelete: Restrict)
+  threadReplies Message[] @relation("ChannelThread")
+  channelPins GroupChannelPin[]
+  channelAttention GroupChannelAttention[]
+  channelThreadStates GroupChannelThreadState[]
+  channelDeliveries GroupChannelDelivery[]
   marvinMemorySource MarvinMemorySource?
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
@@ -2637,9 +2662,14 @@ model Message {
   deletions MessageDeletion[]
   media     MessageMedia[]
 
+  @@unique([conversationId, channelSequence])
+  @@unique([conversationId, senderId, clientRequestId])
+  @@index([conversationId, threadRootId, channelSequence])
   @@index([conversationId, createdAt])
   @@index([senderId, createdAt])
   @@index([replyToId])
+  reports Report[] @relation("Report_subjectMessage")
+
 }
 
 model MessageMedia {
@@ -2657,6 +2687,11 @@ model MessageMedia {
   height          Int?
   durationSeconds Int?
   alt             String?
+
+  // Audio transcription: null status means never requested.
+  transcriptStatus     String?
+  transcript           String?   @db.Text
+  transcribedAt        DateTime?
 
   messageId String
   message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
@@ -2769,6 +2804,13 @@ model Report {
 
   subjectPostId String?
   subjectPost   Post?   @relation("Report_subjectPost", fields: [subjectPostId], references: [id], onDelete: Cascade)
+
+  subjectMessageId String?
+  subjectMessage Message? @relation("Report_subjectMessage", fields: [subjectMessageId], references: [id], onDelete: Cascade)
+  subjectArticleId String?
+  subjectArticle Article? @relation("Report_subjectArticle", fields: [subjectArticleId], references: [id], onDelete: Cascade)
+  // Only returned through authorized admin report review, never through ordinary channel APIs.
+  evidenceText String? @db.Text
 
   resolvedByAdminId String?
   resolvedByAdmin   User?   @relation("Report_resolvedBy", fields: [resolvedByAdminId], references: [id], onDelete: SetNull)
@@ -2955,6 +2997,8 @@ model Article {
   @@index([authorId, deletedAt, isDraft, visibility, publishedAt(sort: Desc), id(sort: Desc)])
   // Author-scoped article feeds, trending sort.
   @@index([authorId, deletedAt, isDraft, visibility, trendingScore(sort: Desc), publishedAt(sort: Desc), id(sort: Desc)])
+  reports Report[] @relation("Report_subjectArticle")
+
 }
 
 model ArticleTag {
@@ -4206,4 +4250,134 @@ model PostReachDay {
 model PostReachTracking {
   id String @id
   startedAt DateTime @default(now())
+}
+
+
+// Group access is the authority; Chat participant rows never grant channel access.
+enum GroupChannelPrivacy {
+  normal
+  private
+}
+enum GroupChannelDefault {
+  announcements
+  general
+  random
+}
+enum GroupChannelPreference {
+  all
+  mentions
+  off
+}
+model GroupChannel {
+  id String @id @default(cuid())
+  groupId String
+  conversationId String @unique
+  name String @db.VarChar(80)
+  topic String @default("") @db.VarChar(500)
+  icon String? @db.VarChar(16)
+  displayName String? @db.VarChar(80)
+  privacy GroupChannelPrivacy @default(normal)
+  defaultPurpose GroupChannelDefault?
+  archivedAt DateTime?
+  revision Int @default(1)
+  lastSequence Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  group CommunityGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  conversation MessageConversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  uploads GroupChannelUpload[]
+  access GroupChannelAccess[]
+  viewers GroupChannelViewerState[]
+  pins GroupChannelPin[]
+  attention GroupChannelAttention[]
+  @@unique([groupId, name])
+  @@unique([groupId, defaultPurpose])
+  @@index([groupId, archivedAt])
+}
+model GroupChannelAccess {
+  channelId String
+  userId String
+  createdAt DateTime @default(now())
+  channel GroupChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([channelId, userId])
+  @@index([userId])
+}
+model GroupChannelViewerState {
+  channelId String
+  userId String
+  readThrough Int @default(0)
+  preference GroupChannelPreference @default(mentions)
+  updatedAt DateTime @updatedAt
+  channel GroupChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([channelId, userId])
+}
+model GroupChannelThreadState {
+  rootMessageId String
+  userId String
+  following Boolean @default(true)
+  unfollowed Boolean @default(false)
+  readThrough Int @default(0)
+  root Message @relation(fields: [rootMessageId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([rootMessageId, userId])
+  @@index([userId, following])
+}
+model GroupChannelAttention {
+  channelId String
+  messageId String
+  userId String
+  mentioned Boolean @default(false)
+  followedReply Boolean @default(false)
+  readAt DateTime?
+  createdAt DateTime @default(now())
+  channel GroupChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([messageId, userId])
+  @@index([userId, readAt, channelId])
+}
+model GroupChannelPin {
+  channelId String
+  messageId String
+  pinnedByUserId String
+  createdAt DateTime @default(now())
+  channel GroupChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  @@id([channelId, messageId])
+}
+
+
+// Private bucket only. Source PUTs expire in five minutes; unattached uploads retain ownership for seven days.
+model GroupChannelUpload {
+  id String @id @default(uuid())
+  channelId String
+  userId String
+  sourceKey String @unique
+  r2Key String @unique
+  contentType String
+  kind PostMediaKind
+  bytes Int
+  width Int?
+  height Int?
+  durationSeconds Float?
+  committedAt DateTime?
+  consumedAt DateTime?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  channel GroupChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, expiresAt])
+}
+
+// Durable push deduplication. Personal and ordinary delivery have distinct reasons.
+model GroupChannelDelivery {
+  messageId String
+  userId String
+  reason String @db.VarChar(16)
+  deliveredAt DateTime @default(now())
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([messageId, userId, reason])
 }

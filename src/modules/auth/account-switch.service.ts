@@ -268,6 +268,7 @@ export class AccountSwitchService {
       isCurrent: row.id === params.effectiveUserId,
       unreadBadgeCount: unreadByUser.get(row.id)?.unreadBadgeCount ?? 0,
       hasUnreadNotifications: unreadByUser.get(row.id)?.hasUnreadNotifications ?? false,
+      hasUnreadBoard: unreadByUser.get(row.id)?.hasUnreadBoard ?? false,
     }));
   }
 

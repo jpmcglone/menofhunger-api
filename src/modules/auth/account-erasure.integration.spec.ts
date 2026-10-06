@@ -23,6 +23,11 @@ const enabled = fixtureUrl && new URL(fixtureUrl).hostname === '127.0.0.1' && ne
     await db.fitnessDailySummary.create({ data: { userId: owner.id, dayKey: '2026-09-16', stepsCount: 5000 } });
     const group = await db.communityGroup.create({ data: { slug: 'erasure-fixture', name: 'Synthetic group', description: 'Keep shared group', createdByUserId: owner.id, memberCount: 2 } });
     await db.communityGroupMember.createMany({ data: [{ groupId: group.id, userId: owner.id, status: 'active', role: 'owner' }, { groupId: group.id, userId: other.id, status: 'active', role: 'member' }] });
+    const verified = await db.user.create({ data: { username: 'erasure_fixture_verified', phone: '+15550000003', verifiedStatus: 'identity' } });
+    const channelGroup = await db.communityGroup.create({ data: { slug: 'erasure-fixture-verified', name: 'Synthetic verified group', description: 'Prefer verified successor', createdByUserId: owner.id, memberCount: 3 } });
+    await db.communityGroupMember.create({ data: { groupId: channelGroup.id, userId: owner.id, status: 'active', role: 'owner' } });
+    await db.communityGroupMember.create({ data: { groupId: channelGroup.id, userId: other.id, status: 'active', role: 'member' } });
+    await db.communityGroupMember.create({ data: { groupId: channelGroup.id, userId: verified.id, status: 'active', role: 'member' } });
     await db.$transaction(tx => eraseAccountRecords(tx, owner.id), { timeout: 60000 });
     expect(await db.user.findUnique({ where: { id: owner.id } })).toBeNull();
     expect(await db.post.findUnique({ where: { id: post.id } })).toMatchObject({ userId: DELETED_ACCOUNT_ID, body: '', deletedAt: expect.any(Date) });
@@ -32,5 +37,8 @@ const enabled = fixtureUrl && new URL(fixtureUrl).hostname === '127.0.0.1' && ne
     for (const model of [db.fitnessConnection, db.fitnessActivity, db.fitnessBodyMetric, db.fitnessDailySummary] as any[]) expect(await model.count({ where: { userId: owner.id } })).toBe(0);
     expect(await db.communityGroup.findUnique({ where: { id: group.id } })).toMatchObject({ createdByUserId: other.id, memberCount: 1 });
     expect(await db.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: group.id, userId: other.id } } })).toMatchObject({ role: 'owner' });
+    expect(await db.communityGroup.findUnique({ where: { id: channelGroup.id } })).toMatchObject({ createdByUserId: verified.id });
+    expect(await db.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: channelGroup.id, userId: verified.id } } })).toMatchObject({ role: 'owner' });
+    expect(await db.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: channelGroup.id, userId: other.id } } })).toMatchObject({ role: 'member' });
   });
 });

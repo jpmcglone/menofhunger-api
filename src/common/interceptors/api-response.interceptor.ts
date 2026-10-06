@@ -1,4 +1,4 @@
-import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+import { CallHandler, ExecutionContext, Injectable, NestInterceptor, StreamableFile } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 
@@ -14,6 +14,8 @@ export class ApiResponseInterceptor implements NestInterceptor {
         // Pass through null/undefined (e.g. 204 No Content handlers) so we don't produce
         // a body on no-content responses, which violates HTTP semantics.
         if (body === undefined || body === null) return body;
+        // Binary streams (protected media) must not be wrapped in a JSON envelope.
+        if (body instanceof StreamableFile) return body;
         // If the handler already returned an envelope (e.g. { data, pagination }), leave it alone.
         if (isObject(body) && 'data' in body) return body;
         return { data: body };

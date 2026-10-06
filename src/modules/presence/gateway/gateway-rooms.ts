@@ -7,6 +7,10 @@ export const MAX_GROUP_SUBSCRIPTIONS_PER_SOCKET = 20;
 export function postRoom(postId: string): string {
   return `post:${postId}`;
 }
+export function channelRoom(channelId: string): string {
+  return `channel:${channelId}`;
+}
+export const MAX_CHANNEL_SUBSCRIPTIONS_PER_SOCKET = 300;
 export function groupRoom(groupId: string): string {
   return `group:${groupId}`;
 }

@@ -409,6 +409,12 @@ export class GroupsController {
   }
 
   @UseGuards(AuthGuard)
+  @Post(':groupId/members/:userId/transfer-ownership')
+  async transferOwnership(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
+    return await this.groups.transferOwnership({ viewerUserId, groupId, userId });
+  }
+
+  @UseGuards(AuthGuard)
   @Post(':groupId/members/:userId/demote-moderator')
   async demote(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
     const u = await this.prisma.user.findUnique({

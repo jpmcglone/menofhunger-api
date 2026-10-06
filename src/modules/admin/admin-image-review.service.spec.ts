@@ -20,6 +20,7 @@ describe("profile and publication media ownership", () => {
       },
       postMedia: { findMany: jest.fn().mockResolvedValue([]) },
       messageMedia: { findMany: jest.fn().mockResolvedValue([]) },
+      groupChannelUpload: { findMany: jest.fn().mockResolvedValue([]) },
       user: { findMany: jest.fn().mockResolvedValue([]) },
       communityGroup: { findMany: jest.fn().mockResolvedValue([]) },
       crew: { findMany: jest.fn().mockResolvedValue([]) },
@@ -40,6 +41,48 @@ describe("profile and publication media ownership", () => {
     );
     return { prisma, service };
   };
+
+
+  it.each(['original.mp4', 'poster.jpg', 'audio.m4a'])(
+    'protects channel originals and derivatives without producing public URLs (%s)', async file => {
+      const channelKey = `channel-uploads/group/channel/member/${file}`;
+      const { prisma, service } = setup(channelKey);
+      expect((await service.getById('asset')).asset.primaryType).toBe('orphan');
+      expect((await service.list({ limit: 30, cursor: null, onlyOrphans: true })).items).toHaveLength(1);
+      prisma.messageMedia.findMany.mockResolvedValue([{
+        id: 'media', messageId: 'message', r2Key: file === 'poster.jpg' ? 'other' : channelKey,
+        thumbnailR2Key: file === 'poster.jpg' ? channelKey : null,
+        message: { conversationId: 'conversation', conversation: { groupChannel: { id: 'channel', groupId: 'group' } } },
+      }]);
+      const result = await service.getById('asset');
+      expect(result.asset.primaryType).toBe(file === 'poster.jpg' ? 'message_thumbnail' : 'message');
+      expect(result.asset.publicUrl).toBeNull();
+      expect(result.references.messages[0]).toMatchObject({ channelId: 'channel', groupId: 'group' });
+      expect((await service.list({ limit: 30, cursor: null, onlyOrphans: true })).items).toEqual([]);
+      await expect(service.deleteById({ id: 'asset', adminUserId: 'admin', reason: 'cleanup', onlyOrphans: true }))
+        .rejects.toThrow('no longer an orphan');
+      expect((await service.deleteManyByIds({ ids: ['asset'], adminUserId: 'admin', reason: 'cleanup', onlyOrphans: true })).deleted).toBe(0);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['sourceKey', 'r2Key'])('retains unexpired channel upload %s and releases expired uploads', async field => {
+    const channelKey = 'channel-uploads/group/channel/member/original.jpg';
+    const { prisma, service } = setup(channelKey);
+    prisma.groupChannelUpload.findMany.mockResolvedValue([{
+      id: 'upload', channelId: 'channel', userId: 'member', sourceKey: 'other-source', r2Key: 'other-final',
+      [field]: channelKey, expiresAt: new Date(Date.now() + 86_400_000),
+    }]);
+    expect((await service.getById('asset')).asset.primaryType).toBe('channel_upload');
+    expect((await service.list({ limit: 30, cursor: null, onlyOrphans: true })).items).toEqual([]);
+    await expect(service.deleteById({ id: 'asset', adminUserId: 'admin', reason: 'cleanup', onlyOrphans: true }))
+      .rejects.toThrow('no longer an orphan');
+    expect(prisma.groupChannelUpload.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ expiresAt: { gt: expect.any(Date) } }),
+    }));
+    prisma.groupChannelUpload.findMany.mockResolvedValue([]);
+    expect((await service.getById('asset')).asset.primaryType).toBe('orphan');
+  });
 
   it.each(["m4a", "wav"])(
     "protects sent voice messages and refuses stale orphan deletion (%s)",

@@ -5,7 +5,7 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
-import { notificationFilterWhere } from './notification-category';
+import { boardActivityWhere, notificationFilterWhere, withoutBoardActivity } from './notification-category';
 
 export type NotificationUnreadByKind = Partial<Record<NotificationKind | 'all', number>>;
 
@@ -82,15 +82,35 @@ export class NotificationReadStateService {
     void this.emitNavUnreadForUser(recipientUserId);
   }
 
-  /** Navigation dots follow unread activity, independently of the unseen bell count. */
+  /**
+   * Single-row paths read the denormalized counter, which still includes Board rows.
+   * Recount the bell so Board activity never leaks into the emitted number.
+   */
+  private async emitBellRecounted(recipientUserId: string, fallback?: number | null): Promise<void> {
+    let undeliveredCount = fallback ?? 0;
+    try {
+      undeliveredCount = await this.getUndeliveredCount(recipientUserId);
+    } catch {
+      // Keep the counter-derived fallback.
+    }
+    this.emitBellUpdated(recipientUserId, { undeliveredCount });
+  }
+
+  /**
+   * Navigation state. Board owns its own numbers: unread dot (`boardUnreadCount`) and unseen
+   * mentions (`boardMentionCount`). The notifications dot never includes Board activity.
+   */
   async getNavUnread(recipientUserId: string) {
-    const base = { ...await this.badges.notificationWhere(recipientUserId), readAt: null };
-    const [boardUnreadCount, articlesUnreadCount, unread] = await Promise.all([
-      this.prisma.notification.count({ where: { ...base, ...notificationFilterWhere('board'), kind: { in: ['comment', 'mention', 'followed_post'] }, actorUserId: { not: recipientUserId } } }),
-      this.prisma.notification.count({ where: { ...base, ...notificationFilterWhere('articles') } }),
-      this.prisma.notification.findFirst({ where: base, select: { id: true } }),
+    const where = await this.badges.notificationWhere(recipientUserId);
+    const bell = withoutBoardActivity(where);
+    const board = { AND: [where, boardActivityWhere(), { actorUserId: { not: recipientUserId } }] };
+    const [boardUnreadCount, boardMentionCount, articlesUnreadCount, unread] = await Promise.all([
+      this.prisma.notification.count({ where: { ...board, readAt: null } }),
+      this.prisma.notification.count({ where: { ...board, kind: 'mention', deliveredAt: null } }),
+      this.prisma.notification.count({ where: { ...bell, readAt: null, ...notificationFilterWhere('articles') } }),
+      this.prisma.notification.findFirst({ where: { ...bell, readAt: null }, select: { id: true } }),
     ]);
-    return { boardUnreadCount, articlesUnreadCount, hasUnreadNotifications: unread != null };
+    return { boardUnreadCount, boardMentionCount, articlesUnreadCount, hasUnreadNotifications: unread != null };
   }
 
   /** Best-effort `notifications:navUnreadChanged` emit; never throws. */
@@ -110,23 +130,24 @@ export class NotificationReadStateService {
       recipientUserId,
       deliveredAt: null,
       kind: { notIn: BELL_EXCLUDED_KINDS },
+      NOT: boardActivityWhere(),
     };
   }
 
   async getUndeliveredCount(recipientUserId: string): Promise<number> {
     return this.prisma.notification.count({
-      where: { ...await this.badges.notificationWhere(recipientUserId), deliveredAt: null },
+      where: { ...await this.badges.bellWhere(recipientUserId), deliveredAt: null },
     });
   }
 
   async getUnreadCountsByKind(recipientUserId: string, blockedActorIds: string[] = []): Promise<NotificationUnreadByKind> {
     const rows = await this.prisma.notification.groupBy({
       by: ['kind'],
-      where: {
+      where: withoutBoardActivity({
         recipientUserId,
         readAt: null,
         ...(blockedActorIds.length ? { NOT: { AND: [{ actorUserId: { not: null } }, { actorUserId: { in: blockedActorIds } }] } } : {}),
-      },
+      }),
       _count: { _all: true },
     });
 
@@ -238,7 +259,9 @@ export class NotificationReadStateService {
     const now = new Date();
     const undeliveredCount = await this.prisma.$transaction(async (tx) => {
       const res = await tx.notification.updateMany({
-        where: { ...this.undeliveredBellWhere(recipientUserId), ...(filter ? notificationFilterWhere(filter) : {}), createdAt: { lte: now } },
+        where: filter
+          ? { recipientUserId, deliveredAt: null, kind: { notIn: BELL_EXCLUDED_KINDS }, ...notificationFilterWhere(filter), createdAt: { lte: now } }
+          : { ...this.undeliveredBellWhere(recipientUserId), createdAt: { lte: now } },
         data: { deliveredAt: now },
       });
       if (res.count > 0) {
@@ -583,9 +606,7 @@ export class NotificationReadStateService {
       return { changed: true as const, undeliveredCount };
     });
     if (res.changed) {
-      this.emitBellUpdated(recipientUserId, {
-        undeliveredCount: res.undeliveredCount ?? 0,
-      });
+      await this.emitBellRecounted(recipientUserId, res.undeliveredCount);
     }
   }
 
@@ -624,9 +645,7 @@ export class NotificationReadStateService {
       return { changed: true as const, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
     });
     if (res.changed) {
-      this.emitBellUpdated(recipientUserId, {
-        undeliveredCount: res.undeliveredCount ?? 0,
-      });
+      await this.emitBellRecounted(recipientUserId, res.undeliveredCount);
       if (notification?.kind === 'comment') {
         void this.emitWaitingCountForUser(recipientUserId);
       }
@@ -675,9 +694,7 @@ export class NotificationReadStateService {
       return { changed: true as const, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
     });
     if (res.changed) {
-      this.emitBellUpdated(recipientUserId, {
-        undeliveredCount: res.undeliveredCount ?? 0,
-      });
+      await this.emitBellRecounted(recipientUserId, res.undeliveredCount);
     }
     return res.changed;
   }
@@ -724,7 +741,7 @@ export class NotificationReadStateService {
       });
       return { changedCount: readRes.count, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
     });
-    if (res.changedCount > 0) this.emitBellUpdated(recipient, { undeliveredCount: res.undeliveredCount ?? 0 });
+    if (res.changedCount > 0) await this.emitBellRecounted(recipient, res.undeliveredCount);
     return res.changedCount;
   }
 
@@ -770,7 +787,7 @@ export class NotificationReadStateService {
       });
       return { changedCount: nudgedRes.count, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
     });
-    if (res.changedCount > 0) this.emitBellUpdated(recipient, { undeliveredCount: res.undeliveredCount ?? 0 });
+    if (res.changedCount > 0) await this.emitBellRecounted(recipient, res.undeliveredCount);
     return res.changedCount;
   }
 
@@ -803,7 +820,7 @@ export class NotificationReadStateService {
       });
       return { changed: true as const, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
     });
-    if (res.changed) this.emitBellUpdated(recipientUserId, { undeliveredCount: res.undeliveredCount ?? 0 });
+    if (res.changed) await this.emitBellRecounted(recipientUserId, res.undeliveredCount);
     return res.changed;
   }
 
@@ -849,7 +866,7 @@ export class NotificationReadStateService {
       });
       return { changedCount: ignoredRes.count, undeliveredCount: row?.undeliveredNotificationCount ?? 0 };
     });
-    if (res.changedCount > 0) this.emitBellUpdated(recipient, { undeliveredCount: res.undeliveredCount ?? 0 });
+    if (res.changedCount > 0) await this.emitBellRecounted(recipient, res.undeliveredCount);
     return res.changedCount;
   }
 
@@ -858,7 +875,7 @@ export class NotificationReadStateService {
     const now = new Date();
     const undeliveredCount = await this.prisma.$transaction(async (tx) => {
       await tx.notification.updateMany({
-        where: { recipientUserId, readAt: null, createdAt: { lte: now } },
+        where: withoutBoardActivity({ recipientUserId, readAt: null, createdAt: { lte: now } }),
         data: { readAt: now },
       });
       const deliveredRes = await tx.notification.updateMany({

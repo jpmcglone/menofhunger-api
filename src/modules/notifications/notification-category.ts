@@ -46,6 +46,18 @@ export function notificationFilterWhere(kind?: NotificationKind | 'other' | 'boa
   }
 }
 
+export const BOARD_ACTIVITY_KINDS: NotificationKind[] = ['comment', 'mention', 'followed_post'];
+
+/** Board comments, mentions and followed-thread activity. Board owns these; the bell never counts them. */
+export function boardActivityWhere(): Prisma.NotificationWhereInput {
+  return { kind: { in: BOARD_ACTIVITY_KINDS }, ...notificationFilterWhere('board') };
+}
+
+/** Combine with `AND` so the exclusion never collides with other `NOT`/`OR` keys. */
+export function withoutBoardActivity(where: Prisma.NotificationWhereInput): Prisma.NotificationWhereInput {
+  return { AND: [where, { NOT: boardActivityWhere() }] };
+}
+
 export function notificationCategoryCounts(
   kinds: Partial<Record<NotificationKind | 'all', number>>,
   followedReplies: number,

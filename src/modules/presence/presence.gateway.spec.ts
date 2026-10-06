@@ -310,6 +310,7 @@ function buildGateway(deps: {
     radioHandler,
     subscriptionsHandler,
     messagingHandler,
+    {} as any,
     callsHandler,
   );
 }

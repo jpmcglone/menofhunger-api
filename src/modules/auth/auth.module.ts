@@ -1,3 +1,4 @@
+import { ChannelAccessModule } from '../group-channels/channel-access.module';
 import { BadgeSummaryService } from '../../common/badges/badge-summary.service';
 import { Module } from '@nestjs/common';
 import { AuthController } from './auth.controller';
@@ -16,7 +17,7 @@ import { AccountSwitchService } from './account-switch.service';
 import { OnlineMembersService } from '../presence/online-members.service';
 
 @Module({
-  imports: [RealtimeModule],
+  imports: [RealtimeModule, ChannelAccessModule],
   controllers: [AuthController],
   providers: [
     AuthService,

@@ -30,6 +30,9 @@ export function stableJsonHash(value: unknown): string {
 }
 
 export const RedisKeys = {
+  channelViewing: (userId: string, channelId: string) => `channel:viewing:${clean(userId)}:${clean(channelId)}`,
+  channelDelivery: (userId: string, messageId: string) => `channel:delivery:${clean(userId)}:${clean(messageId)}`,
+
   // Versions
   verFeedGlobal(): string {
     return 'ver:feed:global';

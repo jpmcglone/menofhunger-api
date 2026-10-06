@@ -1,3 +1,4 @@
+import { revokeAccountChannels, emitChannelAccessChange } from '../group-channels/channel-lifecycle';
 import { publicPreviewUrl } from "../../common/urls/public-preview-url";
 import { normalizeSocialProfileUrl } from "../../common/urls/social-profile-url";
 import { toAvatarVideoDto } from "../../common/dto/avatar-video.dto";
@@ -362,7 +363,9 @@ export class AdminUsersController {
       throw new BadRequestException("Site admins cannot be banned.");
 
     const now = new Date();
-    const updated = await this.prisma.user.update({
+    const { updated, channelGroups } = await this.prisma.$transaction(async tx => {
+      const channelGroups = await revokeAccountChannels(tx, id);
+      const user = await tx.user.update({
       where: { id },
       data: {
         bannedAt: now,
@@ -370,6 +373,10 @@ export class AdminUsersController {
         bannedByAdminId: adminId,
       },
     });
+      return { updated: user, channelGroups };
+    });
+    const channelRealtime = this.moduleRef.get(PresenceRealtimeService, { strict: false });
+    for (const groupId of channelGroups) await emitChannelAccessChange(this.prisma, channelRealtime, groupId, id);
 
     // Revoke all active sessions immediately.
     await this.auth.revokeAllSessionsForUser(updated.id);

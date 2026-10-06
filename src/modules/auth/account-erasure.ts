@@ -1,3 +1,4 @@
+import { revokeAccountChannels } from '../group-channels/channel-lifecycle';
 import { Prisma } from '@prisma/client';
 
 // One anonymous structural owner for shared conversations and deleted thread shells.
@@ -7,6 +8,7 @@ export const DELETED_ACCOUNT_ID = 'system-deleted-account';
 /** Runs inside the erasure transaction. Preserve other members' replies and shared spaces. */
 export async function eraseAccountRecords(tx: Prisma.TransactionClient, userId: string): Promise<void> {
   const now = new Date();
+  await revokeAccountChannels(tx, userId);
   await tx.user.upsert({
     where: { id: DELETED_ACCOUNT_ID }, update: {},
     create: { id: DELETED_ACCOUNT_ID, name: 'Deleted account', isBot: true, bannedAt: now, bannedReason: 'system_tombstone' },
@@ -41,15 +43,28 @@ export async function eraseAccountRecords(tx: Prisma.TransactionClient, userId: 
     authorId: DELETED_ACCOUNT_ID, body: '', deletedAt: now,
   } });
 
+  // Channel roots are structural: retain anonymous deleted shells so other members' replies survive.
+  const channelMessages = await tx.message.findMany({ where: { senderId: userId, conversation: { type: 'channel' } }, select: { id: true } });
+  const channelMessageIds = channelMessages.map(message => message.id);
+  await tx.report.deleteMany({ where: { OR: [{ subjectMessageId: { in: channelMessageIds } }, { subjectArticleId: { in: articles.map(article => article.id) } }] } });
+  await tx.messageMedia.deleteMany({ where: { messageId: { in: channelMessageIds } } });
+  await tx.messageReaction.deleteMany({ where: { messageId: { in: channelMessageIds } } });
+  await tx.groupChannelPin.deleteMany({ where: { messageId: { in: channelMessageIds } } });
+  await tx.groupChannelAttention.deleteMany({ where: { messageId: { in: channelMessageIds } } });
+  await tx.marvinMemorySource.deleteMany({ where: { messageId: { in: channelMessageIds } } });
+  await tx.message.updateMany({ where: { id: { in: channelMessageIds } }, data: { senderId: DELETED_ACCOUNT_ID, body: '', deletedForAll: true, deletedForAllAt: now, requestHash: null, clientRequestId: null } });
+
   // A creator FK must not cascade-delete messages written by other participants.
   await tx.messageConversation.updateMany({ where: { createdByUserId: userId }, data: { createdByUserId: DELETED_ACCOUNT_ID } });
   await tx.messageConversation.updateMany({ where: { directKey: { contains: userId } }, data: { directKey: null } });
-  const groups = await tx.communityGroup.findMany({ where: { createdByUserId: userId }, select: { id: true } });
+  const groups = await tx.communityGroup.findMany({ where: { OR: [{ createdByUserId: userId }, { members: { some: { userId, role: 'owner' } } }] }, select: { id: true } });
   for (const group of groups) {
-    const successor = await tx.communityGroupMember.findFirst({
-      where: { groupId: group.id, userId: { not: userId }, status: 'active', user: { bannedAt: null } },
-      orderBy: { createdAt: 'asc' }, select: { userId: true },
+    // Prefer a verified successor, who keeps channel access; any active member beats an orphaned group.
+    const candidate = (verified: boolean) => tx.communityGroupMember.findFirst({
+      where: { groupId: group.id, userId: { not: userId }, status: 'active', user: { bannedAt: null, isBot: false, ...(verified ? { verifiedStatus: { not: 'none' as const } } : {}) } },
+      orderBy: [{ role: 'asc' }, { createdAt: 'asc' }], select: { userId: true },
     });
+    const successor = await candidate(true) ?? await candidate(false);
     await tx.communityGroup.update({ where: { id: group.id }, data: { createdByUserId: successor?.userId ?? DELETED_ACCOUNT_ID } });
     if (successor) await tx.communityGroupMember.update({ where: { groupId_userId: { groupId: group.id, userId: successor.userId } }, data: { role: 'owner' } });
   }

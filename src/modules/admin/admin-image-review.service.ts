@@ -1,3 +1,4 @@
+import { isProtectedChannelKey } from '../group-channels/channel-media.service';
 import { DeleteObjectCommand, ListObjectsV2Command, type ListObjectsV2CommandOutput, S3Client } from '@aws-sdk/client-s3';
 import { BadRequestException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { Prisma, type PostMediaKind } from '@prisma/client';
@@ -32,6 +33,8 @@ type MessageRef = {
   messageId: string;
   conversationId: string;
   isThumbnail: boolean;
+  channelId?: string;
+  groupId?: string;
 };
 
 type UserRef = {
@@ -89,6 +92,7 @@ export type AssetPrimaryType =
   | 'article_inline'
   | 'announcement'
   | 'newsletter'
+  | 'channel_upload'
   | 'orphan';
 
 type PublicationRef = {
@@ -99,6 +103,7 @@ type PublicationRef = {
 };
 
 type AssetRefs = {
+  channelUploads: { uploadId: string; channelId: string; userId: string; expiresAt: string }[];
   posts: PostRef[];
   messages: MessageRef[];
   users: UserRef[];
@@ -112,7 +117,7 @@ type AssetRefs = {
 };
 
 function emptyAssetRefs(): AssetRefs {
-  return { posts: [], messages: [], users: [], groups: [], crews: [], polls: [], articles: [], announcements: [], newsletters: [], primaryType: 'orphan' };
+  return { channelUploads: [], posts: [], messages: [], users: [], groups: [], crews: [], polls: [], articles: [], announcements: [], newsletters: [], primaryType: 'orphan' };
 }
 
 // ============================================================
@@ -185,6 +190,13 @@ export class AdminImageReviewService {
     return { s3: this.s3, bucket: this.bucket };
   }
 
+  private bucketForKey(key: string) {
+    if (!isProtectedChannelKey(key)) return this.requireR2().bucket;
+    const bucket = this.cfg.channelMediaBucket();
+    if (!bucket) throw new ServiceUnavailableException('Private channel storage is not configured.');
+    return bucket;
+  }
+
   private objectKeyPrefix() {
     return this.cfg.isProd() ? '' : 'dev/';
   }
@@ -194,10 +206,10 @@ export class AdminImageReviewService {
     if (!userId || /[/\\]/.test(userId)) throw new BadRequestException('Invalid account.');
     const { s3, bucket } = this.requireR2();
     const keys = new Set<string>();
-    for (const area of ['uploads', 'avatars', 'covers', 'banners', 'article-thumbnails', 'article-media', 'announcement-images']) {
+    for (const area of ['uploads', 'avatars', 'covers', 'banners', 'article-thumbnails', 'article-media', 'announcement-images', ...(this.cfg.channelMediaBucket() ? ['channel-uploads'] : [])]) {
       let continuation: string | undefined;
       do {
-        const page = await s3.send(new ListObjectsV2Command({ Bucket: bucket,
+        const page = await s3.send(new ListObjectsV2Command({ Bucket: area === 'channel-uploads' ? this.bucketForKey('channel-uploads/') : bucket,
           Prefix: `${this.objectKeyPrefix()}${area}/${userId}/`, ContinuationToken: continuation }));
         for (const item of page.Contents ?? []) if (item.Key) keys.add(item.Key);
         continuation = page.IsTruncated ? page.NextContinuationToken : undefined;
@@ -209,14 +221,14 @@ export class AdminImageReviewService {
   /** Reuse the central ownership resolver; never remove another member's referenced media. */
   async eraseUnreferencedAccountMedia(keys: string[]): Promise<void> {
     if (!keys.length) return;
-    const { s3, bucket } = this.requireR2();
+    const { s3 } = this.requireR2();
     for (let start = 0; start < keys.length; start += 100) {
       const batch = keys.slice(start, start + 100);
       const references = await this.resolveAllReferences(batch);
       for (const key of batch) {
         if (references.get(key)?.primaryType !== 'orphan') continue;
         // S3 deletion is idempotent. Keep the durable receipt until every operation succeeds.
-        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+        await s3.send(new DeleteObjectCommand({ Bucket: this.bucketForKey(key), Key: key }));
         await this.prisma.mediaContentHash.deleteMany({ where: { r2Key: key } });
         await this.prisma.mediaAsset.deleteMany({ where: { r2Key: key } });
       }
@@ -224,6 +236,7 @@ export class AdminImageReviewService {
   }
 
   private publicUrlForKey(key: string | null): string | null {
+    if (key && isProtectedChannelKey(key)) return null;
     return publicAssetUrl({ publicBaseUrl: this.cfg.r2()?.publicBaseUrl ?? null, key });
   }
 
@@ -251,6 +264,7 @@ export class AdminImageReviewService {
       `${prefix}article-thumbnails/`,
       `${prefix}article-media/`,
       `${prefix}announcement-images/`,
+      ...(this.cfg.channelMediaBucket() ? [`${prefix}channel-uploads/`] : []),
     ].slice(0, opts?.maxPrefixes ?? 20);
 
     for (const pfx of prefixes) {
@@ -260,7 +274,7 @@ export class AdminImageReviewService {
         pages += 1;
         const res: ListObjectsV2CommandOutput = await s3.send(
           new ListObjectsV2Command({
-            Bucket: bucket,
+            Bucket: isProtectedChannelKey(pfx) ? this.bucketForKey(pfx) : bucket,
             Prefix: pfx,
             ContinuationToken: continuationToken,
             MaxKeys: 1000,
@@ -339,6 +353,16 @@ export class AdminImageReviewService {
     if (!keySet.size) return result;
 
     const keyArr = [...keySet];
+    const protectedKeys = keyArr.filter(isProtectedChannelKey);
+    if (protectedKeys.length) {
+      const uploads = await this.prisma.groupChannelUpload.findMany({ where: {
+        expiresAt: { gt: new Date() }, OR: [{ sourceKey: { in: protectedKeys } }, { r2Key: { in: protectedKeys } }],
+      }, select: { id: true, channelId: true, userId: true, sourceKey: true, r2Key: true, expiresAt: true } });
+      for (const upload of uploads) for (const key of [upload.sourceKey, upload.r2Key]) {
+        result.get(key)?.channelUploads.push({ uploadId: upload.id, channelId: upload.channelId, userId: upload.userId, expiresAt: upload.expiresAt.toISOString() });
+      }
+    }
+
 
     // ── 1. PostMedia (r2Key + thumbnailR2Key) ──────────────────────────────
     const postMediaRows = await this.prisma.postMedia.findMany({
@@ -387,7 +411,7 @@ export class AdminImageReviewService {
         messageId: true,
         r2Key: true,
         thumbnailR2Key: true,
-        message: { select: { conversationId: true } },
+        message: { select: { conversationId: true, conversation: { select: { groupChannel: { select: { id: true, groupId: true } } } } } },
       },
     });
     for (const m of msgMediaRows) {
@@ -395,6 +419,7 @@ export class AdminImageReviewService {
         messageMediaId: m.id,
         messageId: m.messageId,
         conversationId: m.message.conversationId,
+        ...(m.message.conversation?.groupChannel ? { channelId: m.message.conversation.groupChannel.id, groupId: m.message.conversation.groupChannel.groupId } : {}),
         isThumbnail: false,
       };
       if (m.r2Key && keySet.has(m.r2Key)) {
@@ -709,6 +734,7 @@ export class AdminImageReviewService {
       else if (refs.messages.some((m) => m.isThumbnail)) refs.primaryType = 'message_thumbnail';
       else if (refs.announcements.length) refs.primaryType = 'announcement';
       else if (refs.newsletters.length) refs.primaryType = 'newsletter';
+      else if (refs.channelUploads.length) refs.primaryType = 'channel_upload';
       else refs.primaryType = 'orphan';
     }
 
@@ -907,6 +933,7 @@ export class AdminImageReviewService {
           isThumbnail: p.isThumbnail,
         })),
         messages: refs.messages,
+        channelUploads: refs.channelUploads,
         users: refs.users.map((u) => ({
           id: u.userId,
           username: u.username,
@@ -967,6 +994,8 @@ export class AdminImageReviewService {
           deleteReason: reason,
         },
       });
+
+      if (isProtectedChannelKey(r2Key)) await tx.groupChannelUpload.deleteMany({ where: { OR: [{ sourceKey: r2Key }, { r2Key }] } });
 
       // Prevent future "same file" uploads from reusing this tombstoned key.
       await tx.mediaContentHash.deleteMany({ where: { r2Key } });
@@ -1125,9 +1154,9 @@ export class AdminImageReviewService {
     }
 
     // ── Hard-delete from R2 ────────────────────────────────────────────────
-    const { s3, bucket } = this.requireR2();
+    const { s3 } = this.requireR2();
     try {
-      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: r2Key }));
+      await s3.send(new DeleteObjectCommand({ Bucket: this.bucketForKey(r2Key), Key: r2Key }));
       await this.prisma.mediaAsset.update({ where: { id: a.id }, data: { r2DeletedAt: new Date() } });
       return { success: true, alreadyDeleted: false, r2Deleted: true, ...affectedCounts };
     } catch (e: unknown) {

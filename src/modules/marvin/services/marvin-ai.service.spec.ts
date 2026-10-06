@@ -80,6 +80,21 @@ describe('MarvinAIService multimodal payload assembly', () => {
     mockResponsesCreate.mockResolvedValue(makeSuccessResponse('test reply'));
   });
 
+  it('isolates channel requests from personal tools, memory, web, images and response chains', async () => {
+    const memory = { prepare: jest.fn(), recall: jest.fn() };
+    await makeService({ memory, webSearchEnabled: true }).respond({
+      ...baseReq, channelTools: [{ type: 'function', name: 'search_group_channels' }],
+      memoryQuestion: 'personal memory', previousResponseId: 'personal-chain',
+      imageUrls: ['https://private.test/image'],
+    });
+    const call = mockResponsesCreate.mock.calls[0][0];
+    expect(call.tools).toEqual([{ type: 'function', name: 'search_group_channels' }]);
+    expect(call.previous_response_id).toBeUndefined();
+    expect(memory.prepare).not.toHaveBeenCalled();
+    expect(memory.recall).not.toHaveBeenCalled();
+    expect(call.input.find((item: any) => item.role === 'user').content).toBe('Hello');
+  });
+
   it('uses plain string for user content when no images are provided', async () => {
     const svc = makeService();
     await svc.respond({ ...baseReq, imageUrls: [] });

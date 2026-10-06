@@ -498,6 +498,17 @@ export const envSchema = z
       z.coerce.number().min(0).max(1).optional(),
     ),
 
+    // Channels stay disabled until client and privacy acceptance gates pass.
+    R2_CHANNEL_BUCKET_NAME: z.string().optional(),
+  GROUP_CHANNELS_ENABLED: z.enum(["true", "false"]).default("false"),
+    GROUP_CHANNELS_GROUP_IDS: z.string().default(""),
+    GROUP_CHANNELS_MARV_ENABLED: z.enum(["true", "false"]).default("false"),
+    AUDIO_TRANSCRIPTION_ENABLED: z.enum(["true", "false"]).default("false"),
+    OPENAI_TRANSCRIBE_MODEL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("gpt-4o-transcribe"),
+    ),
+
     // ─── Marv (AI helper) ────────────────────────────────────────────────────
     // Global on/off. Defaults to true; admin UI can override via MarvinGlobalSettings row.
     MARV_ENABLED: z.preprocess(

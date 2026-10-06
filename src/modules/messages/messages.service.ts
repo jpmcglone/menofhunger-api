@@ -54,7 +54,7 @@ import type { MessageCallDto } from '../../common/dto/call.dto';
 /** What the calls service needs to authorize a start/join without re-querying per field. */
 export type CallConversationContext = {
   id: string;
-  type: MessageConversation['type'];
+  type: Exclude<MessageConversation['type'], 'channel'>;
   participants: Array<{
     userId: string;
     status: 'pending' | 'accepted';
@@ -301,6 +301,7 @@ export class MessagesService {
       this.prisma.messageConversation.findFirst({
         where: {
           id: conversationId,
+          type: { not: 'channel' },
           participants: {
             some: { userId },
             ...(blockedUserIds.size > 0 ? { none: { userId: { in: [...blockedUserIds] } } } : {}),
@@ -352,7 +353,7 @@ export class MessagesService {
         userIds: [userId],
       });
       conversation = await load();
-      if (!conversation) throw new NotFoundException('Conversation not found.');
+      if (!conversation || conversation.type === 'channel') throw new NotFoundException('Conversation not found.');
     }
 
     return conversation;
@@ -419,8 +420,8 @@ export class MessagesService {
       where: {
         userId,
         ...(blockedUserIds.size > 0
-          ? { conversation: { participants: { none: { userId: { in: [...blockedUserIds] } } } } }
-          : {}),
+          ? { conversation: { type: { not: 'channel' }, participants: { none: { userId: { in: [...blockedUserIds] } } } } }
+          : { conversation: { type: { not: 'channel' } } }),
       },
       select: { conversationId: true, status: true, lastReadAt: true },
     });
@@ -507,7 +508,7 @@ export class MessagesService {
    */
   async listConversationMemberUserIds(conversationId: string): Promise<string[]> {
     const rows = await this.prisma.messageParticipant.findMany({
-      where: { conversationId },
+      where: { conversationId, conversation: { type: { not: 'channel' } } },
       select: { userId: true },
     });
     return rows.map((r) => r.userId);
@@ -524,6 +525,7 @@ export class MessagesService {
     const conversation = await this.prisma.messageConversation.findFirst({
       where: {
         id: conversationId,
+        type: { not: 'channel' },
         participants: {
           some: { userId },
           ...(blockedUserIds.size > 0 ? { none: { userId: { in: [...blockedUserIds] } } } : {}),
@@ -543,7 +545,7 @@ export class MessagesService {
         },
       },
     });
-    if (!conversation) throw new NotFoundException('Conversation not found.');
+    if (!conversation || conversation.type === 'channel') throw new NotFoundException('Conversation not found.');
 
     // Callee hasn't accepted this DM: a mutual follow or a shared group chat still counts as a
     // relationship that allows calling. Skip the lookups when the thread is already accepted.
@@ -555,7 +557,7 @@ export class MessagesService {
         this.prisma.follow.findFirst({ where: { followerId: other.userId, followingId: userId }, select: { id: true } }),
         this.prisma.messageConversation.findFirst({
           where: {
-            type: { not: 'direct' },
+            type: { in: ['group', 'crew_wall'] },
             AND: [
               { participants: { some: { userId, status: 'accepted' } } },
               { participants: { some: { userId: other.userId, status: 'accepted' } } },
@@ -572,7 +574,7 @@ export class MessagesService {
 
     return {
       id: conversation.id,
-      type: conversation.type,
+      type: this.chatConversationType(conversation.type),
       participants: conversation.participants.map((p) => ({
         userId: p.userId,
         status: p.status,
@@ -603,7 +605,7 @@ export class MessagesService {
       where: { id: conversationId },
       select: { id: true, type: true, participants: { select: { userId: true, status: true } } },
     });
-    if (!conversation) throw new NotFoundException('Conversation not found.');
+    if (!conversation || conversation.type === 'channel') throw new NotFoundException('Conversation not found.');
     const now = new Date();
     const message = await this.prisma.$transaction(async (tx) => {
       const created = await tx.message.create({
@@ -653,6 +655,21 @@ export class MessagesService {
    * Patch the call row in place as the call progresses. Emits `messages:edited` so open
    * chats re-render the row; deliberately leaves `editedAt` null (this isn't a user edit).
    */
+  /** Re-emit a message to its participants after a server-side change such as a finished transcript. */
+  async rebroadcastMessage(messageId: string): Promise<void> {
+    const message = await this.prisma.message.findUnique({ where: { id: messageId }, include: MESSAGE_INCLUDE });
+    if (!message) return;
+    const participants = await this.prisma.messageParticipant.findMany({
+      where: { conversationId: message.conversationId },
+      select: { userId: true },
+    });
+    const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    for (const p of participants) {
+      const dto = toMessageDto({ message, publicBaseUrl, viewerUserId: p.userId });
+      this.presenceRealtime.emitMessageEdited(p.userId, { conversationId: message.conversationId, message: dto });
+    }
+  }
+
   async updateCallMessage(params: { messageId: string; body: string; call: MessageCallDto }): Promise<void> {
     const { messageId, body, call } = params;
     const existing = await this.prisma.message.findUnique({
@@ -700,6 +717,7 @@ export class MessagesService {
     const conversations = await this.prisma.messageConversation.findMany({
       where: {
         ...(cursorWhere ? { AND: [cursorWhere] } : {}),
+        type: { not: 'channel' },
         participants: {
           some: {
             userId,
@@ -778,7 +796,7 @@ export class MessagesService {
 
       return {
         id: conversation.id,
-        type: conversation.type,
+        type: this.chatConversationType(conversation.type),
         title: conversation.title ?? null,
         createdAt: conversation.createdAt.toISOString(),
         updatedAt: conversation.updatedAt.toISOString(),
@@ -852,6 +870,7 @@ export class MessagesService {
     // ── 1. Search by conversation title or participant name/username ──────────
     const byNameConversations = await this.prisma.messageConversation.findMany({
       where: {
+        type: { not: 'channel' },
         participants: participantFilter,
         OR: [
           { title: { contains: q, mode: 'insensitive' } },
@@ -896,6 +915,7 @@ export class MessagesService {
         AND mp."userId"        = ${userId}
         AND mp."status"        = 'accepted'
       WHERE m."deletedForAll" = false
+        AND EXISTS (SELECT 1 FROM "MessageConversation" mc WHERE mc.id = m."conversationId" AND mc.type <> 'channel')
         AND NOT EXISTS (
           SELECT 1 FROM "MessageDeletion" md
           WHERE md."messageId" = m.id AND md."userId" = ${userId}
@@ -920,7 +940,7 @@ export class MessagesService {
 
     const byMessageConversations = newMessageHitIds.length > 0
       ? await this.prisma.messageConversation.findMany({
-          where: { id: { in: newMessageHitIds } },
+          where: { id: { in: newMessageHitIds }, type: { not: 'channel' } },
           include: { participants: participantInclude, lastMessage: lastMessageSelect, crewWall: crewWallSelect },
         })
       : [];
@@ -956,7 +976,7 @@ export class MessagesService {
         const hit = matchedMessageByConvId.get(conversation.id);
         return {
           id: conversation.id,
-          type: conversation.type,
+          type: this.chatConversationType(conversation.type),
           title: conversation.title ?? null,
           createdAt: conversation.createdAt.toISOString(),
           updatedAt: conversation.updatedAt.toISOString(),
@@ -1064,7 +1084,7 @@ export class MessagesService {
 
     const dto: MessageConversationDto = {
       id: conversation.id,
-      type: conversation.type,
+      type: this.chatConversationType(conversation.type),
       title: conversation.title ?? null,
       createdAt: conversation.createdAt.toISOString(),
       updatedAt: conversation.updatedAt.toISOString(),
@@ -1547,6 +1567,9 @@ export class MessagesService {
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const dto = toMessageDto({ message: result.message, publicBaseUrl, viewerUserId: userId });
+    if (media.some((m) => m.kind === 'audio')) {
+      this.sideEffects.dispatch('media.transcribe.request', { messageId: result.message.id }, { jobId: `transcribe-${result.message.id}` });
+    }
     const senderName =
       result.message.sender?.name?.trim() ||
       result.message.sender?.username?.trim() ||
@@ -1735,6 +1758,9 @@ export class MessagesService {
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const dto = toMessageDto({ message: result, publicBaseUrl, viewerUserId: userId });
+    if (media.some((m) => m.kind === 'audio')) {
+      this.sideEffects.dispatch('media.transcribe.request', { messageId: result.id }, { jobId: `transcribe-${result.id}` });
+    }
     const senderName =
       result.sender?.name?.trim() ||
       result.sender?.username?.trim() ||
@@ -1759,7 +1785,7 @@ export class MessagesService {
 
     this.posthog.capture(userId, 'message_sent', {
       conversation_id: conversationId,
-      conversation_type: conversation.type,
+      conversation_type: this.chatConversationType(conversation.type),
     });
 
     // ─── Marv: queue an AI reply when this DM is for the configured Marv bot ──
@@ -1854,12 +1880,17 @@ export class MessagesService {
     this.events.emitConversationRead({ userId, conversationId });
   }
 
+  private chatConversationType(type: MessageConversationDto['type'] | 'channel'): MessageConversationDto['type'] {
+    if (type === 'channel') throw new NotFoundException('Conversation not found.');
+    return type;
+  }
+
   async deleteConversation(params: { userId: string; conversationId: string }) {
     const { userId, conversationId } = params;
     // Hide for this viewer only. The conversation row (and unique directKey) stay so
     // either person can talk again — getConversationOrThrow / sendMessage re-add them.
     const participant = await this.prisma.messageParticipant.findUnique({
-      where: { conversationId_userId: { conversationId, userId } },
+      where: { conversationId_userId: { conversationId, userId }, conversation: { type: { not: 'channel' } } },
       select: { conversationId: true },
     });
     if (!participant) return;

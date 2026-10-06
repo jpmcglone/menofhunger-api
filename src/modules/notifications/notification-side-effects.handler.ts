@@ -156,7 +156,8 @@ export class NotificationSideEffectsHandler implements OnModuleInit {
     const userId = (payload.userId ?? '').trim();
     if (!userId) return;
     const cluster = await this.accountSwitch.listClusterUserIds(userId);
-    if (cluster.length <= 1) return;
+    // Solo accounts still receive their own summary so the client total tracks the server formula.
+    if (cluster.length === 0) return;
     const summary = await this.accountSwitch.badgeSummaryForUser(userId);
     for (const id of cluster) {
       this.presenceRealtime.emitAccountsBadgeUpdated(id, { userId, ...summary });

@@ -1,3 +1,4 @@
+import type { GroupChannelChangedPayloadDto, GroupChannelMessagesPayloadDto, GroupChannelViewerPayloadDto } from '../../common/dto/group-channel.dto';
 import { Injectable, Logger } from '@nestjs/common';
 import type { Server } from 'socket.io';
 import { PresenceService } from './presence.service';
@@ -87,6 +88,18 @@ export class PresenceRealtimeService {
     if (server) this.presence.emitToUser(server, uid, ev, payload);
     // Cross-instance delivery (best-effort, and the only path in worker processes).
     void this.presenceRedis.publishEmitToUser({ userId: uid, event: ev, payload }).catch(() => undefined);
+  }
+
+  emitGroupChannelViewer(userId: string, payload: GroupChannelViewerPayloadDto) {
+    this.emitToUser(userId, 'group-channels:viewer', payload);
+  }
+
+  emitGroupChannelMessages(userId: string, payload: GroupChannelMessagesPayloadDto) {
+    this.emitToUser(userId, 'group-channels:messages', payload);
+  }
+
+  emitGroupChannelChanged(userId: string, payload: GroupChannelChangedPayloadDto): void {
+    this.emitToUser(userId, 'group-channels:changed', payload);
   }
 
   private emitToUsers(userIds: Iterable<string>, event: string, payload: unknown): void {

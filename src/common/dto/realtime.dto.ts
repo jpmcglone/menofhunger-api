@@ -46,6 +46,8 @@ export type NotificationsNavUnreadPayloadDto = {
   boardUnreadCount: number;
   articlesUnreadCount: number;
   hasUnreadNotifications?: boolean;
+  /** Unseen Board mentions, counted into the Board nav badge. */
+  boardMentionCount?: number;
 };
 
 /** Drop lock-screen APNs the user already saw in the matching in-app section. */
@@ -58,6 +60,7 @@ export type AccountsBadgeUpdatedPayloadDto = {
   userId: string;
   unreadBadgeCount: number;
   hasUnreadNotifications?: boolean;
+  hasUnreadBoard?: boolean;
 };
 
 /**
@@ -285,6 +288,9 @@ export const WsEventNames = {
   postsCommentAdded: "posts:commentAdded",
   postsCommentDeleted: "posts:commentDeleted",
   postsTyping: "posts:typing",
+  groupChannelsSubscribe: "group-channels:subscribe",
+  groupChannelsUnsubscribe: "group-channels:unsubscribe",
+  groupChannelsTyping: "group-channels:typing",
   /** New top-level post from someone the viewer follows; pushed to follower user rooms. */
   feedNewPost: "feed:newPost",
   /** Room subscription handshake for community-group feeds. */
@@ -510,6 +516,15 @@ export type PostsTypingPayloadDto = {
    * answered (absent for a top-level comment) so clients can show it under that comment.
    */
   replyToId?: string;
+};
+
+/** Someone is typing in a channel (or a thread of it). Sent only to sockets subscribed to that channel. */
+export type GroupChannelTypingPayloadDto = {
+  groupId: string;
+  channelId: string;
+  threadRootId: string | null;
+  user: PostsTypingPayloadDto['user'];
+  typing: boolean;
 };
 
 /**

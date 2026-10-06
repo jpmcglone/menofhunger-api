@@ -40,9 +40,11 @@ function makeService(prismaOverrides: Record<string, any> = {}) {
     // searchGroups runs an optional pg_trgm/FTS raw query; default stub returns
     // no augment candidates so tests opt in via override when they care.
     $queryRaw: jest.fn(async () => []),
+    groupChannel: { findMany: jest.fn(async () => []) },
     ...prismaOverrides,
   };
 
+  prisma.$transaction ??= jest.fn(async (fn: any) => fn(prisma));
   const posts: any = {};
   const appConfig: any = { r2: jest.fn(() => null) };
   const sideEffects: any = { dispatch: jest.fn() };
@@ -52,7 +54,7 @@ function makeService(prismaOverrides: Record<string, any> = {}) {
   };
 
   const marvIdentity: any = { cachedMarvUserId: jest.fn(() => null), getMarvUserId: jest.fn(async () => null) };
-  const presenceRealtime: any = { emitGroupMarvChanged: jest.fn(), emitGroupNotificationPreferencesChanged: jest.fn() };
+  const presenceRealtime: any = { emitGroupMarvChanged: jest.fn(), emitGroupNotificationPreferencesChanged: jest.fn(), emitGroupChannelChanged: jest.fn() };
   const service = new GroupsService(prisma, posts, appConfig, sideEffects, redis, marvIdentity, presenceRealtime);
   return { service, prisma, presenceRealtime, sideEffects };
 }
@@ -420,6 +422,8 @@ describe('GroupsService — owner-or-admin gates on pin / promote / demote', () 
     const { service, prisma } = makeService();
     prisma.communityGroup.findFirst.mockResolvedValue({ id: 'g1', deletedAt: null });
     prisma.communityGroupMember.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ role: 'moderator', status: 'active' })
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ role: 'moderator', status: 'active' });
     prisma.communityGroupMember.update = jest.fn();
@@ -1196,7 +1200,7 @@ describe('GroupsService.addMarvToGroup', () => {
     const appConfig: any = { r2: jest.fn(() => null), marvBot: jest.fn(() => ({ enabled: true })) };
     const sideEffects: any = { dispatch: jest.fn() };
     const redis: any = {};
-    const presenceRealtime: any = { emitGroupMarvChanged: jest.fn(), emitGroupNotificationPreferencesChanged: jest.fn() };
+    const presenceRealtime: any = { emitGroupMarvChanged: jest.fn(), emitGroupNotificationPreferencesChanged: jest.fn(), emitGroupChannelChanged: jest.fn() };
     const service = new GroupsService(prisma, posts, appConfig, sideEffects, redis, marvIdentityLocal, presenceRealtime);
     return { service, memberCreate, memberUpdate, groupUpdate, inviteUpdateMany, transactionFn, presenceRealtime };
   }
@@ -1252,7 +1256,7 @@ describe('GroupsService.removeMember — Marv realtime', () => {
       cachedMarvUserId: jest.fn(() => MARV_ID),
       getMarvUserId: jest.fn(async () => MARV_ID),
     };
-    const presenceRealtime: any = { emitGroupMarvChanged: jest.fn(), emitGroupNotificationPreferencesChanged: jest.fn() };
+    const presenceRealtime: any = { emitGroupMarvChanged: jest.fn(), emitGroupNotificationPreferencesChanged: jest.fn(), emitGroupChannelChanged: jest.fn() };
     const sideEffects: any = { dispatch: jest.fn() };
 
     const memberFindUnique = jest.fn(async ({ where }: any) => {
@@ -1265,10 +1269,16 @@ describe('GroupsService.removeMember — Marv realtime', () => {
 
     const prisma: any = {
       communityGroup: { findFirst: jest.fn(async () => FAKE_GROUP), update: groupUpdate },
-      communityGroupMember: { findUnique: memberFindUnique, delete: memberDelete },
+      communityGroupMember: { findUnique: memberFindUnique, delete: memberDelete, findMany: jest.fn(async () => []) },
       $transaction: jest.fn(async (cb: any) =>
         cb({
-          communityGroupMember: { delete: memberDelete },
+          $queryRaw: jest.fn(async () => []),
+          groupChannel: { findMany: jest.fn(async () => []) },
+          groupChannelAccess: { deleteMany: jest.fn() },
+          groupChannelViewerState: { deleteMany: jest.fn() },
+          groupChannelAttention: { deleteMany: jest.fn() },
+          groupChannelThreadState: { deleteMany: jest.fn() },
+          communityGroupMember: { delete: memberDelete, findUnique: memberFindUnique },
           communityGroup: { update: groupUpdate },
         }),
       ),

@@ -143,9 +143,10 @@ export class PickaxCrosspostService {
       return;
     }
 
-    const mohPostUrl = `${this.siteBaseUrl()}/p/${encodeURIComponent(postId)}`;
+    const isBoard = loaded.source.kind === 'board';
+    const mohPostUrl = `${this.siteBaseUrl()}/${isBoard ? 'b' : 'p'}/${encodeURIComponent(postId)}`;
     const payload = mode === 'link'
-      ? buildPickaxLinkPayload(mohPostUrl, loaded.source.body)
+      ? buildPickaxLinkPayload(mohPostUrl, isBoard ? loaded.boardTitle ?? '' : loaded.source.body)
       : buildPickaxPostPayload(loaded.source, { publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null });
     if (payload.content.length > 1000) {
       await this.recordRowError({ kind: 'post', localId: postId }, userId, 'This post exceeds Pickax’s limit. Shorten it or share a link instead.');
@@ -344,7 +345,7 @@ export class PickaxCrosspostService {
     return (this.appConfig.frontendBaseUrl() ?? 'https://menofhunger.com').replace(/\/+$/, '');
   }
 
-  private async loadPost(postId: string): Promise<{ userId: string; source: PickaxPostSource } | null> {
+  private async loadPost(postId: string): Promise<{ userId: string; boardTitle: string | null; source: PickaxPostSource } | null> {
     const post = await this.prisma.post.findUnique({
       where: { id: postId },
       select: {
@@ -362,12 +363,13 @@ export class PickaxCrosspostService {
         quotedPostId: true,
         repostedPostId: true,
         poll: { select: { id: true } },
+        boardThread: { select: { title: true } },
         media: { select: { kind: true, source: true, r2Key: true, alt: true, deletedAt: true, position: true } },
       },
     });
     if (!post) return null;
-    const { poll, userId, ...rest } = post;
-    return { userId, source: { ...rest, hasPoll: Boolean(poll) } };
+    const { poll, userId, boardThread, ...rest } = post;
+    return { userId, boardTitle: boardThread?.title ?? null, source: { ...rest, hasPoll: Boolean(poll) } };
   }
 
   private async loadArticle(

@@ -13,6 +13,7 @@ import {
   X_POST_MAX_IMAGES,
   xPostBlocker,
   xWeightedLength,
+  linkBlocker,
   xBlockerMessage,
   xContainsLink,
   xPostCostMicros,
@@ -43,6 +44,7 @@ type LoadedPost = {
   quotedPostId: string | null;
   repostedPostId: string | null;
   hasPoll: boolean;
+  boardTitle?: string | null;
   media: Array<{
     kind: string;
     source: string;
@@ -76,6 +78,22 @@ export class XCrosspostService {
     const post = await this.loadPost(postId);
     if (!post || post.userId !== userId)
       return { status: "skipped", reason: "not_found" };
+    if (post.kind === "board") {
+      const reason = linkBlocker(post);
+      if (reason) return { status: "skipped", reason };
+      if (!this.appConfig.integrationBudget().enabled)
+        return { status: "skipped", reason: "pricing_unconfirmed" };
+      if (xWeightedLength(this.boardLinkText(postId, post.boardTitle)) > 280)
+        return { status: "skipped", reason: "too_long" };
+      return this.reserveAndQueue({
+        userId,
+        kind: "post",
+        localId: postId,
+        mode: "link",
+        costMicros: X_REFERENCE_PRICES.createWithUrl,
+        job: "x.post.sync",
+      });
+    }
     const reason = xPostBlocker(
       post,
       requested,
@@ -147,6 +165,11 @@ export class XCrosspostService {
     });
   }
 
+  private boardLinkText(id: string, title?: string | null): string {
+    const base = (this.appConfig.frontendBaseUrl() ?? "https://menofhunger.com").replace(/\/+$/, "");
+    return `${(title ?? "").trim()}\n${base}/b/${encodeURIComponent(id)}`.trim();
+  }
+
   private articleLinkText(id: string, title: string): string {
     return `${title}\n${(this.appConfig.frontendBaseUrl() ?? "https://menofhunger.com").replace(/\/+$/, "")}/a/${encodeURIComponent(id)}`;
   }
@@ -159,6 +182,17 @@ export class XCrosspostService {
     });
     if (!row || row.remoteId || row.refundedAt || row.userId !== post.userId)
       return;
+    if (post.kind === "board") {
+      const boardReason = linkBlocker(post);
+      const text = this.boardLinkText(postId, post.boardTitle);
+      const reason = boardReason ?? (xWeightedLength(text) > 280 ? "too_long" : null);
+      if (reason) {
+        await this.fail("post", postId, post.userId, xBlockerMessage(reason));
+        return;
+      }
+      await this.publish(post.userId, "post", postId, text, [], generation);
+      return;
+    }
     const reason = xPostBlocker(
       post,
       row.mode,
@@ -982,6 +1016,7 @@ export class XCrosspostService {
         quotedPostId: true,
         repostedPostId: true,
         poll: { select: { id: true } },
+        boardThread: { select: { title: true } },
         media: {
           select: {
             kind: true,
@@ -995,7 +1030,7 @@ export class XCrosspostService {
       },
     });
     if (!post) return null;
-    const { poll, ...rest } = post;
-    return { ...rest, hasPoll: Boolean(poll) };
+    const { poll, boardThread, ...rest } = post;
+    return { ...rest, boardTitle: boardThread?.title ?? null, hasPoll: Boolean(poll) };
   }
 }

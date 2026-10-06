@@ -121,6 +121,17 @@ function makeService(opts?: {
   return { svc, prisma, appConfig, cache };
 }
 
+describe('ApnsPushService sounds', () => {
+  it('picks the bundled sound for each push kind', () => {
+    const { svc } = makeService();
+    expect(svc.soundForKind('channel_mention')).toBe('channel-mention.caf');
+    expect(svc.soundForKind('channel_message')).toBe('channel-message.caf');
+    expect(svc.soundForKind('message')).toBe('new-message.caf');
+    expect(svc.soundForKind('follow')).toBe('notification.caf');
+    expect(svc.soundForKind()).toBe('notification.caf');
+  });
+});
+
 describe('ApnsPushService', () => {
   beforeEach(() => {
     sendMock.mockReset();
@@ -235,7 +246,7 @@ describe('ApnsPushService', () => {
     const first = sendMock.mock.calls[0][0];
     expect(first.deviceToken).toBe('tok-1');
     expect(first.options.alert).toEqual({ title: 'New reply', body: 'Someone replied' });
-    expect(first.options.badge).toBe(3);
+    expect(first.options.badge).toBe(5);
     expect(first.options.data).toEqual(expect.objectContaining({ url: '/p/abc', kind: 'comment' }));
     expect(first.options.sound).toBe('notification.caf');
   });
@@ -263,7 +274,7 @@ describe('ApnsPushService', () => {
     prisma.userPageOperator.findMany.mockResolvedValue([{ pageUserId: 'news', page: { undeliveredNotificationCount: 4, undeliveredGroupPostCount: 1 } }]);
     prisma.user.findUnique.mockImplementation(async (args?: any) => ({ accountKind: args?.where?.id === 'news' ? 'page' : 'person', undeliveredNotificationCount: 0, undeliveredGroupPostCount: 1 }));
     prisma.notification.count.mockResolvedValue(3);
-    await expect(svc.computeAppIconBadge('john')).resolves.toBe(8);
+    await expect(svc.computeAppIconBadge('john')).resolves.toBe(14);
   });
 
   it('sendToUser includes rich alert metadata and custom navigation fields', async () => {
@@ -527,7 +538,7 @@ describe('ApnsPushService — token cache', () => {
       undeliveredNotificationCount: 5,
       undeliveredGroupPostCount: 2,
     });
-    await expect(svc.computeAppIconBadge('user-1')).resolves.toBe(7);
+    await expect(svc.computeAppIconBadge('user-1')).resolves.toBe(12);
     expect(prisma.notification.count).toHaveBeenCalled();
   });
 });

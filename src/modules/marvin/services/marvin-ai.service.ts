@@ -49,6 +49,9 @@ export type MarvAIToolDispatcher = (
 
 export type MarvAIRequest = {
   source: MarvinSource;
+  /** Server-owned channel tools; disables personal memory, external tools and cross-turn chains. */
+  channelTools?: ReadonlyArray<Record<string, unknown>>;
+  signal?: AbortSignal;
   /** Internal background processing of already-shared content; never set from a client body. */
   sharedContentOnly?: boolean;
   /** Dedicated admin tool set. Never supplied by public/private member processors. */
@@ -199,7 +202,7 @@ export class MarvinAIService {
   async respond(req: MarvAIRequest): Promise<MarvAIResult> {
     if (!req.sharedContentOnly) await requireAiConsent(this.prisma, req.toolContext.requesterUserId);
     // One deadline covers all rounds and retries; typing must never wait indefinitely.
-    const requestSignal = AbortSignal.timeout(210_000);
+    const requestSignal = req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(210_000)]) : AbortSignal.timeout(210_000);
     const cfg = this.appConfig.marvOpenAI();
     const limits = this.appConfig.marvLimits();
     if (!cfg.apiKey) {
@@ -221,7 +224,7 @@ export class MarvinAIService {
 
     // Vision: only activate when feature flag is on and mode is in allowed list.
     const visionActive =
-      cfg.visionEnabled && cfg.visionModes.includes(req.mode as string);
+      !req.channelTools && cfg.visionEnabled && cfg.visionModes.includes(req.mode as string);
     const attachedImageUrls =
       visionActive && req.imageUrls && req.imageUrls.length > 0
         ? req.imageUrls.slice(0, cfg.visionMaxImagesPerTurn)
@@ -245,7 +248,7 @@ export class MarvinAIService {
         ]
       : req.userMessage;
 
-    const memoryEnabled = !req.sharedContentOnly && req.memoryQuestion !== undefined
+    const memoryEnabled = !req.channelTools && !req.sharedContentOnly && req.memoryQuestion !== undefined
       && (req.source === 'public_thread' || req.source === 'private_session');
     let liveConversation: string | null = null;
     if (memoryEnabled) {
@@ -286,7 +289,7 @@ export class MarvinAIService {
     // 4k output cap often exhausts the budget before a visible reply, and the $0.03 search
     // fee dwarfs a Luna turn.
     const webSearchActive =
-      (req.source !== 'admin_console' || req.adminWebSearch === true) && cfg.webSearchEnabled && cfg.webSearchModes.includes(req.mode as string);
+      !req.channelTools && (req.source !== 'admin_console' || req.adminWebSearch === true) && cfg.webSearchEnabled && cfg.webSearchModes.includes(req.mode as string);
 
     // When web search is active, use a higher output-token budget so the model has room to
     // both process results and write a reply. Falls back to the base limit if larger.
@@ -323,7 +326,7 @@ export class MarvinAIService {
     };
 
     // Local tools always registered in-code so a prompt mention cannot drop one.
-    const tools: unknown[] = req.source === 'admin_console' ? [...(req.adminTools ?? [])] : [...MARV_LOCAL_FUNCTION_TOOLS, ...(req.source === 'private_session' ? marvPersonalFunctionTools() : [])];
+    const tools: unknown[] = req.channelTools ? [...req.channelTools] : req.source === 'admin_console' ? [...(req.adminTools ?? [])] : [...MARV_LOCAL_FUNCTION_TOOLS, ...(req.source === 'private_session' ? marvPersonalFunctionTools() : [])];
     if (webSearchActive) {
       // Hosted web_search (not the legacy web_search_preview). `low` context keeps
       // search dumps inside the 80-word reply budget; omit return_token_budget
@@ -346,7 +349,7 @@ export class MarvinAIService {
       ...baseRequest,
       input: initialInput,
     };
-    if (req.previousResponseId && !(memoryEnabled && req.source === 'private_session')) nextRequest.previous_response_id = req.previousResponseId;
+    if (!req.channelTools && req.previousResponseId && !(memoryEnabled && req.source === 'private_session')) nextRequest.previous_response_id = req.previousResponseId;
     let isToolFollowUp = false;
     let pendingAtExit = false;
 
@@ -378,7 +381,7 @@ export class MarvinAIService {
           let output: string;
           try {
             this.logger.log(
-              `[marv-ai] round=${round} tool="${call.name}" call=${call.call_id} args=${req.source === 'admin_console' ? '[private]' : argsStr.slice(0, 200)}`,
+              `[marv-ai] round=${round} tool="${call.name}" call=${call.call_id} args=${req.channelTools || req.source === 'admin_console' ? '[private]' : argsStr.slice(0, 200)}`,
             );
             output = call.name === 'recall_relevant_memory'
               ? JSON.stringify(memoryEnabled ? await this.memory.recall(req.toolContext, req.source, req.memoryQuestion!) : { memories: [] })

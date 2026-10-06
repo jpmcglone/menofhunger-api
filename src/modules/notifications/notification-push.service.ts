@@ -712,9 +712,12 @@ export class NotificationPushService {
       postId?: string | null;
       /** When the recipient is a page, skip this actor if they operate it. */
       actorUserId?: string | null;
+      /** Protected destinations re-authorize immediately before each network delivery. */
+      canDeliver?: () => Promise<boolean>;
     },
   ): Promise<void> {
     if (!this.pushChannelConfigured()) return;
+    if (params.canDeliver && !await params.canDeliver()) return;
     const kind = params.kind ?? 'generic';
 
     const baseUrl =
@@ -785,7 +788,7 @@ export class NotificationPushService {
         actorUsername: params.actorUsername ?? null,
       });
       for (const tokenOwnerId of tokenOwners) {
-        this.apnsPush
+        const delivery = this.apnsPush
           .sendToUser(tokenOwnerId, {
             title: titleForOwner(tokenOwnerId),
             body: apnsBody,
@@ -805,15 +808,19 @@ export class NotificationPushService {
             postId: params.postId ?? null,
             recipientUserId,
             recipientUsername,
+            canDeliver: params.canDeliver,
           })
           .catch((err) => {
+            if (params.canDeliver) throw err;
             this.logger.warn(`[apns] Failed to send push (${kind}): ${err instanceof Error ? err.message : String(err)}`);
           });
+        if (params.canDeliver) await delivery;
       }
     }
 
     for (const tokenOwnerId of tokenOwners) {
       await this.sendWebPushOnly(tokenOwnerId, {
+        canDeliver: params.canDeliver,
         payload: JSON.stringify({
           title: titleForOwner(tokenOwnerId),
           body,
@@ -852,7 +859,7 @@ export class NotificationPushService {
   /** Web Push delivery to all browser subscriptions; prunes expired (410/404). */
   private async sendWebPushOnly(
     recipientUserId: string,
-    params: { payload: string },
+    params: { payload: string; canDeliver?: () => Promise<boolean> },
   ): Promise<void> {
     if (!this.appConfig.vapidConfigured()) return;
     if (!this.vapidConfigured) {
@@ -876,6 +883,7 @@ export class NotificationPushService {
 
     const expiredIds: string[] = [];
     for (const sub of subs) {
+      if (params.canDeliver && !await params.canDeliver()) return;
       try {
         await webpush.sendNotification(
           {
@@ -889,7 +897,7 @@ export class NotificationPushService {
         const statusCode = (err as { statusCode?: number })?.statusCode;
         if (statusCode === 410 || statusCode === 404) {
           expiredIds.push(sub.id);
-        }
+        } else if (params.canDeliver) throw err;
       }
     }
     if (expiredIds.length > 0) {

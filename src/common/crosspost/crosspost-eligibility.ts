@@ -76,7 +76,9 @@ export function linkBlocker(post: CrosspostPost): string | null {
     return "not_published";
   if (post.visibility !== "public") return "not_public";
   if (post.communityGroupId) return "group_post";
-  if (post.boardOnly || post.kind !== "regular") return "unsupported_kind";
+  // Board posts can only be shared as a link back to the thread.
+  if (post.kind !== "board" && (post.boardOnly || post.kind !== "regular"))
+    return "unsupported_kind";
   if (post.parentId) return "reply";
   if (post.quotedPostId || post.repostedPostId) return "quote_or_repost";
   return null;
@@ -91,6 +93,7 @@ export function nativeBlocker(
   post: CrosspostPost,
   limits: NativeLimits,
 ): string | null {
+  if (post.kind === "board") return "unsupported_kind";
   if (post.hasPoll) return "poll";
   const text = post.body.trim();
   const media = liveMedia(post);

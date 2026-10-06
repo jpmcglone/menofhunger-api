@@ -14,6 +14,7 @@ import { ArticlesModule } from '../articles/articles.module';
 import { CrewModule } from '../crew/crew.module';
 import { MarvinModule } from '../marvin/marvin.module';
 import { NewslettersModule } from '../newsletters/newsletters.module';
+import { TranscriptionModule } from '../transcription/transcription.module';
 import { CallsModule } from '../calls/calls.module';
 
 /**
@@ -40,6 +41,7 @@ import { CallsModule } from '../calls/calls.module';
     MarvinModule,
     NewslettersModule,
     CallsModule,
+    TranscriptionModule,
   ],
   providers: [JobsProcessor],
 })

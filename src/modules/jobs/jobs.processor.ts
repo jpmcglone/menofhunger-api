@@ -30,6 +30,7 @@ import { ScheduledPostsPublishCron } from '../posts/scheduled-posts-publish.cron
 import { NewslettersCron } from '../newsletters/newsletters.cron';
 import { NotificationWriterService } from '../notifications/notification-writer.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
+import { TranscriptionService } from '../transcription/transcription.service';
 import { CallsService } from '../calls/calls.service';
 
 @Processor(MOH_BACKGROUND_QUEUE)
@@ -65,6 +66,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly sideEffects: SideEffectsService,
     private readonly calls: CallsService,
     private readonly delegation: DelegationRunnerService,
+    private readonly transcription: TranscriptionService,
   ) {
     super();
   }
@@ -74,6 +76,7 @@ export class JobsProcessor extends WorkerHost {
     const startedAt = Date.now();
     try {
       switch (name) {
+        case JOBS.mediaTranscribe: await this.transcription.process(String(job.data?.mediaId ?? ''), job.attemptsMade + 1 >= (job.opts.attempts ?? 1)); return { ok: true };
         case JOBS.adminDelegationRun: await this.delegation.run(String(job.data?.runId ?? '')); return { ok: true };
         case JOBS.adminDelegationSweep: await this.delegation.sweep(); return { ok: true };
         case JOBS.postsPollResultsReadySweep:

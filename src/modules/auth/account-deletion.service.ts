@@ -1,3 +1,4 @@
+import { revokeAccountChannels, emitChannelAccessChange } from '../group-channels/channel-lifecycle';
 import type { AccountDeletionRequestDto, AccountDeletionStatusDto } from '../../common/dto';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
@@ -25,6 +26,7 @@ export class AccountDeletionService {
     if (!user) throw new NotFoundException('User not found.');
     if (user.isBot || user.accountKind === 'page') throw new BadRequestException('Only personal accounts can use this flow.');
     const result = await this.prisma.$transaction(async tx => {
+      const channelGroups = await revokeAccountChannels(tx, userId);
       const receipt = await tx.accountDeletionReceipt.upsert({
         where: { userId }, update: {},
         create: { userId, scheduledAt, expiresAt: new Date(scheduledAt.getTime() + 90 * 86400000),
@@ -33,8 +35,9 @@ export class AccountDeletionService {
       const updated = await tx.user.update({ where: { id: userId }, data: {
         bannedAt: now, bannedReason: 'self_deleted_pending', deletionRequestedAt: now, deletionScheduledAt: receipt.scheduledAt,
       } });
-      return { receipt, updated };
+      return { receipt, updated, channelGroups };
     });
+    for (const groupId of result.channelGroups) await emitChannelAccessChange(this.prisma, this.moduleRef.get(PresenceRealtimeService, { strict: false }), groupId, userId);
     this.moduleRef.get(UsersMeRealtimeService, { strict: false }).emitMeUpdatedFromUser(result.updated, 'account_deleted');
     await this.auth.revokeAllSessionsForUser(userId);
     this.moduleRef.get(PresenceRealtimeService, { strict: false }).disconnectUserSockets(userId);

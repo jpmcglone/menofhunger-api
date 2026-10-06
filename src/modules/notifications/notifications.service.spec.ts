@@ -794,7 +794,7 @@ describe('NotificationsService.list batching', () => {
     const res = await svc.list({ recipientUserId: 'u_recipient', limit: 30, cursor: null, kind: 'message' as any });
 
     expect(res.items).toEqual([]);
-    expect(prisma.notification.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { recipientUserId: 'u_recipient', kind: 'message' } }));
+    expect(prisma.notification.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ recipientUserId: 'u_recipient', kind: 'message' }) }));
   });
 
   it('filters with notIn primary kinds when kind is "other"', async () => {
@@ -966,20 +966,25 @@ describe('NotificationsService.getUndeliveredCount', () => {
     await expect(svc.getUndeliveredCount('page-1')).resolves.toBe(2);
     expect(prisma.notification.count).toHaveBeenCalledWith({
       where: {
-        recipientUserId: 'page-1',
         deliveredAt: null,
-        kind: {
-          notIn: [
-            'message',
-            'community_group_post',
-            'word_of_the_day',
-            'quote_of_the_day',
-            'checkin_reminder',
-            'on_this_day',
-            'checkin_post',
-            'nudge',
-          ],
-        },
+        AND: [
+          {
+            recipientUserId: 'page-1',
+            kind: {
+              notIn: [
+                'message',
+                'community_group_post',
+                'word_of_the_day',
+                'quote_of_the_day',
+                'checkin_reminder',
+                'on_this_day',
+                'checkin_post',
+                'nudge',
+              ],
+            },
+          },
+          { NOT: expect.anything() },
+        ],
       },
     });
   });
@@ -1076,6 +1081,7 @@ describe('NotificationsService.markNewPostsRead', () => {
         recipientUserId: 'viewer-1',
         deliveredAt: null,
         kind: { notIn: ['message', 'community_group_post'] },
+        NOT: expect.anything(),
       },
     });
     expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalledWith('viewer-1', { undeliveredCount: 7 });
@@ -1114,6 +1120,7 @@ describe('NotificationReadStateService board thread read + nav dots', () => {
     const { readState, notification, presenceRealtime } = build([4, 1, 0, 3]);
     notification.count.mockImplementation(async (...args: any[]) => {
       const where = args[0]?.where;
+      if (where?.kind === 'mention') return 0;
       if (where?.deliveredAt === null) return 4;
       if (where?.subjectArticleId) return 0;
       if (where?.kind === 'comment') return 3;
@@ -1135,17 +1142,18 @@ describe('NotificationReadStateService board thread read + nav dots', () => {
     expect(presenceRealtime.emitNotificationsNavUnreadChanged).toHaveBeenCalledWith('viewer-1', {
       undeliveredCount: 4,
       boardUnreadCount: 1,
+      boardMentionCount: 0,
       articlesUnreadCount: 0,
       hasUnreadNotifications: true,
     });
   });
 
   it('counts unread Board and article notifications separately from the bell', async () => {
-    const { readState, notification } = build([2, 5]);
+    const { readState, notification } = build([2, 3, 5]);
 
-    await expect(readState.getNavUnread('viewer-1')).resolves.toEqual({ boardUnreadCount: 2, articlesUnreadCount: 5, hasUnreadNotifications: true });
+    await expect(readState.getNavUnread('viewer-1')).resolves.toEqual({ boardUnreadCount: 2, boardMentionCount: 3, articlesUnreadCount: 5, hasUnreadNotifications: true });
     expect(notification.count).toHaveBeenCalledWith({
-      where: expect.objectContaining({ recipientUserId: 'viewer-1', readAt: null, subjectArticleId: { not: null } }),
+      where: expect.objectContaining({ readAt: null, subjectArticleId: { not: null } }),
     });
   });
 
@@ -1166,6 +1174,7 @@ describe('NotificationReadStateService board thread read + nav dots', () => {
     const { readState, notification, presenceRealtime } = build([]);
     notification.count.mockImplementation(async (...args: any[]) => {
       const where = args[0]?.where;
+      if (where?.kind === 'mention') return 0;
       if (where?.deliveredAt === null) return 7;
       if (where?.subjectArticleId) return 2;
       return 0;
@@ -1192,6 +1201,7 @@ describe('NotificationReadStateService board thread read + nav dots', () => {
     expect(presenceRealtime.emitNotificationsNavUnreadChanged).toHaveBeenCalledWith('viewer-1', {
       undeliveredCount: 7,
       boardUnreadCount: 0,
+      boardMentionCount: 0,
       articlesUnreadCount: 2,
       hasUnreadNotifications: true,
     });
@@ -1201,7 +1211,9 @@ describe('NotificationReadStateService board thread read + nav dots', () => {
     expect((await readState.getNavUnread('viewer-1')).hasUnreadNotifications).toBe(true);
     notification.findFirst.mockResolvedValueOnce(null as any);
     expect((await readState.getNavUnread('viewer-1')).hasUnreadNotifications).toBe(false);
-    for (const [query] of notification.count.mock.calls as any) expect(query.where.deliveredAt).toBeUndefined();
+    for (const [query] of notification.count.mock.calls as any) {
+      if (query.where.kind !== 'mention') expect(query.where.deliveredAt).toBeUndefined();
+    }
   });
 
   it('bulk reads Articles without matching Board or later arrivals', async () => {
@@ -1536,6 +1548,7 @@ describe('NotificationReadStateService.markDelivered', () => {
         deliveredAt: null,
         createdAt: { lte: expect.any(Date) },
         kind: { notIn: ['message', 'community_group_post'] },
+        NOT: expect.anything(),
       },
       data: { deliveredAt: expect.any(Date) },
     });

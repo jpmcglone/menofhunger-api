@@ -1,14 +1,17 @@
+import { ChannelAccessService } from '../../modules/group-channels/channel-access.service';
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../modules/prisma/prisma.service';
 import { bellExcludedKindsForAccount } from '../../modules/notifications/notification-kinds';
 
-export type IdentityBadgeSummary = { unreadBadgeCount: number; hasUnreadNotifications: boolean };
+import { boardActivityWhere, withoutBoardActivity } from '../../modules/notifications/notification-category';
+
+export type IdentityBadgeSummary = { unreadBadgeCount: number; hasUnreadNotifications: boolean; hasUnreadBoard: boolean };
 
 /** Shared by account switching, notification summaries and APNs; depends only on storage. */
 @Injectable()
 export class BadgeSummaryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly channels?: ChannelAccessService) {}
 
   async notificationWhere(userId: string): Promise<Prisma.NotificationWhereInput> {
     const [user, blocks, mutes] = await Promise.all([
@@ -24,17 +27,27 @@ export class BadgeSummaryService {
     };
   }
 
+  /** Bell rows only: Board activity belongs to Board and never feeds the bell count or dot. */
+  async bellWhere(userId: string): Promise<Prisma.NotificationWhereInput> {
+    return withoutBoardActivity(await this.notificationWhere(userId));
+  }
+
   async forIdentity(userId: string): Promise<IdentityBadgeSummary> {
     const where = await this.notificationWhere(userId);
-    const [bell, unread, groups, invites, messages] = await Promise.all([
-      this.prisma.notification.count({ where: { ...where, deliveredAt: null } }),
-      this.prisma.notification.findFirst({ where: { ...where, readAt: null }, select: { id: true } }),
+    const bellWhere = withoutBoardActivity(where);
+    const board = { AND: [where, boardActivityWhere(), { actorUserId: { not: userId } }] };
+    const [bell, unread, boardMentions, boardUnread, groups, invites, messages, channels] = await Promise.all([
+      this.prisma.notification.count({ where: { ...bellWhere, deliveredAt: null } }),
+      this.prisma.notification.findFirst({ where: { ...bellWhere, readAt: null }, select: { id: true } }),
+      this.prisma.notification.count({ where: { ...board, kind: 'mention', deliveredAt: null } }),
+      this.prisma.notification.findFirst({ where: { ...board, readAt: null }, select: { id: true } }),
       this.prisma.user.findUnique({ where: { id: userId }, select: { undeliveredGroupPostCount: true } }),
       this.prisma.communityGroupInvite.count({ where: { inviteeUserId: userId, status: 'pending', expiresAt: { gt: new Date() }, group: { deletedAt: null } } }),
       this.prisma.$queryRaw<Array<{ count: number | bigint }>>(Prisma.sql`
         SELECT COUNT(m.id)::int AS count FROM "MessageParticipant" mp
         JOIN "Message" m ON m."conversationId" = mp."conversationId"
-        WHERE mp."userId" = ${userId} AND m."senderId" <> ${userId}
+        JOIN "MessageConversation" c ON c.id = mp."conversationId"
+        WHERE c.type <> 'channel' AND mp."userId" = ${userId} AND m."senderId" <> ${userId}
           AND (mp."lastReadAt" IS NULL OR m."createdAt" > mp."lastReadAt")
           AND NOT EXISTS (
             SELECT 1 FROM "MessageParticipant" peer JOIN "UserBlock" b
@@ -43,8 +56,13 @@ export class BadgeSummaryService {
             WHERE peer."conversationId" = mp."conversationId"
           )
       `),
+      this.channels?.personalCount(userId) ?? Promise.resolve(0),
     ]);
-    return { unreadBadgeCount: bell + Math.max(0, groups?.undeliveredGroupPostCount ?? 0) + invites + Number(messages[0]?.count ?? 0), hasUnreadNotifications: unread != null };
+    return {
+      unreadBadgeCount: channels + bell + boardMentions + Math.max(0, groups?.undeliveredGroupPostCount ?? 0) + invites + Number(messages[0]?.count ?? 0),
+      hasUnreadNotifications: unread != null,
+      hasUnreadBoard: boardUnread != null,
+    };
   }
 
   async forIdentities(ids: string[]): Promise<Map<string, IdentityBadgeSummary>> {

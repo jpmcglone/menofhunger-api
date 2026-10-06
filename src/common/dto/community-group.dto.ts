@@ -28,6 +28,11 @@ export type CommunityGroupPreviewDto = {
 };
 
 export type CommunityGroupShellDto = {
+  /** Additive rollout/access presentation; channel APIs remain authoritative. */
+  channelsAvailable?: boolean;
+  channelPersonalCount?: number;
+  /** Unread activity in any visible, unmuted channel; drives the Channels dot. */
+  channelHasUnread?: boolean;
   id: string;
   slug: string;
   name: string;

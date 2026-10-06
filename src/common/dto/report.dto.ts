@@ -10,9 +10,14 @@ export type ReportDto = {
   status: ReportStatus;
   subjectUserId: string | null;
   subjectPostId: string | null;
+  subjectMessageId: string | null;
+  subjectArticleId: string | null;
 };
 
 export type ReportAdminDto = ReportDto & {
+  evidenceText: string | null;
+  subjectMessage: { id: string; createdAt: string; deletedForAll: boolean; senderId: string; media: { id: string; kind: string }[] } | null;
+  subjectArticle: { id: string; title: string; slug: string; deletedAt: string | null } | null;
   adminNote: string | null;
   resolvedAt: string | null;
   reporter: {
@@ -54,11 +59,15 @@ export function toReportDto(report: Report): ReportDto {
     status: report.status,
     subjectUserId: report.subjectUserId ?? null,
     subjectPostId: report.subjectPostId ?? null,
+    subjectMessageId: report.subjectMessageId ?? null,
+    subjectArticleId: report.subjectArticleId ?? null,
   };
 }
 
 export function toReportAdminDto(
   report: Report & {
+    subjectMessage?: { id: string; createdAt: Date; deletedForAll: boolean; senderId: string; media: { id: string; kind: string }[] } | null;
+    subjectArticle?: { id: string; title: string; slug: string; deletedAt: Date | null } | null;
     reporter: { id: string; username: string | null; name: string | null };
     subjectUser?: { id: string; username: string | null; name: string | null } | null;
     subjectPost?: {
@@ -73,6 +82,9 @@ export function toReportAdminDto(
 ): ReportAdminDto {
   return {
     ...toReportDto(report),
+    evidenceText: report.evidenceText ?? null,
+    subjectMessage: report.subjectMessage ? { ...report.subjectMessage, createdAt: report.subjectMessage.createdAt.toISOString() } : null,
+    subjectArticle: report.subjectArticle ? { ...report.subjectArticle, deletedAt: report.subjectArticle.deletedAt?.toISOString() ?? null } : null,
     adminNote: report.adminNote ?? null,
     resolvedAt: report.resolvedAt ? report.resolvedAt.toISOString() : null,
     reporter: { id: report.reporter.id, username: report.reporter.username, name: report.reporter.name },

@@ -23,6 +23,11 @@ export const MOH_SIDE_EFFECTS_QUEUE = "moh_side_effects";
  * or switch statement to update.
  */
 export interface SideEffectPayloads {
+  "media.transcribe.request": { messageId: string };
+  "channel.marv.request": { groupId: string; channelId: string; messageId: string; requesterId: string };
+  "channel.message.changed": { groupId: string; channelId: string; messageId: string; edited: boolean };
+  "channel.member.added": { groupId: string; channelId: string; userId: string; actorUserId: string };
+
   "delegation.result": { runId: string };
   "integrations.monitor": Record<string, never>;
   "x.news.refresh": { slot: string };

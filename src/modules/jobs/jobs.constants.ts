@@ -80,9 +80,12 @@ export const JOBS = {
   callEmptyGrace: 'calls.emptyGrace',
   callParticipantGrace: 'calls.participantGrace',
 
+  mediaTranscribe: 'media.transcribe',
+
   // Marvin (the AI helper)
   marvinReplyPublic: 'marvin.reply.public',
   marvinReplyPrivate: 'marvin.reply.private',
+  marvinReplyChannel: 'marvin.reply.channel',
   marvinContextCardsRefresh: 'marvin.contextCards.refresh',
   marvinContextCardRefresh: 'marvin.contextCard.refresh',
   marvinSummarizeThread: 'marvin.summarizeThread',
@@ -99,6 +102,7 @@ export type JobName = (typeof JOBS)[keyof typeof JOBS];
 export const MARVIN_JOB_NAMES: ReadonlySet<JobName> = new Set<JobName>([
   JOBS.marvinReplyPublic,
   JOBS.marvinReplyPrivate,
+  JOBS.marvinReplyChannel,
   JOBS.marvinContextCardsRefresh,
   JOBS.marvinContextCardRefresh,
   JOBS.marvinSummarizeThread,

@@ -195,6 +195,32 @@ export class AppConfigService {
     };
   }
 
+  audioTranscription() {
+    return {
+      enabled: this.config.get<string>("AUDIO_TRANSCRIPTION_ENABLED") === "true" && Boolean(this.config.get<string>("OPENAI_API_KEY")?.trim()),
+      apiKey: this.config.get<string>("OPENAI_API_KEY")?.trim() ?? "",
+      model: this.config.get<string>("OPENAI_TRANSCRIBE_MODEL")?.trim() || "gpt-4o-transcribe",
+    };
+  }
+
+  channelMediaBucket(): string | null {
+    const bucket = this.config.get<string>("R2_CHANNEL_BUCKET_NAME")?.trim();
+    const publicBucket = this.r2()?.bucket;
+    // Refuse configuration that could expose protected uploads via the public bucket.
+    if (bucket) return bucket !== publicBucket ? bucket : null;
+    // Local development has one bucket; keys stay under the protected `dev/channel-uploads/` prefix
+    // and are only ever served through the authorized API. Production must configure a private bucket.
+    return !this.isProd() && publicBucket ? publicBucket : null;
+  }
+
+  groupChannels() {
+    return {
+      enabled: this.config.get<string>("GROUP_CHANNELS_ENABLED") === "true",
+      groupIds: (this.config.get<string>("GROUP_CHANNELS_GROUP_IDS") ?? "").split(",").map(id => id.trim()).filter(Boolean),
+      marvEnabled: this.config.get<string>("GROUP_CHANNELS_MARV_ENABLED") === "true",
+    };
+  }
+
   integrationBudget(
     bucket: "regular" | "expensive" | "reserve" | "acquisition" = "regular",
   ) {

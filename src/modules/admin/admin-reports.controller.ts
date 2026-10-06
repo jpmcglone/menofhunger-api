@@ -1,4 +1,6 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Query, Req, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
+import type { Readable } from 'node:stream';
+import { BadRequestException, Body, Headers, Res, StreamableFile, Controller, Get, Param, Patch, Query, Req, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { AdminGuard, type AdminRequest } from './admin.guard';
 import { ReportsService } from '../reports/reports.service';
@@ -8,7 +10,7 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 const listSchema = z.object({
   q: z.string().trim().max(200).optional(),
   status: z.enum(['pending', 'dismissed', 'actionTaken']).optional(),
-  targetType: z.enum(['post', 'user']).optional(),
+  targetType: z.enum(['post', 'user', 'message', 'article']).optional(),
   reason: z.enum(['spam', 'harassment', 'hate', 'sexual', 'violence', 'illegal', 'other']).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
   cursor: z.string().optional(),
@@ -45,6 +47,17 @@ export class AdminReportsController {
       data: rows.map((row) => toReportAdminDto(row)),
       pagination: { nextCursor },
     };
+  }
+
+  @Get(':id/media/:mediaId')
+  async reportedMedia(@Param('id') id: string, @Param('mediaId') mediaId: string, @Query() query: unknown, @Headers('range') range: string | undefined, @Res({ passthrough: true }) response: Response) {
+    const thumbnail = z.object({ thumbnail: z.enum(['true', 'false']).optional() }).parse(query).thumbnail === 'true';
+    const object = await this.reports.readReportedMedia(id, mediaId, thumbnail, range);
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.setHeader('Accept-Ranges', 'bytes');
+    if (object.ContentRange) { response.status(206); response.setHeader('Content-Range', object.ContentRange); }
+    return new StreamableFile(object.Body as Readable, { type: object.ContentType ?? 'application/octet-stream', length: object.ContentLength });
   }
 
   @Patch(':id')

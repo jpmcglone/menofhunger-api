@@ -1,3 +1,4 @@
+import { MarvinChannelReplyProcessor } from './jobs/marvin-channel-reply.processor';
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger, type OnModuleInit } from '@nestjs/common';
 import type { Job } from 'bullmq';
@@ -31,6 +32,7 @@ export class MarvinProcessor extends WorkerHost implements OnModuleInit {
   constructor(
     private readonly appConfig: AppConfigService,
     private readonly publicReply: MarvinPublicReplyProcessor,
+    private readonly channelReply: MarvinChannelReplyProcessor,
     private readonly privateReply: MarvinPrivateReplyProcessor,
     private readonly contextCards: MarvinContextCardsProcessor,
     private readonly summarizeThread: MarvinSummarizeThreadProcessor,
@@ -68,6 +70,9 @@ export class MarvinProcessor extends WorkerHost implements OnModuleInit {
       switch (name) {
         case JOBS.marvinReplyPublic:
           await this.publicReply.process(job.data ?? {});
+          return { ok: true };
+        case JOBS.marvinReplyChannel:
+          await this.channelReply.process(job.data ?? {});
           return { ok: true };
         case JOBS.marvinReplyPrivate:
           await this.privateReply.process(job.data ?? {});

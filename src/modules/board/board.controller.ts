@@ -9,6 +9,8 @@ import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { setReadCache } from '../../common/http-cache';
 import { BoardService } from './board.service';
+import { PickaxCrosspostService } from '../pickax/pickax-crosspost.service';
+import { XCrosspostService } from '../x/x-crosspost.service';
 import { BOARD_MAX_TAGS, BOARD_TITLE_MAX } from './board.utils';
 
 const visibilitySchema = z.enum(['public', 'verifiedOnly', 'premiumOnly']);
@@ -53,6 +55,8 @@ const createThreadSchema = z.object({
   tags: z.array(z.string().trim().max(40)).max(BOARD_MAX_TAGS).optional(),
   visibility: visibilitySchema.optional(),
   showInFeed: z.boolean().optional(),
+  /** Only honored for public threads that are also posted to the feed. Always shares a link to the thread. */
+  crosspost: z.object({ pickax: z.literal('link').optional(), x: z.literal('link').optional() }).strict().optional(),
 });
 
 const updateThreadSchema = z.object({
@@ -78,7 +82,11 @@ const createThrottle = { default: { limit: rateLimitLimit('postCreate', 30), ttl
 @ApiTags('Board')
 @Controller('board')
 export class BoardController {
-  constructor(private readonly board: BoardService) {}
+  constructor(
+    private readonly board: BoardService,
+    private readonly pickax: PickaxCrosspostService,
+    private readonly x: XCrosspostService,
+  ) {}
 
   @UseGuards(OptionalAuthGuard)
   @Get('threads')
@@ -217,7 +225,10 @@ export class BoardController {
       visibility: parsed.visibility ?? 'public',
       showInFeed: parsed.showInFeed ?? false,
     });
-    return { data };
+    const shareOutward = Boolean(parsed.showInFeed) && (parsed.visibility ?? 'public') === 'public';
+    const pickax = shareOutward && parsed.crosspost?.pickax ? await this.pickax.requestPostCrosspost(userId, data.id, 'link') : null;
+    const x = shareOutward && parsed.crosspost?.x ? await this.x.requestPostCrosspost(userId, data.id, 'link') : null;
+    return { data, crossposts: { pickax, x } };
   }
 
   @UseGuards(AuthGuard)

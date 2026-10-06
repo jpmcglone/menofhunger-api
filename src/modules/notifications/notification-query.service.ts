@@ -9,6 +9,7 @@ import { createdAtIdCursorWhere } from "../../common/pagination/created-at-id-cu
 import { PostVisibilityReadService } from "../viewer/post-visibility-read.service";
 import { NotificationReadStateService } from "./notification-read-state.service";
 import {
+  boardActivityWhere,
   notificationCategory,
   notificationCategoryCounts,
   notificationFilterWhere,
@@ -175,7 +176,13 @@ export class NotificationQueryService {
               },
             }
           : {}),
-        ...(cursorWhere ? { AND: [cursorWhere] } : {}),
+        // Board owns its comments and mentions; they appear only in Board's own activity feed.
+        AND: [
+          ...(cursorWhere ? [cursorWhere] : []),
+          ...(kind === "board" || params.boardCommentsOnly
+            ? []
+            : [{ NOT: boardActivityWhere() }]),
+        ],
       },
       include: {
         subjectPost: {
@@ -217,6 +224,7 @@ export class NotificationQueryService {
         readAt: null,
         kind: "followed_post",
         subjectPost: { is: { parentId: { not: null } } },
+        AND: [{ NOT: boardActivityWhere() }],
         ...(blockedActorIds.length
           ? {
               NOT: {

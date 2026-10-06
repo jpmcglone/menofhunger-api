@@ -14,6 +14,7 @@ function harness() {
   let receipt: any = { id: '11111111-1111-4111-8111-111111111111', userId: 'u1', scheduledAt: new Date(Date.now() - 1000), expiresAt: new Date(Date.now() + 86400000), startedAt: null, erasedAt: null, completedAt: null, cancelledAt: null, confirmationEmail: null, mediaKeys: [] };
   const user = { id: 'u1', username: 'tester', accountKind: 'person', isBot: false, email: null };
   const prisma: any = {
+    communityGroupMember: { findMany: jest.fn(async () => []) },
     user: { findUnique: jest.fn(async () => user), findMany: jest.fn(async () => []), update: jest.fn(async () => user), updateMany: jest.fn(async () => ({ count: 1 })) },
     accountDeletionReceipt: { findUnique: jest.fn(async () => receipt), findUniqueOrThrow: jest.fn(async () => receipt), findMany: jest.fn(async () => [receipt]), upsert: jest.fn(async () => receipt), update: jest.fn(async ({ data }) => { receipt = { ...receipt, ...data }; return receipt; }), deleteMany: jest.fn(async () => ({ count: 0 })) },
   };

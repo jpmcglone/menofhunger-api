@@ -38,7 +38,7 @@ export type PostMediaSource = 'upload' | 'giphy'
 export type PostVisibility = 'public' | 'verifiedOnly' | 'premiumOnly' | 'onlyMe'
 export type ReportReason = 'other' | 'spam' | 'harassment' | 'hate' | 'sexual' | 'violence' | 'illegal'
 export type ReportStatus = 'pending' | 'dismissed' | 'actionTaken'
-export type ReportTargetType = 'post' | 'user'
+export type ReportTargetType = 'article' | 'post' | 'user' | 'message'
 export type VerificationRequestStatus = 'pending' | 'cancelled' | 'approved' | 'rejected'
 export type VerifiedStatus = 'none' | 'identity' | 'manual'
 
@@ -854,6 +854,7 @@ export type SwitchableAccountDto = {
   /** Bell + groups + chat unread for this identity. Hidden on the current row. */
   unreadBadgeCount: number;
   hasUnreadNotifications?: boolean;
+  hasUnreadBoard?: boolean;
 };
 
 export type AuthMeDto = UserDto & {
@@ -1395,6 +1396,11 @@ export type CommunityGroupPreviewDto = {
 };
 
 export type CommunityGroupShellDto = {
+  /** Additive rollout/access presentation; channel APIs remain authoritative. */
+  channelsAvailable?: boolean;
+  channelPersonalCount?: number;
+  /** Unread activity in any visible, unmuted channel; drives the Channels dot. */
+  channelHasUnread?: boolean;
   id: string;
   slug: string;
   name: string;
@@ -1945,6 +1951,75 @@ export type FitnessPageDto = {
   /** Up to 60 days with steps, newest-first, for the Steps sparkline. */
   stepsHistory: FitnessStepsDayDto[];
   activeGoal: FitnessGoalDto | null;
+};
+
+// ─── src/common/dto/group-channel.dto.ts ───────────────────────────────────────
+
+export type GroupChannelCapabilitiesDto = {
+  canSend: boolean; canReact: boolean; canManage: boolean; canInvite: boolean;
+  canModerate: boolean; canArchive: boolean; canRename: boolean;
+};
+
+export type GroupChannelDto = {
+  id: string; groupId: string; name: string; topic: string;
+  /** A single emoji shown instead of "#"; null uses the default. */
+  icon: string | null;
+  /** Free-form title shown in the UI; null falls back to the handle in `name`. */
+  displayName: string | null;
+  privacy: 'normal' | 'private'; defaultPurpose: 'announcements' | 'general' | 'random' | null;
+  archivedAt: string | null; revision: number;
+  viewerUpdatedAt: string | null;
+  readThrough: number;
+  hasUnread: boolean; personalCount: number; preference: 'all' | 'mentions' | 'off';
+  capabilities: GroupChannelCapabilitiesDto;
+};
+
+/** Counts only, visible to the sender; never identifies readers. */
+export type GroupChannelReceiptDto = { readCount: number; recipientCount: number };
+
+export type GroupChannelMessageDto = MessageDto & {
+  receipt: GroupChannelReceiptDto | null;
+  clientRequestId: string | null;
+  revision: number;
+  channelId: string; sequence: number; threadRootId: string | null;
+  hiddenPreviews: string[];
+  replyCount: number; lastReplyAt: string | null; following: boolean; pinned: boolean;
+  canEdit: boolean; canDelete: boolean;
+};
+
+export type GroupChannelAttentionDto = {
+  channelId: string; messageId: string; threadRootId: string | null;
+  mentioned: boolean; followedReply: boolean; createdAt: string;
+  message: GroupChannelMessageDto;
+};
+
+export type GroupChannelChangedPayloadDto = {
+  groupId: string; channelId?: string; revision?: number;
+  reason: 'channel' | 'messages' | 'attention' | 'access';
+};
+
+/** Viewer-filtered canonical snapshots; clients merge by message ID and sequence. */
+export type GroupChannelMessagesPayloadDto = {
+  groupId: string;
+  channel: GroupChannelDto;
+  messages: GroupChannelMessageDto[];
+};
+
+export type GroupChannelViewerPayloadDto = {
+  groupId: string;
+  channel: GroupChannelDto;
+  readMessageIds?: string[];
+  readThrough?: number;
+  threadRootId?: string;
+  following?: boolean;
+};
+
+export type GroupChannelMarvStatusDto = {
+  enabled: boolean;
+  inGroup: boolean;
+  participating: boolean;
+  canManage: boolean;
+  userId: string | null;
 };
 
 // ─── src/common/dto/hashtag.dto.ts ─────────────────────────────────────────────
@@ -3110,6 +3185,8 @@ export type NotificationsNavUnreadPayloadDto = {
   boardUnreadCount: number;
   articlesUnreadCount: number;
   hasUnreadNotifications?: boolean;
+  /** Unseen Board mentions, counted into the Board nav badge. */
+  boardMentionCount?: number;
 };
 
 /** Drop lock-screen APNs the user already saw in the matching in-app section. */
@@ -3122,6 +3199,7 @@ export type AccountsBadgeUpdatedPayloadDto = {
   userId: string;
   unreadBadgeCount: number;
   hasUnreadNotifications?: boolean;
+  hasUnreadBoard?: boolean;
 };
 
 /**
@@ -3506,6 +3584,15 @@ export type PostsTypingPayloadDto = {
   replyToId?: string;
 };
 
+/** Someone is typing in a channel (or a thread of it). Sent only to sockets subscribed to that channel. */
+export type GroupChannelTypingPayloadDto = {
+  groupId: string;
+  channelId: string;
+  threadRootId: string | null;
+  user: PostsTypingPayloadDto['user'];
+  typing: boolean;
+};
+
 /**
  * Crew streak realtime payloads (Phase 3 — DAU loop).
  *
@@ -3640,9 +3727,14 @@ export type ReportDto = {
   status: ReportStatus;
   subjectUserId: string | null;
   subjectPostId: string | null;
+  subjectMessageId: string | null;
+  subjectArticleId: string | null;
 };
 
 export type ReportAdminDto = ReportDto & {
+  evidenceText: string | null;
+  subjectMessage: { id: string; createdAt: string; deletedForAll: boolean; senderId: string; media: { id: string; kind: string }[] } | null;
+  subjectArticle: { id: string; title: string; slug: string; deletedAt: string | null } | null;
   adminNote: string | null;
   resolvedAt: string | null;
   reporter: {
@@ -4282,6 +4374,9 @@ export type MessageMediaDto = {
   height: number | null;
   durationSeconds: number | null;
   alt: string | null;
+  /** Audio only: `pending` until the transcript is ready. Null when never requested. */
+  transcriptStatus: 'pending' | 'ready' | 'failed' | null;
+  transcript: string | null;
 };
 
 export type MessageDto = {

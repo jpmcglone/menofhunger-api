@@ -60,6 +60,8 @@ import { BoardModule } from '../board/board.module';
 import { MutesModule } from '../mutes/mutes.module';
 import { CoinsModule } from '../coins/coins.module';
 import { TaxonomyModule } from '../taxonomy/taxonomy.module';
+import { TranscriptionModule } from '../transcription/transcription.module';
+import { GroupChannelsModule } from '../group-channels/group-channels.module';
 import { GroupsModule } from '../groups/groups.module';
 import { CrewModule } from '../crew/crew.module';
 import { LandingModule } from '../landing/landing.module';
@@ -155,6 +157,8 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     MutesModule,
     TaxonomyModule,
     GroupsModule,
+    GroupChannelsModule,
+    TranscriptionModule,
     CrewModule,
     LandingModule,
     CoinsModule,

@@ -21,6 +21,8 @@ export type ApnsTokenKind = 'alert' | 'voip';
 const PRUNE_REASONS = new Set(['BadDeviceToken', 'Unregistered', 'DeviceTokenNotForTopic']);
 const NOTIFICATION_PUSH_SOUND = 'notification.caf';
 const MESSAGE_PUSH_SOUND = 'new-message.caf';
+const CHANNEL_MESSAGE_PUSH_SOUND = 'channel-message.caf';
+const CHANNEL_MENTION_PUSH_SOUND = 'channel-mention.caf';
 /** Collapse id so rapid badge syncs replace each other instead of queuing. */
 const BADGE_SYNC_COLLAPSE_ID = 'badge-sync';
 
@@ -204,6 +206,7 @@ export class ApnsPushService {
   async sendToUser(
     recipientUserId: string,
     params: {
+      canDeliver?: () => Promise<boolean>;
       title: string;
       body?: string | null;
       /** Click-through URL (absolute or path); the iOS client deep-links from it. */
@@ -266,7 +269,7 @@ export class ApnsPushService {
         ...(params.category ? { category: params.category } : {}),
         data,
       });
-    });
+    }, 'alert', params.canDeliver);
   }
 
   /**
@@ -356,6 +359,7 @@ export class ApnsPushService {
     recipientUserId: string,
     build: (token: string) => InstanceType<typeof ApnsNotification>,
     kind: ApnsTokenKind = 'alert',
+    canDeliver?: () => Promise<boolean>,
   ): Promise<void> {
     const cfg = this.appConfig.apns();
     if (!cfg) return;
@@ -365,6 +369,7 @@ export class ApnsPushService {
 
     const deadTokenIds: string[] = [];
     for (const row of tokens) {
+      if (canDeliver && !await canDeliver()) return;
       const environment: ApnsEnvironment = row.environment === 'sandbox' ? 'sandbox' : 'production';
       const client = this.clientFor(environment, cfg);
       try {
@@ -373,6 +378,7 @@ export class ApnsPushService {
         if (err instanceof ApnsError && (err.statusCode === 410 || PRUNE_REASONS.has(err.reason))) {
           deadTokenIds.push(row.id);
         } else {
+          if (canDeliver) throw err;
           this.logger.warn(
             `[apns] Failed to send push to user ${recipientUserId}: ${err instanceof Error ? err.message : String(err)}`,
           );
@@ -414,7 +420,10 @@ export class ApnsPushService {
     });
   }
 
-  private soundForKind(kind?: string): string {
+  /** Keep in step with the in-app catalog: web `utils/sound-policy.ts` and iOS `InAppSoundPlayer`. */
+  soundForKind(kind?: string): string {
+    if (kind === 'channel_mention') return CHANNEL_MENTION_PUSH_SOUND;
+    if (kind === 'channel_message') return CHANNEL_MESSAGE_PUSH_SOUND;
     return kind === 'message' ? MESSAGE_PUSH_SOUND : NOTIFICATION_PUSH_SOUND;
   }
 }

@@ -1,3 +1,7 @@
+import { ChannelMediaService } from '../group-channels/channel-media.service';
+import { ChannelAccessService } from '../group-channels/channel-access.service';
+import { MessagesService } from '../messages/messages.service';
+import { ViewerContextService } from '../viewer/viewer-context.service';
 import type { Prisma, ReportReason, ReportStatus, ReportTargetType } from '@prisma/client';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -9,16 +13,40 @@ export class ReportsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly slack: SlackService,
+    private readonly channels: ChannelAccessService,
+    private readonly messages: MessagesService,
+    private readonly viewer: ViewerContextService,
+    private readonly channelMedia: ChannelMediaService,
   ) {}
+
+  readReportedMedia(reportId: string, mediaId: string, thumbnail: boolean, range?: string) {
+    return this.channelMedia.readReportedMedia(reportId, mediaId, thumbnail, range);
+  }
 
   async create(input: {
     reporterUserId: string;
     targetType: ReportTargetType;
     subjectPostId?: string | null;
     subjectUserId?: string | null;
+    subjectMessageId?: string | null;
+    subjectArticleId?: string | null;
     reason: ReportReason;
     details: string | null;
   }) {
+    if (input.targetType === 'message') {
+      const message = input.subjectMessageId ? await this.prisma.message.findFirst({ where: { id: input.subjectMessageId, deletedForAll: false }, include: { conversation: { include: { groupChannel: true } } } }) : null;
+      if (!message) throw new NotFoundException('Message unavailable.');
+      const channel = message.conversation.groupChannel;
+      if (channel) await this.channels.channel(input.reporterUserId, channel.groupId, channel.id);
+      else await this.messages.listConversationParticipantUserIds({ userId: input.reporterUserId, conversationId: message.conversationId });
+      return this.prisma.report.create({ data: { targetType: 'message', subjectMessageId: message.id, reporterUserId: input.reporterUserId, reason: input.reason, details: input.details, evidenceText: message.body } });
+    }
+    if (input.targetType === 'article') {
+      const article = input.subjectArticleId ? await this.prisma.article.findFirst({ where: { id: input.subjectArticleId, deletedAt: null } }) : null;
+      const viewer = await this.viewer.getViewer(input.reporterUserId);
+      if (!article || (article.authorId !== input.reporterUserId && (article.isDraft || !this.viewer.allowedPostVisibilities(viewer).includes(article.visibility)))) throw new NotFoundException('Article unavailable.');
+      return this.prisma.report.create({ data: { targetType: 'article', subjectArticleId: article.id, reporterUserId: input.reporterUserId, reason: input.reason, details: input.details, evidenceText: `${article.title}\n${article.body}` } });
+    }
     if (input.targetType === 'post') {
       const postId = input.subjectPostId;
       if (!postId) throw new NotFoundException();
@@ -112,6 +140,8 @@ export class ReportsService {
       take: params.limit + 1,
       include: {
         reporter: { select: { id: true, username: true, name: true } },
+        subjectMessage: { select: { id: true, createdAt: true, deletedForAll: true, senderId: true, media: { select: { id: true, kind: true } } } },
+        subjectArticle: { select: { id: true, title: true, slug: true, deletedAt: true } },
         subjectUser: { select: { id: true, username: true, name: true } },
         subjectPost: {
           select: {
@@ -149,6 +179,8 @@ export class ReportsService {
       },
       include: {
         reporter: { select: { id: true, username: true, name: true } },
+        subjectMessage: { select: { id: true, createdAt: true, deletedForAll: true, senderId: true, media: { select: { id: true, kind: true } } } },
+        subjectArticle: { select: { id: true, title: true, slug: true, deletedAt: true } },
         subjectUser: { select: { id: true, username: true, name: true } },
         subjectPost: {
           select: {
