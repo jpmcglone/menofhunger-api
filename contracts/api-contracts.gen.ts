@@ -300,6 +300,44 @@ export type AdminAnalyticsGroupsDto = {
   topGroups: AdminAnalyticsGroupsTopRowDto[];
 };
 
+export type AdminAnalyticsChannelsTopRowDto = {
+  id: string;
+  groupSlug: string;
+  groupName: string;
+  channelName: string;
+  isPrivate: boolean;
+  messagesInRange: number;
+  sendersInRange: number;
+};
+
+/**
+ * Group channels (Slack-style chat inside groups), reported apart from group feed posts.
+ * Human messages only unless labelled; deleted messages and archived channels excluded.
+ */
+export type AdminAnalyticsChannelsDto = {
+  /** Channels not archived, all time. */
+  activeChannels: number;
+  privateChannels: number;
+  /** Groups with at least one non-archived channel. */
+  groupsWithChannels: number;
+  messagesInRange: number;
+  /** Messages in range that are thread replies. */
+  threadRepliesInRange: number;
+  /** @marv replies in range. */
+  marvRepliesInRange: number;
+  mentionsInRange: number;
+  uploadsInRange: number;
+  /** Distinct people who sent a channel message in range. */
+  sendersInRange: number;
+  /** Distinct people who opened or read a channel in range. */
+  readersInRange: number;
+  /** Channels with ≥1 human message in range. */
+  channelsWithActivityInRange: number;
+  /** Human messages per bucket in range. */
+  messages: TimeSeriesPoint[];
+  topChannels: AdminAnalyticsChannelsTopRowDto[];
+};
+
 export type AdminAnalyticsSpacesTopRowDto = {
   id: string;
   ownerId: string;
@@ -390,6 +428,7 @@ export type AdminAnalyticsDto = {
   articles: AdminAnalyticsArticlesDto;
   board: AdminAnalyticsBoardDto;
   groups: AdminAnalyticsGroupsDto;
+  channels: AdminAnalyticsChannelsDto;
   spaces: AdminAnalyticsSpacesDto;
   ai: AdminAnalyticsAIDto;
   asOf: string;

@@ -16,6 +16,8 @@ describe('channel permissions', () => {
     expect(() => assertChannelUpdate(channel, { name: 'different' })).toThrow();
     expect(() => assertChannelUpdate(channel, { archived: true })).toThrow();
     expect(() => assertChannelUpdate(channel, { name: 'general' })).not.toThrow();
+    expect(() => assertChannelUpdate(channel, { icon: '🔥' })).toThrow();
+    expect(() => assertChannelUpdate({ ...discussion, defaultPurpose: 'random' }, { icon: '🎲' })).not.toThrow();
     expect(() => assertChannelUpdate(discussion, { archived: true })).not.toThrow();
   });
   it('canonicalizes channel names and rejects paths or markup', () => {

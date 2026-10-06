@@ -9,6 +9,7 @@ import { SideEffectsService } from '../side-effects/side-effects.service';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
+import { joinOfficialGroup } from '../groups/official-group';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 export type VerifyUserSource = 'admin_request' | 'admin_patch' | 'auto_referral' | 'auto_signup';
@@ -157,6 +158,12 @@ export class UserVerificationService {
       await this.affiliate.maybeRecordEarning(userId, 'verified');
     } catch (err) {
       this.logger.warn(`[affiliate] Failed to record verified earning for user ${userId}: ${err}`);
+    }
+
+    try {
+      await joinOfficialGroup(this.prisma, userId);
+    } catch (err) {
+      this.logger.warn(`Failed to add verified user ${userId} to the official group: ${err}`);
     }
 
     this.sideEffects.dispatch('user.verified', { userId });

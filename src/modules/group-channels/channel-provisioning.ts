@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client';
-import { DEFAULT_CHANNELS } from './channel-policy';
+import { DEFAULT_CHANNELS, defaultChannelIcon } from './channel-policy';
 
 /** Call inside the group creation transaction, or with the group row locked for backfill. */
 export async function provisionDefaultChannels(tx: Prisma.TransactionClient, groupId: string, createdByUserId: string) {
@@ -8,7 +8,7 @@ export async function provisionDefaultChannels(tx: Prisma.TransactionClient, gro
     if (existing) continue;
     await tx.groupChannel.create({
       data: {
-        group: { connect: { id: groupId } }, name: purpose, defaultPurpose: purpose,
+        group: { connect: { id: groupId } }, name: purpose, defaultPurpose: purpose, icon: defaultChannelIcon(purpose),
         topic: purpose === 'announcements' ? 'Updates from group leaders.' : purpose === 'general' ? 'Conversation about this group.' : 'Off-topic conversation.',
         conversation: { create: { type: 'channel', createdByUserId } },
       },

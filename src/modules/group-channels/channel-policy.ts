@@ -1,6 +1,13 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 
 export const DEFAULT_CHANNELS = ['announcements', 'general', 'random'] as const;
+/** Fixed icons for default channels; "#" (null) for general. Not customizable. */
+export const DEFAULT_CHANNEL_ICONS: Record<(typeof DEFAULT_CHANNELS)[number], string | null> = {
+  announcements: '📢', general: null, random: '🎲',
+};
+export function defaultChannelIcon(purpose: string | null | undefined): string | null {
+  return purpose && purpose in DEFAULT_CHANNEL_ICONS ? DEFAULT_CHANNEL_ICONS[purpose as keyof typeof DEFAULT_CHANNEL_ICONS] : null;
+}
 export const isChannelLeader = (role: string) => role === 'owner' || role === 'moderator';
 
 export function channelCapabilities(channel: { archivedAt: Date | null; defaultPurpose: string | null; privacy: string }, role: string) {
@@ -21,11 +28,12 @@ export function assertChannelSend(channel: { archivedAt: Date | null; defaultPur
   if (!channelCapabilities(channel, role).canSend) throw new ForbiddenException('You cannot post in this channel.');
 }
 
-export function assertChannelUpdate(channel: { defaultPurpose: string | null; name: string; displayName?: string | null }, patch: { name?: string; displayName?: string | null; archived?: boolean }) {
+export function assertChannelUpdate(channel: { defaultPurpose: string | null; name: string; displayName?: string | null }, patch: { name?: string; displayName?: string | null; icon?: string | null; archived?: boolean }) {
   const renamed = (patch.name !== undefined && patch.name !== channel.name)
     || (patch.displayName !== undefined && patch.displayName !== (channel.displayName ?? null));
-  if (channel.defaultPurpose && (renamed || patch.archived === true)) {
-    throw new BadRequestException('Default channels cannot be renamed or archived.');
+  const restyled = patch.icon !== undefined && (patch.icon?.trim() || null) !== defaultChannelIcon(channel.defaultPurpose);
+  if (channel.defaultPurpose && (renamed || restyled || patch.archived === true)) {
+    throw new BadRequestException('Default channels cannot be renamed, restyled, or archived.');
   }
 }
 

@@ -5,7 +5,7 @@ import type { GroupChannelDto, GroupChannelViewerPayloadDto } from '../../common
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { ChannelAccessService } from './channel-access.service';
-import { DEFAULT_CHANNELS, assertChannelUpdate, channelCapabilities, isChannelLeader, normalizeChannelIcon, normalizeChannelName, normalizeChannelDisplayName, slugifyChannelName } from './channel-policy';
+import { DEFAULT_CHANNELS, assertChannelUpdate, defaultChannelIcon, channelCapabilities, isChannelLeader, normalizeChannelIcon, normalizeChannelName, normalizeChannelDisplayName, slugifyChannelName } from './channel-policy';
 import { lockChannelGroup } from './channel-lifecycle';
 import { provisionDefaultChannels } from './channel-provisioning';
 import { personalChannelMessageWhere } from './channel-attention-policy';
@@ -33,7 +33,7 @@ export class ChannelsService {
 
   private toDto(row: Prisma.GroupChannelGetPayload<object>, role: Parameters<typeof channelCapabilities>[1], viewer: { preference: string; readThrough: number; updatedAt: Date } | undefined, personalCount: number, hasUnread: boolean): GroupChannelDto {
     return {
-      id: row.id, groupId: row.groupId, name: row.name, displayName: row.displayName, topic: row.topic, icon: row.icon, privacy: row.privacy,
+      id: row.id, groupId: row.groupId, name: row.name, displayName: row.displayName, topic: row.topic, icon: row.defaultPurpose ? defaultChannelIcon(row.defaultPurpose) : row.icon, privacy: row.privacy,
       defaultPurpose: row.defaultPurpose, archivedAt: row.archivedAt?.toISOString() ?? null, revision: row.revision,
       preference: (viewer?.preference ?? 'mentions') as GroupChannelDto['preference'],
       hasUnread,
