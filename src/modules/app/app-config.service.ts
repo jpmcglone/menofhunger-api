@@ -215,7 +215,7 @@ export class AppConfigService {
 
   groupChannels() {
     return {
-      enabled: this.config.get<string>("GROUP_CHANNELS_ENABLED") === "true",
+      enabled: this.config.get<string>("GROUP_CHANNELS_ENABLED") !== "false",
       groupIds: (this.config.get<string>("GROUP_CHANNELS_GROUP_IDS") ?? "").split(",").map(id => id.trim()).filter(Boolean),
       marvEnabled: this.config.get<string>("GROUP_CHANNELS_MARV_ENABLED") === "true",
     };

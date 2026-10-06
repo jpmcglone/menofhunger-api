@@ -5,15 +5,30 @@ import type { GroupChannelDto, GroupChannelViewerPayloadDto } from '../../common
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { ChannelAccessService } from './channel-access.service';
-import { assertChannelUpdate, channelCapabilities, isChannelLeader, normalizeChannelIcon, normalizeChannelName, normalizeChannelDisplayName, slugifyChannelName } from './channel-policy';
+import { DEFAULT_CHANNELS, assertChannelUpdate, channelCapabilities, isChannelLeader, normalizeChannelIcon, normalizeChannelName, normalizeChannelDisplayName, slugifyChannelName } from './channel-policy';
+import { lockChannelGroup } from './channel-lifecycle';
+import { provisionDefaultChannels } from './channel-provisioning';
 import { personalChannelMessageWhere } from './channel-attention-policy';
 
 @Injectable()
 export class ChannelsService {
   constructor(private readonly prisma: PrismaService, private readonly access: ChannelAccessService, private readonly realtime: PresenceRealtimeService, private readonly effects: SideEffectsService) {}
 
+  /** Groups created before channels existed get their defaults the first time a member opens them. */
+  private async ensureDefaults(groupId: string) {
+    const existing = await this.prisma.groupChannel.count({ where: { groupId, defaultPurpose: { in: [...DEFAULT_CHANNELS] } } });
+    if (existing >= DEFAULT_CHANNELS.length) return;
+    const group = await this.prisma.communityGroup.findUnique({ where: { id: groupId }, select: { createdByUserId: true } });
+    if (!group) return;
+    await this.prisma.$transaction(async tx => {
+      await lockChannelGroup(tx, groupId);
+      await provisionDefaultChannels(tx, groupId, group.createdByUserId);
+    });
+  }
+
   async list(userId: string, groupId: string): Promise<GroupChannelDto[]> {
     const member = await this.access.member(userId, groupId);
+    await this.ensureDefaults(groupId);
     const rows = await this.prisma.groupChannel.findMany({
       where: this.access.readableWhere(userId, groupId),
       include: { viewers: { where: { userId } }, _count: { select: { attention: { where: { userId, readAt: null, message: personalChannelMessageWhere(userId) } } } } },

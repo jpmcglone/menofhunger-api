@@ -500,7 +500,7 @@ export const envSchema = z
 
     // Channels stay disabled until client and privacy acceptance gates pass.
     R2_CHANNEL_BUCKET_NAME: z.string().optional(),
-  GROUP_CHANNELS_ENABLED: z.enum(["true", "false"]).default("false"),
+  GROUP_CHANNELS_ENABLED: z.enum(["true", "false"]).default("true"),
     GROUP_CHANNELS_GROUP_IDS: z.string().default(""),
     GROUP_CHANNELS_MARV_ENABLED: z.enum(["true", "false"]).default("false"),
     AUDIO_TRANSCRIPTION_ENABLED: z.enum(["true", "false"]).default("false"),

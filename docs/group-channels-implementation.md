@@ -4,7 +4,7 @@ Source: approved implementation plan in this task; Figma pages 29 and 30.
 
 ## Release controls
 
-`GROUP_CHANNELS_ENABLED=false` by default. `GROUP_CHANNELS_GROUP_IDS` is a comma-separated pilot allowlist; empty permits all groups only when enabled. `GROUP_CHANNELS_MARV_ENABLED=false` independently gates the second rollout stage. Never enable production during implementation.
+Channels are on by default; set `GROUP_CHANNELS_ENABLED=false` to turn them off. `GROUP_CHANNELS_GROUP_IDS` optionally restricts them to a comma-separated list; empty permits all groups. Groups created before channels get their default channels the first time a member opens them. `GROUP_CHANNELS_MARV_ENABLED=false` independently gates channel AI. Channel uploads additionally require the private `R2_CHANNEL_BUCKET_NAME` bucket.
 
 ## Milestones
 
