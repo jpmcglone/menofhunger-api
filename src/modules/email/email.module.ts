@@ -6,13 +6,14 @@ import { AuthModule } from '../auth/auth.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { EmailController } from './email.controller';
 import { EmailActionTokensService } from './email-action-tokens.service';
+import { GroupEmailService } from './group-email.service';
 import { EmailVerificationService } from './email-verification.service';
 
 @Module({
   imports: [AppConfigModule, AuthModule, RealtimeModule],
   controllers: [EmailController],
-  providers: [ResendEmailProvider, EmailService, EmailActionTokensService, EmailVerificationService],
-  exports: [EmailService, EmailActionTokensService, EmailVerificationService],
+  providers: [ResendEmailProvider, EmailService, EmailActionTokensService, EmailVerificationService, GroupEmailService],
+  exports: [EmailService, EmailActionTokensService, EmailVerificationService, GroupEmailService],
 })
 export class EmailModule {}
 

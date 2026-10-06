@@ -1,5 +1,6 @@
 import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { GroupEmailService } from '../email/group-email.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { FANOUT_CONCURRENCY, runInBatches } from '../side-effects/batch';
 import type { SideEffectPayloads } from '../side-effects/side-effects.constants';
@@ -18,6 +19,7 @@ export class GroupsSideEffectsHandler implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly registry: SideEffectsRegistry,
+    private readonly groupEmail: GroupEmailService,
   ) {}
 
   onModuleInit(): void {
@@ -38,6 +40,22 @@ export class GroupsSideEffectsHandler implements OnModuleInit {
       inviteId: payload.inviteId,
       bodySnippet: payload.bodySnippet,
     });
+    await this.safeEmail({
+      kind: 'invite',
+      recipientUserId: payload.inviteeUserId,
+      groupId: payload.groupId,
+      actorUserId: payload.inviterUserId,
+      inviteId: payload.inviteId,
+      note: payload.bodySnippet,
+    });
+  }
+
+  private async safeEmail(input: Parameters<GroupEmailService['send']>[0]): Promise<void> {
+    try {
+      await this.groupEmail.send(input);
+    } catch {
+      // Email is best-effort; the in-app notification already succeeded.
+    }
   }
 
   private async onInviteCancelled(payload: SideEffectPayloads['group.invite.cancelled']): Promise<void> {
@@ -88,6 +106,12 @@ export class GroupsSideEffectsHandler implements OnModuleInit {
     });
 
     if (payload.decision === 'approved') {
+      await this.safeEmail({
+        kind: 'approved',
+        recipientUserId: payload.userId,
+        groupId: payload.groupId,
+        actorUserId: payload.actorUserId,
+      });
       await this.fanOutMemberJoined({ groupId: payload.groupId, joinerUserId: payload.userId });
     }
   }

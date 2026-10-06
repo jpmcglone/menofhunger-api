@@ -19,7 +19,7 @@ function setup() {
   const preferences: any = { getPreferencesInternal: jest.fn().mockResolvedValue({ pushMention: true, pushMessage: true, pushGroupActivity: true }) };
   const effects: any = { dispatch: jest.fn() };
   const viewing = new ChannelViewingService(access, cache);
-  return { service: new ChannelNotificationsSideEffectsHandler(prisma, access, push, preferences, {} as any, effects, cache, viewing), viewing, prisma, access, push, cache, preferences, message, channel };
+  return { service: new ChannelNotificationsSideEffectsHandler(prisma, access, push, preferences, {} as any, effects, cache, viewing, { send: jest.fn() } as any, { isOnline: jest.fn().mockResolvedValue(true) } as any), viewing, prisma, access, push, cache, preferences, message, channel };
 }
 const event = { groupId: 'group', channelId: 'channel', messageId: 'message', edited: false };
 

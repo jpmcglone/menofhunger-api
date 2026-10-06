@@ -17,7 +17,7 @@ function build(members: Array<{ userId: string }> = []) {
     upsertGroupMemberRemovedNotification: jest.fn(async () => undefined),
   };
   const registry = { register: jest.fn() };
-  const handler = new GroupsSideEffectsHandler(prisma, notifications as any, registry as any);
+  const handler = new GroupsSideEffectsHandler(prisma, notifications as any, registry as any, { send: jest.fn() } as any);
   return { handler, prisma, notifications, registry };
 }
 

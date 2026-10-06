@@ -46,7 +46,7 @@ describe('YouTube metadata cache recovery', () => {
 
   it('does not HTTP-cache a temporary failure', async () => {
     const res = { setHeader: jest.fn() };
-    const controller = new LinkMetadataController({ getMetadata: async () => null } as any);
+    const controller = new LinkMetadataController({ getMetadata: async () => null, groupSlugFromUrl: () => null } as any);
     expect(await controller.get({ url, v: 3 }, res as any)).toEqual({ data: null });
     expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
   });

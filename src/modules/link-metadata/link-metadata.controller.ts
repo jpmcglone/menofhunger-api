@@ -3,6 +3,7 @@ import { Controller, Get, Query, Res, UseGuards } from "@nestjs/common";
 import { z } from "zod";
 import type { Response } from "express";
 import { OptionalAuthGuard } from "../auth/optional-auth.guard";
+import { OptionalCurrentUserId } from "../users/users.decorator";
 import { LinkMetadataService } from "./link-metadata.service";
 import { Throttle } from "@nestjs/throttler";
 import {
@@ -32,8 +33,22 @@ export class LinkMetadataController {
   async get(
     @Query() query: unknown,
     @Res({ passthrough: true }) res: Response,
+    @OptionalCurrentUserId() viewerUserId?: string,
   ) {
     const parsed = getSchema.parse(query);
+    const groupSlug = this.linkMetadata.groupSlugFromUrl(parsed.url);
+    if (groupSlug) {
+      // Viewer-specific: a shared cache must never serve a verified card to anyone else.
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("Vary", "Cookie, Authorization");
+      return {
+        data: await this.linkMetadata.getGroupPreview(
+          parsed.url,
+          groupSlug,
+          viewerUserId ?? null,
+        ),
+      };
+    }
     const result = await this.linkMetadata.getMetadata(
       parsed.url,
       parsed.purpose === "profile",

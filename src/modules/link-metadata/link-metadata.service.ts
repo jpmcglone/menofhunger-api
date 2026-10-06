@@ -52,8 +52,22 @@ import {
   youtubeVideoId,
 } from "./youtube-link-metadata";
 
+export type GroupLinkPreviewDto = {
+  slug: string;
+  name: string;
+  description: string;
+  avatarUrl: string | null;
+  coverUrl: string | null;
+  memberCount: number;
+  joinPolicy: string;
+};
+
 export type LinkMetadataDto = {
   profile?: PublicProfileMetadata | null;
+  /** Rich group card; only present for verified viewers. */
+  group?: GroupLinkPreviewDto | null;
+  /** Set instead of `group` when the viewer must sign in or verify to see the card. */
+  locked?: "signIn" | "verify" | null;
   url: string;
   title: string | null;
   description: string | null;
@@ -223,6 +237,82 @@ export class LinkMetadataService {
       }
     }
     return false;
+  }
+
+  /** Slug when `url` points at a group on a Men of Hunger host (`/g/:slug` or `/groups/:slug/...`). */
+  groupSlugFromUrl(url: string): string | null {
+    const normalized = normalizeUrl(url);
+    if (!normalized) return null;
+    const u = new URL(normalized);
+    if (!this.isMohHost(u.hostname)) return null;
+    const [first, slug] = u.pathname.split("/").filter(Boolean);
+    if ((first !== "g" && first !== "groups") || !slug) return null;
+    if (first === "groups" && ["new", "invites", "mine"].includes(slug)) return null;
+    try {
+      return decodeURIComponent(slug).toLowerCase();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Group cards are verified-only: signed-out and unverified viewers get a locked stub that
+   * reveals nothing about the group. Never cache the result in shared caches.
+   */
+  async getGroupPreview(
+    url: string,
+    slug: string,
+    viewerUserId: string | null,
+  ): Promise<LinkMetadataDto> {
+    const base = {
+      url,
+      title: "Group",
+      imageUrl: null,
+      siteName: "Men of Hunger",
+      socialPost: null,
+      videoEmbed: null,
+      group: null,
+    };
+    if (!viewerUserId) {
+      return { ...base, description: "Sign in and verify to see this group.", locked: "signIn" };
+    }
+    const viewer = await this.prisma.user.findUnique({
+      where: { id: viewerUserId },
+      select: { verifiedStatus: true },
+    });
+    if (!viewer || !viewer.verifiedStatus || viewer.verifiedStatus === "none") {
+      return { ...base, description: "Verify to see this group.", locked: "verify" };
+    }
+    const group = await this.prisma.communityGroup.findFirst({
+      where: { slug, deletedAt: null },
+      select: {
+        slug: true,
+        name: true,
+        description: true,
+        avatarImageUrl: true,
+        coverImageUrl: true,
+        memberCount: true,
+        joinPolicy: true,
+      },
+    });
+    if (!group) return { ...base, title: "Group not found", description: null, locked: null };
+    const description = group.description.trim().slice(0, 300);
+    return {
+      ...base,
+      title: group.name,
+      description,
+      imageUrl: group.coverImageUrl ?? group.avatarImageUrl,
+      locked: null,
+      group: {
+        slug: group.slug,
+        name: group.name,
+        description,
+        avatarUrl: group.avatarImageUrl,
+        coverUrl: group.coverImageUrl,
+        memberCount: group.memberCount,
+        joinPolicy: group.joinPolicy,
+      },
+    };
   }
 
   async getMetadata(

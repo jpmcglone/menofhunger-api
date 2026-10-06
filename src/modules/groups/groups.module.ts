@@ -1,5 +1,6 @@
 import { ChannelAccessModule } from '../group-channels/channel-access.module';
 import { Module } from '@nestjs/common';
+import { EmailModule } from '../email/email.module';
 import { AuthModule } from '../auth/auth.module';
 import { PostsModule } from '../posts/posts.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -14,6 +15,7 @@ import { GroupsSideEffectsHandler } from './groups-side-effects.handler';
 @Module({
   imports: [ChannelAccessModule, 
     AuthModule,
+    EmailModule,
     PrismaModule,
     PostsModule,
     NotificationsModule,
