@@ -33,8 +33,28 @@ type MessageRef = {
   messageId: string;
   conversationId: string;
   isThumbnail: boolean;
+  sentAt: string;
+  senderId: string;
+  senderUsername: string | null;
+  senderName: string | null;
   channelId?: string;
+  channelName?: string;
+  channelPrivacy?: string;
   groupId?: string;
+  groupName?: string;
+  groupSlug?: string;
+};
+
+type ChannelUploadRef = {
+  uploadId: string;
+  channelId: string;
+  userId: string;
+  username: string | null;
+  channelName: string;
+  groupId: string;
+  groupName: string;
+  groupSlug: string;
+  expiresAt: string;
 };
 
 type UserRef = {
@@ -103,7 +123,7 @@ type PublicationRef = {
 };
 
 type AssetRefs = {
-  channelUploads: { uploadId: string; channelId: string; userId: string; expiresAt: string }[];
+  channelUploads: ChannelUploadRef[];
   posts: PostRef[];
   messages: MessageRef[];
   users: UserRef[];
@@ -357,9 +377,17 @@ export class AdminImageReviewService {
     if (protectedKeys.length) {
       const uploads = await this.prisma.groupChannelUpload.findMany({ where: {
         expiresAt: { gt: new Date() }, OR: [{ sourceKey: { in: protectedKeys } }, { r2Key: { in: protectedKeys } }],
-      }, select: { id: true, channelId: true, userId: true, sourceKey: true, r2Key: true, expiresAt: true } });
+      }, select: {
+        id: true, channelId: true, userId: true, sourceKey: true, r2Key: true, expiresAt: true,
+        user: { select: { username: true } },
+        channel: { select: { name: true, displayName: true, groupId: true, group: { select: { name: true, slug: true } } } },
+      } });
       for (const upload of uploads) for (const key of [upload.sourceKey, upload.r2Key]) {
-        result.get(key)?.channelUploads.push({ uploadId: upload.id, channelId: upload.channelId, userId: upload.userId, expiresAt: upload.expiresAt.toISOString() });
+        result.get(key)?.channelUploads.push({
+          uploadId: upload.id, channelId: upload.channelId, userId: upload.userId, username: upload.user.username,
+          channelName: upload.channel.displayName ?? upload.channel.name, groupId: upload.channel.groupId,
+          groupName: upload.channel.group.name, groupSlug: upload.channel.group.slug, expiresAt: upload.expiresAt.toISOString(),
+        });
       }
     }
 
@@ -411,7 +439,11 @@ export class AdminImageReviewService {
         messageId: true,
         r2Key: true,
         thumbnailR2Key: true,
-        message: { select: { conversationId: true, conversation: { select: { groupChannel: { select: { id: true, groupId: true } } } } } },
+        message: { select: {
+          conversationId: true, createdAt: true,
+          sender: { select: { id: true, username: true, name: true } },
+          conversation: { select: { groupChannel: { select: { id: true, name: true, displayName: true, privacy: true, groupId: true, group: { select: { name: true, slug: true } } } } } },
+        } },
       },
     });
     for (const m of msgMediaRows) {
@@ -419,7 +451,18 @@ export class AdminImageReviewService {
         messageMediaId: m.id,
         messageId: m.messageId,
         conversationId: m.message.conversationId,
-        ...(m.message.conversation?.groupChannel ? { channelId: m.message.conversation.groupChannel.id, groupId: m.message.conversation.groupChannel.groupId } : {}),
+        sentAt: m.message.createdAt.toISOString(),
+        senderId: m.message.sender.id,
+        senderUsername: m.message.sender.username,
+        senderName: m.message.sender.name,
+        ...(m.message.conversation?.groupChannel ? {
+          channelId: m.message.conversation.groupChannel.id,
+          channelName: m.message.conversation.groupChannel.displayName ?? m.message.conversation.groupChannel.name,
+          channelPrivacy: m.message.conversation.groupChannel.privacy,
+          groupId: m.message.conversation.groupChannel.groupId,
+          groupName: m.message.conversation.groupChannel.group.name,
+          groupSlug: m.message.conversation.groupChannel.group.slug,
+        } : {}),
         isThumbnail: false,
       };
       if (m.r2Key && keySet.has(m.r2Key)) {
@@ -849,6 +892,7 @@ export class AdminImageReviewService {
         const pollRef = refs.polls[0];
         const articleRef = refs.articles[0];
         const msgRef = refs.messages[0];
+        const upload = refs.channelUploads[0];
 
         out.push({
           id: a.id,
@@ -865,9 +909,14 @@ export class AdminImageReviewService {
           userId: userRef?.userId ?? null,
           profileUsername: userRef?.username ?? null,
           // New fields
-          groupId: groupRef?.groupId ?? null,
-          groupName: groupRef?.name ?? null,
-          groupSlug: groupRef?.slug ?? null,
+          groupId: groupRef?.groupId ?? msgRef?.groupId ?? upload?.groupId ?? null,
+          groupName: groupRef?.name ?? msgRef?.groupName ?? upload?.groupName ?? null,
+          groupSlug: groupRef?.slug ?? msgRef?.groupSlug ?? upload?.groupSlug ?? null,
+          channelId: msgRef?.channelId ?? upload?.channelId ?? null,
+          channelName: msgRef?.channelName ?? upload?.channelName ?? null,
+          channelPrivacy: msgRef?.channelPrivacy ?? null,
+          uploaderUsername: msgRef?.senderUsername ?? upload?.username ?? null,
+          uploaderId: msgRef?.senderId ?? upload?.userId ?? null,
           crewId: crewRef?.crewId ?? null,
           crewName: crewRef?.name ?? null,
           crewSlug: crewRef?.slug ?? null,

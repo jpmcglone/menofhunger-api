@@ -43,6 +43,12 @@ export class ChannelMessagesService {
     const states = await this.prisma.groupChannelThreadState.findMany({ where: { userId, rootMessageId: { in: roots } } });
     const follows = new Set(states.filter(s => s.following).map(s => s.rootMessageId));
     const receipts = await this.receipts(userId, groupId, channel, rows);
+    return this.render(userId, member.role, groupId, channel, rows, follows, receipts);
+  }
+
+  private render(userId: string, role: Parameters<typeof channelCapabilities>[1], groupId: string, channel: Parameters<typeof channelCapabilities>[0] & { id: string }, rows: MessageRow[], follows: Set<string>, receipts: Map<string, GroupChannelReceiptDto>): GroupChannelMessageDto[] {
+    const channelId = channel.id;
+    const member = { role };
     return rows.map(message => ({
       receipt: receipts.get(message.id) ?? null,
       ...toMessageDto({ message: { ...message, media: [] }, publicBaseUrl: this.config.r2()?.publicBaseUrl ?? null, viewerUserId: userId }),
@@ -69,7 +75,7 @@ export class ChannelMessagesService {
    * Read counts for the viewer's own messages. A top-level message is read once a member's channel
    * position passes it; a reply once their position in that thread does. The sender is never counted.
    */
-  private async receipts(userId: string, groupId: string, channel: { id: string; privacy: string }, rows: MessageRow[]) {
+  private async receipts(userId: string, groupId: string, channel: { id: string; privacy: string }, rows: MessageRow[], known?: Array<{ userId: string }>) {
     const own = rows.filter(message => message.senderId === userId && !message.deletedForAll && message.channelSequence);
     const result = new Map<string, GroupChannelReceiptDto>();
     if (!own.length) return result;
@@ -80,7 +86,7 @@ export class ChannelMessagesService {
     const top = own.filter(message => !message.threadRootId).map(message => message.id);
     const replies = own.filter(message => message.threadRootId).map(message => message.id);
     const [recipients, topCounts, replyCounts] = await Promise.all([
-      this.access.recipients(groupId, channel.id),
+      known ?? this.access.recipients(groupId, channel.id),
       top.length ? this.prisma.$queryRaw<Array<{ id: string; reads: number }>>(Prisma.sql`
         SELECT m.id, COUNT(*)::int AS reads FROM "Message" m
         JOIN "GroupChannelViewerState" r ON r."channelId" = ${channel.id} AND r."userId" <> m."senderId" AND r."readThrough" >= m."channelSequence"
@@ -124,15 +130,25 @@ export class ChannelMessagesService {
     const message = await this.prisma.message.findFirst({ where: { id: messageId, conversationId: channel.conversationId }, include: MESSAGE_INCLUDE });
     if (!message) return;
     const root = message.threadRootId ? await this.prisma.message.findUnique({ where: { id: message.threadRootId }, include: MESSAGE_INCLUDE }) : null;
-    for (const { userId } of await this.access.recipients(groupId, channelId)) {
-      try {
-        const snapshot = await this.channels.details(userId, groupId, channelId);
-        const messages = await this.present(userId, groupId, channelId, root ? [root, message] : [message]);
-        this.realtime.emitGroupChannelMessages(userId, { groupId, channel: snapshot, messages });
-      } catch (error) {
-        if (!(error instanceof NotFoundException)) throw error;
-        // Access changed during fan-out. No snapshot is delivered to that viewer.
-      }
+    const rows = root ? [root, message] : [message];
+    const recipients = await this.access.recipients(groupId, channelId);
+    const [snapshots, states] = await Promise.all([
+      this.channels.viewerSnapshots(channelId, recipients),
+      this.prisma.groupChannelThreadState.findMany({
+        where: { userId: { in: recipients.map(r => r.userId) }, rootMessageId: { in: rows.map(m => m.threadRootId ?? m.id) }, following: true },
+        select: { userId: true, rootMessageId: true },
+      }),
+    ]);
+    const followsByUser = new Map<string, Set<string>>();
+    for (const state of states) followsByUser.set(state.userId, (followsByUser.get(state.userId) ?? new Set()).add(state.rootMessageId));
+    const owners = new Set(rows.map(m => m.senderId));
+    const receiptsByOwner = new Map<string, Map<string, GroupChannelReceiptDto>>();
+    for (const owner of owners) if (recipients.some(r => r.userId === owner)) receiptsByOwner.set(owner, await this.receipts(owner, groupId, channel, rows, recipients));
+    for (const recipient of recipients) {
+      const snapshot = snapshots.get(recipient.userId);
+      if (!snapshot) continue;
+      const messages = this.render(recipient.userId, recipient.role, groupId, channel, rows, followsByUser.get(recipient.userId) ?? new Set(), receiptsByOwner.get(recipient.userId) ?? new Map());
+      this.realtime.emitGroupChannelMessages(recipient.userId, { groupId, channel: snapshot, messages });
     }
   }
 

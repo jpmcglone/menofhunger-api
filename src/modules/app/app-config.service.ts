@@ -203,14 +203,9 @@ export class AppConfigService {
     };
   }
 
+  /** Channel uploads share the main R2 bucket; the protected `channel-uploads/` prefix is only ever served through the authorized API. */
   channelMediaBucket(): string | null {
-    const bucket = this.config.get<string>("R2_CHANNEL_BUCKET_NAME")?.trim();
-    const publicBucket = this.r2()?.bucket;
-    // Refuse configuration that could expose protected uploads via the public bucket.
-    if (bucket) return bucket !== publicBucket ? bucket : null;
-    // Local development has one bucket; keys stay under the protected `dev/channel-uploads/` prefix
-    // and are only ever served through the authorized API. Production must configure a private bucket.
-    return !this.isProd() && publicBucket ? publicBucket : null;
+    return this.r2()?.bucket ?? null;
   }
 
   groupChannels() {

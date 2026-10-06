@@ -10,7 +10,7 @@ Channels are on by default; set `GROUP_CHANNELS_ENABLED=false` to turn them off.
 
 - [x] 0: Figma reconciliation, complete action/state inventory.
 - [x] 1: schema, access, capabilities, lifecycle, provisioning, ownership transfer.
-- [x] 2: messages, threads, reactions, pins, search, idempotency, reports, protected media. Protected media still needs a private channel bucket (`R2_CHANNEL_BUCKET_NAME`) for a live upload check.
+- [x] 2: messages, threads, reactions, pins, search, idempotency, reports, protected media. Protected media shares the main R2 bucket under `channel-uploads/` and is only served through the authorized API.
 - [x] 3: realtime, revocation, attention, preferences, push and badges.
 - [x] 4: iOS navigation, timelines, management, actions, destination drafts.
 - [x] 5: web parity, keyboard/touch, hydration.
@@ -46,4 +46,4 @@ All three repositories are on main. The migration is applied to the local develo
 - iOS: format, strict lint, simulator build and the full 1,169-test suite pass.
 - Local two-user check on localhost: sends, replies, reactions, deletions and deleted-root placeholders update live; group search spans readable channels and opens the matched message; the Posts tab badge updates live; ownership transfer is offered to owners.
 
-Remaining gates: a live protected-media upload once a private channel bucket exists, MARV's separate second stage, and pilot/rollout acceptance. No pilot or production flag has been enabled.
+Remaining gates: a live protected-media upload, MARV's separate second stage, and pilot/rollout acceptance. No pilot or production flag has been enabled.

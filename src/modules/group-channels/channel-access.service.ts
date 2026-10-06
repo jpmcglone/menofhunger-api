@@ -88,7 +88,7 @@ export class ChannelAccessService {
         verifiedStatus: { not: 'none' },
         ...(channel.privacy === 'private' ? { channelAccess: { some: { channelId } } } : {}),
       } },
-      select: { userId: true },
+      select: { userId: true, role: true },
     });
   }
 }

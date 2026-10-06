@@ -52,12 +52,15 @@ describe("profile and publication media ownership", () => {
       prisma.messageMedia.findMany.mockResolvedValue([{
         id: 'media', messageId: 'message', r2Key: file === 'poster.jpg' ? 'other' : channelKey,
         thumbnailR2Key: file === 'poster.jpg' ? channelKey : null,
-        message: { conversationId: 'conversation', conversation: { groupChannel: { id: 'channel', groupId: 'group' } } },
+        message: {
+          conversationId: 'conversation', createdAt: new Date('2026-10-06T18:00:00Z'), sender: { id: 'member', username: 'marcus', name: 'Marcus' },
+          conversation: { groupChannel: { id: 'channel', name: 'general', displayName: null, privacy: 'private', groupId: 'group', group: { name: 'Iron Brothers', slug: 'iron-brothers' } } },
+        },
       }]);
       const result = await service.getById('asset');
       expect(result.asset.primaryType).toBe(file === 'poster.jpg' ? 'message_thumbnail' : 'message');
       expect(result.asset.publicUrl).toBeNull();
-      expect(result.references.messages[0]).toMatchObject({ channelId: 'channel', groupId: 'group' });
+      expect(result.references.messages[0]).toMatchObject({ channelId: 'channel', channelName: 'general', groupId: 'group', groupName: 'Iron Brothers', senderUsername: 'marcus' });
       expect((await service.list({ limit: 30, cursor: null, onlyOrphans: true })).items).toEqual([]);
       await expect(service.deleteById({ id: 'asset', adminUserId: 'admin', reason: 'cleanup', onlyOrphans: true }))
         .rejects.toThrow('no longer an orphan');
@@ -71,6 +74,7 @@ describe("profile and publication media ownership", () => {
     const { prisma, service } = setup(channelKey);
     prisma.groupChannelUpload.findMany.mockResolvedValue([{
       id: 'upload', channelId: 'channel', userId: 'member', sourceKey: 'other-source', r2Key: 'other-final',
+      user: { username: 'marcus' }, channel: { name: 'general', displayName: null, groupId: 'group', group: { name: 'Iron Brothers', slug: 'iron-brothers' } },
       [field]: channelKey, expiresAt: new Date(Date.now() + 86_400_000),
     }]);
     expect((await service.getById('asset')).asset.primaryType).toBe('channel_upload');
@@ -100,7 +104,7 @@ describe("profile and publication media ownership", () => {
           messageId: "message",
           r2Key: voiceKey,
           thumbnailR2Key: null,
-          message: { conversationId: "chat" },
+          message: { conversationId: "chat", createdAt: new Date("2026-10-06T18:00:00Z"), sender: { id: "member", username: "marcus", name: "Marcus" }, conversation: null },
         },
       ]);
       expect((await service.getById("asset")).asset.primaryType).toBe(
