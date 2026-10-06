@@ -682,16 +682,8 @@ export class NotificationPushService {
    * across both channels, keyed by the resolved push tag so distinct subjects each
    * have their own window.
    *
-   * When suppressActiveWebChannel is true (actor-driven notifications only):
-   *   - The web VAPID channel is skipped if the user has an active web socket.
-   *     The realtime event already updates the badge in-app; a browser banner on top
-   *     is noise the user didn't ask for.
-   *   - iOS / APNs is NEVER suppressed here. The iOS app intercepts foreground
-   *     deliveries via UNUserNotificationCenterDelegate and decides whether to
-   *     show a banner — that decision belongs to the client, not the server.
-   *   - If the web channel is the only one and it's suppressed, the coalesce record
-   *     is NOT written so the next event that lands while they're offline isn't blocked.
-   * System-originated pushes (streak, reply-nudge, crew-streak) and DMs do NOT pass this flag.
+   * Always deliver to registered devices. A connected/recently active socket does
+   * not prove a browser window is focused; the service worker owns that decision.
    */
   async sendWebPushToRecipient(
     recipientUserId: string,
@@ -718,9 +710,6 @@ export class NotificationPushService {
       actorName?: string | null;
       groupInviteId?: string | null;
       postId?: string | null;
-      /** @deprecated Use suppressActiveWebChannel instead. Kept for call-site compat; maps to suppressActiveWebChannel. */
-      suppressActiveChannels?: boolean;
-      suppressActiveWebChannel?: boolean;
       /** When the recipient is a page, skip this actor if they operate it. */
       actorUserId?: string | null;
     },
@@ -823,35 +812,23 @@ export class NotificationPushService {
       }
     }
 
-    // Web VAPID: suppress when the *recipient* is actively connected on the web — the
-    // realtime event already updated their badge. suppressActiveChannels is the legacy name.
-    const suppressWeb =
-      (params.suppressActiveWebChannel === true || params.suppressActiveChannels === true) &&
-      this.presence.isUserActivelyOnChannel(recipientUserId, 'web');
-
-    if (!suppressWeb) {
-      for (const tokenOwnerId of tokenOwners) {
-        await this.sendWebPushOnly(tokenOwnerId, {
-          payload: JSON.stringify({
-            title: titleForOwner(tokenOwnerId),
-            body,
-            notificationId: params.notificationId ?? undefined,
-            url,
-            tag,
-            kind,
-            icon: params.icon ?? undefined,
-            badge: params.badge ?? '/android-chrome-192x192.png',
-            renotify: Boolean(params.renotify),
-            test: params.test === true,
-            recipientUserId,
-            recipientUsername,
-          }),
-        });
-      }
-    } else {
-      this.logger.debug(`[push] Suppressed web push for ${kind} — user ${recipientUserId} is active on web`);
-      // Don't record coalesce: the user is online now but may miss the next event while offline.
-      return;
+    for (const tokenOwnerId of tokenOwners) {
+      await this.sendWebPushOnly(tokenOwnerId, {
+        payload: JSON.stringify({
+          title: titleForOwner(tokenOwnerId),
+          body,
+          notificationId: params.notificationId ?? undefined,
+          url,
+          tag,
+          kind,
+          icon: params.icon ?? undefined,
+          badge: params.badge ?? '/android-chrome-192x192.png',
+          renotify: Boolean(params.renotify),
+          test: params.test === true,
+          recipientUserId,
+          recipientUsername,
+        }),
+      });
     }
 
     if (!params.test) {
@@ -1351,7 +1328,6 @@ export class NotificationPushService {
         badge: '/android-chrome-192x192.png',
         renotify: true,
         kind,
-        suppressActiveWebChannel: true,
         actorUserId,
         ...(params.sourceLabel ? { sourceLabel: params.sourceLabel } : {}),
       }).catch((err) => {

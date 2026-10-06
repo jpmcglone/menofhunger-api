@@ -1,6 +1,6 @@
 /**
  * Unit tests for NotificationPushService focusing on:
- *   1. Per-channel presence suppression (suppressActiveChannels)
+ *   1. Delivery independent of socket presence
  *   2. Per-subject coalescing keyed by resolved tag, not just kind
  */
 import { NotificationPushService } from './notification-push.service';
@@ -280,7 +280,7 @@ describe('NotificationPushService — human-readable copy', () => {
   });
 });
 
-describe('NotificationPushService — per-channel suppression', () => {
+describe('NotificationPushService — channel delivery', () => {
   beforeEach(() => {
     webpush.sendNotification.mockReset();
     webpush.sendNotification.mockResolvedValue({});
@@ -413,7 +413,7 @@ describe('NotificationPushService — per-channel suppression', () => {
       title: 'New reply',
       tag: 'notif-comment-post-p1',
       kind: 'comment',
-      suppressActiveChannels: true,
+
     });
     expect(apnsSendToUser).toHaveBeenCalledTimes(1);
     expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
@@ -428,7 +428,7 @@ describe('NotificationPushService — per-channel suppression', () => {
       title: 'New reply',
       tag: 'notif-comment-post-p1',
       kind: 'comment',
-      suppressActiveWebChannel: true,
+
     });
     // iOS always receives the push; UNUserNotificationCenterDelegate handles display.
     expect(apnsSendToUser).toHaveBeenCalledTimes(1);
@@ -436,7 +436,7 @@ describe('NotificationPushService — per-channel suppression', () => {
     expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('skips web but sends APNs when user is active on web only', async () => {
+  it('delivers web and APNs even with a recently active web socket', async () => {
     const { svc, apnsSendToUser } = makeService({
       presence: makePresence({ iosActive: false, webActive: true }),
     });
@@ -444,13 +444,13 @@ describe('NotificationPushService — per-channel suppression', () => {
       title: 'New reply',
       tag: 'notif-comment-post-p1',
       kind: 'comment',
-      suppressActiveChannels: true,
+
     });
     expect(apnsSendToUser).toHaveBeenCalledTimes(1);
-    expect(webpush.sendNotification).not.toHaveBeenCalled();
+    expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('sends APNs and skips web (no coalesce recorded) when active on both', async () => {
+  it('delivers and records coalescing when connected on both channels', async () => {
     const { svc, apnsSendToUser, prisma } = makeService({
       presence: makePresence({ iosActive: true, webActive: true }),
     });
@@ -458,16 +458,16 @@ describe('NotificationPushService — per-channel suppression', () => {
       title: 'New reply',
       tag: 'notif-comment-post-p1',
       kind: 'comment',
-      suppressActiveWebChannel: true,
+
     });
     // iOS always fires.
     expect(apnsSendToUser).toHaveBeenCalledTimes(1);
-    // Web is suppressed (user is online); coalesce is not recorded so the next offline event isn't blocked.
-    expect(webpush.sendNotification).not.toHaveBeenCalled();
-    expect(prisma.pushCoalesce.upsert).not.toHaveBeenCalled();
+    // Browser focus is evaluated by the service worker, not server presence.
+    expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
+    expect(prisma.pushCoalesce.upsert).toHaveBeenCalledTimes(1);
   });
 
-  it('sends to both channels when suppressActiveChannels is NOT set, even if active on both', async () => {
+  it('delivers system notifications when connected on both channels', async () => {
     const { svc, apnsSendToUser } = makeService({
       presence: makePresence({ iosActive: true, webActive: true }),
     });
@@ -475,22 +475,19 @@ describe('NotificationPushService — per-channel suppression', () => {
       title: 'Have you checked in today?',
       tag: 'streak-reminder-user-1',
       kind: 'checkin_reminder',
-      // suppressActiveChannels omitted — system push, should always fan out
     });
     expect(apnsSendToUser).toHaveBeenCalledTimes(1);
     expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('treats idle user as inactive for channel suppression (idle = should still get push)', async () => {
+  it('delivers to idle users', async () => {
     const presence = makePresence({ iosActive: false, webActive: false });
-    // isUserActivelyOnChannel already returns false when idle (see PresenceService impl),
-    // so here we just verify the call path: channel checks happen and both fire.
     const { svc, apnsSendToUser } = makeService({ presence });
     await svc.sendWebPushToRecipient('user-1', {
       title: 'New mention',
       tag: 'notif-mention-actor-a1',
       kind: 'mention',
-      suppressActiveChannels: true,
+
     });
     expect(apnsSendToUser).toHaveBeenCalledTimes(1);
     expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
