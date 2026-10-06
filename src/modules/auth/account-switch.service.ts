@@ -1,3 +1,4 @@
+import { BadgeSummaryService } from '../../common/badges/badge-summary.service';
 import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import {
   BadRequestException,
@@ -6,7 +7,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { AccountKind, Prisma } from '@prisma/client';
+import { AccountKind } from '@prisma/client';
 import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -22,6 +23,7 @@ export class AccountSwitchService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly auth: AuthService,
+    private readonly badges: BadgeSummaryService = new BadgeSummaryService(prisma),
   ) {}
 
   private get publicBaseUrl(): string | null {
@@ -191,53 +193,12 @@ export class AccountSwitchService {
     return { displayedIds: [...sourceByDisplayedId.keys()], sourceByDisplayedId };
   }
 
-  /** Bell + groups + chat unread for one identity (switcher row). */
   async unreadBadgeCountForUser(userId: string): Promise<number> {
-    const counts = await this.unreadBadgeCounts([userId]);
-    return counts.get(userId) ?? 0;
+    return (await this.badges.forIdentity(userId)).unreadBadgeCount;
   }
 
-  private async unreadBadgeCounts(userIds: string[]): Promise<Map<string, number>> {
-    const ids = [...new Set(userIds.map((id) => String(id ?? '').trim()).filter(Boolean))];
-    const out = new Map<string, number>();
-    if (ids.length === 0) return out;
-
-    const users = await this.prisma.user.findMany({
-      where: { id: { in: ids } },
-      select: {
-        id: true,
-        undeliveredNotificationCount: true,
-        undeliveredGroupPostCount: true,
-      },
-    });
-    const chatByUser = await this.messageUnreadByUserIds(ids);
-    for (const user of users) {
-      const bell = Math.max(0, Math.floor(Number(user.undeliveredNotificationCount) || 0));
-      const groups = Math.max(0, Math.floor(Number(user.undeliveredGroupPostCount) || 0));
-      const chat = chatByUser.get(user.id) ?? 0;
-      out.set(user.id, bell + groups + chat);
-    }
-    return out;
-  }
-
-  private async messageUnreadByUserIds(userIds: string[]): Promise<Map<string, number>> {
-    const out = new Map<string, number>();
-    if (userIds.length === 0) return out;
-    const rows = await this.prisma.$queryRaw<Array<{ userId: string; count: bigint | number }>>(
-      Prisma.sql`
-        SELECT mp."userId" AS "userId", COUNT(m.id)::int AS count
-        FROM "MessageParticipant" mp
-        INNER JOIN "Message" m ON m."conversationId" = mp."conversationId"
-        WHERE mp."userId" IN (${Prisma.join(userIds)})
-          AND m."senderId" <> mp."userId"
-          AND (mp."lastReadAt" IS NULL OR m."createdAt" > mp."lastReadAt")
-        GROUP BY mp."userId"
-      `,
-    );
-    for (const row of rows) {
-      out.set(row.userId, Math.max(0, Math.floor(Number(row.count) || 0)));
-    }
-    return out;
+  async badgeSummaryForUser(userId: string) {
+    return this.badges.forIdentity(userId);
   }
 
   async listAccounts(params: {
@@ -292,7 +253,7 @@ export class AccountSwitchService {
     }
 
     const rows = [operator, ...operated.map((r) => r.page).filter((p) => !p.bannedAt)];
-    const unreadByUser = await this.unreadBadgeCounts(rows.map((row) => row.id));
+    const unreadByUser = await this.badges.forIdentities(rows.map((row) => row.id));
     return rows.map((row) => ({
       id: row.id,
       username: row.username,
@@ -305,7 +266,8 @@ export class AccountSwitchService {
       accountKind: row.accountKind,
       isOrganization: row.isOrganization,
       isCurrent: row.id === params.effectiveUserId,
-      unreadBadgeCount: unreadByUser.get(row.id) ?? 0,
+      unreadBadgeCount: unreadByUser.get(row.id)?.unreadBadgeCount ?? 0,
+      hasUnreadNotifications: unreadByUser.get(row.id)?.hasUnreadNotifications ?? false,
     }));
   }
 

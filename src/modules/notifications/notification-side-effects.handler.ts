@@ -157,9 +157,9 @@ export class NotificationSideEffectsHandler implements OnModuleInit {
     if (!userId) return;
     const cluster = await this.accountSwitch.listClusterUserIds(userId);
     if (cluster.length <= 1) return;
-    const unreadBadgeCount = await this.accountSwitch.unreadBadgeCountForUser(userId);
+    const summary = await this.accountSwitch.badgeSummaryForUser(userId);
     for (const id of cluster) {
-      this.presenceRealtime.emitAccountsBadgeUpdated(id, { userId, unreadBadgeCount });
+      this.presenceRealtime.emitAccountsBadgeUpdated(id, { userId, ...summary });
     }
   }
 }

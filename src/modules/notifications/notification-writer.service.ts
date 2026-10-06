@@ -104,9 +104,12 @@ export class NotificationWriterService {
     recipientUserId: string,
     payload: { undeliveredCount: number },
   ): void {
-    const emit = () =>
+    const emit = () => {
       this.presenceRealtime.emitNotificationsUpdated(recipientUserId, payload);
-    void this.readState.emitNavUnreadForUser(recipientUserId);
+      void this.readState.emitNavUnreadForUser(recipientUserId);
+    };
+    this.sideEffects.dispatch('account.cluster.badge', { userId: recipientUserId });
+    this.sideEffects.dispatch('notification.badge.sync', { recipientUserId });
     if (!this.cacheInvalidation) {
       emit();
       return;
@@ -697,8 +700,7 @@ export class NotificationWriterService {
     this.presenceRealtime.emitNotificationsDeleted(recipientUserId, {
       notificationIds: [existing.id],
     });
-    if (wasUndelivered)
-      this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount });
+    this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount });
   }
 
   /** Remove an article boost notification when the booster takes it back. */
@@ -732,8 +734,7 @@ export class NotificationWriterService {
     this.presenceRealtime.emitNotificationsDeleted(recipientUserId, {
       notificationIds: [existing.id],
     });
-    if (wasUndelivered)
-      this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount });
+    this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount });
   }
 
   /**
@@ -919,8 +920,7 @@ export class NotificationWriterService {
     this.presenceRealtime.emitNotificationsDeleted(recipientUserId, {
       notificationIds: [existing.id],
     });
-    if (wasUndelivered)
-      this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount });
+    this.emitBellAndInvalidateList(recipientUserId, { undeliveredCount });
   }
 
   private async deleteNotificationRowsAndEmit(
@@ -998,6 +998,11 @@ export class NotificationWriterService {
       this.presenceRealtime.emitNotificationsDeleted(uid, {
         notificationIds: notifIds,
       });
+      if (!updatedCountByRecipient.has(uid)) {
+        void this.readState.emitNavUnreadForUser(uid);
+        this.sideEffects.dispatch('account.cluster.badge', { userId: uid });
+        void this.cacheInvalidation?.bumpNotificationsList(uid);
+      }
     }
 
     for (const [uid, undeliveredCount] of updatedCountByRecipient) {

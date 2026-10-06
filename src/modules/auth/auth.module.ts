@@ -1,3 +1,4 @@
+import { BadgeSummaryService } from '../../common/badges/badge-summary.service';
 import { Module } from '@nestjs/common';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -22,6 +23,7 @@ import { OnlineMembersService } from '../presence/online-members.service';
     BrowserHandoffService,
     ImpersonationService,
     AccountSwitchService,
+    BadgeSummaryService,
     // Needs AccountSwitchService; lives here so presence, users, and the gateway can all share it.
     OnlineMembersService,
     AccountDeletionService,
@@ -38,6 +40,7 @@ import { OnlineMembersService } from '../presence/online-members.service';
     AuthGuard,
     ImpersonationService,
     AccountSwitchService,
+    BadgeSummaryService,
     OnlineMembersService,
     AuthCleanupCron,
     AccountDeletionFinalizeCron,

@@ -10,10 +10,10 @@ Two clocks. Do not collapse them.
 
 | State | Field | User meaning | UI |
 | --- | --- | --- | --- |
-| **Unseen** | `deliveredAt == null` | Has not opened/seen the inbox since it arrived | **Badge** (app icon, bell count, `undeliveredCount`) |
-| **Unread** | `readAt == null` | Has not opened the item / marked it read | **Highlight** on the row |
+| **Unseen** | `deliveredAt == null` | Has not opened/seen the inbox since it arrived | **Numeric badge** (app icon, bell count, `undeliveredCount`) |
+| **Unread** | `readAt == null` | Has not opened the item / marked it read | **Dot** when the numeric count is zero; **highlight** on the row |
 
-Opening the notifications surface marks **seen** (`deliveredAt`). That clears the badge. Row unread state comes from **read** (`readAt`).
+Opening the notifications surface marks **seen** (`deliveredAt`). That clears the number; a tier-colored dot remains while `readAt == null` notifications exist. Row unread state comes from **read** (`readAt`).
 
 Post previews can be marked read automatically while visible. Retain their unread highlight
 for the current inbox visit even after that acknowledgement. Seed the highlight from actual
@@ -23,4 +23,9 @@ pagination, and filter changes; reset on leaving/re-entering or account changes.
 
 Clicking through (or mark-read) sets `readAt` and should also set `deliveredAt` if it was still null.
 
-Never drive the badge off `readAt`. Never drive row highlight off `deliveredAt`.
+Never drive the numeric badge off `readAt`. Never drive the unread dot or row highlight off `deliveredAt`.
+
+Board and Articles navigation show only unread dots, across the entire section. Account badges
+prioritize their combined numeric total, then fall back to unread notification existence.
+Opening one identity’s inbox does not acknowledge another identity. Activity badge colors
+follow the active identity’s tier. The native iOS Home Screen badge remains numeric only.

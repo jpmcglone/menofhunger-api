@@ -475,6 +475,7 @@ export class MessagesService {
         requestUnreadCount: counts.requests,
       });
       this.sideEffects.dispatch('account.cluster.badge', { userId });
+      this.sideEffects.dispatch('notification.badge.sync', { recipientUserId: userId });
       const state = this.unreadEmitState.get(userId);
       if (state) {
         state.lastEmitAt = Date.now();

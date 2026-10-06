@@ -67,7 +67,7 @@ const markReadBodySchema = z.object({
   crew_id: z.string().trim().min(1).optional(),
   group_id: z.string().trim().min(1).optional(),
   board_thread_id: z.string().trim().min(1).optional(),
-  filter: z.enum(['board']).optional(),
+  filter: z.enum(['board', 'articles']).optional(),
 }).refine(
   (d) => d.post_id ?? d.user_id ?? d.article_id ?? d.crew_id ?? d.group_id ?? d.board_thread_id ?? d.filter,
   { message: 'At least one of post_id, user_id, article_id, crew_id, group_id, board_thread_id, or filter is required' },
@@ -367,8 +367,8 @@ export class NotificationsController {
     @Body() body: unknown,
   ) {
     const parsed = markReadBodySchema.parse(body);
-    if (parsed.filter === 'board') {
-      await this.notifications.markReadByFilter(userId, 'board');
+    if (parsed.filter) {
+      await this.notifications.markReadByFilter(userId, parsed.filter);
       return { data: {} };
     }
     await this.notifications.markReadBySubject(userId, {

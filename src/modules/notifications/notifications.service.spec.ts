@@ -29,6 +29,7 @@ const noopCache: any = {
 };
 
 function buildFacade(deps: FacadeDeps) {
+  deps.prisma.userMute ??= { findMany: jest.fn(async () => []) };
   const preferences = new NotificationPreferencesService(deps.prisma, noopCache);
   const apnsPush = new ApnsPushService(deps.prisma, deps.appConfig, noopCache);
   const push = new NotificationPushService(deps.prisma, deps.appConfig, deps.presence, preferences, apnsPush, noopCache);
@@ -918,7 +919,7 @@ describe('NotificationsService.list batching', () => {
 });
 
 describe('NotificationsService.getUndeliveredCount', () => {
-  it('reads the denormalized User counter without counting notification rows', async () => {
+  it('counts eligible unseen rows rather than trusting a stale denormalized counter', async () => {
     const { svc, prisma } = makeService({
       prisma: {
         notification: {
@@ -933,12 +934,12 @@ describe('NotificationsService.getUndeliveredCount', () => {
       } as any,
     });
 
-    await expect(svc.getUndeliveredCount('u_recipient')).resolves.toBe(99);
+    await expect(svc.getUndeliveredCount('u_recipient')).resolves.toBe(4);
     expect(prisma.user.findUnique).toHaveBeenCalledWith({
       where: { id: 'u_recipient' },
-      select: { undeliveredNotificationCount: true, accountKind: true },
+      select: { accountKind: true },
     });
-    expect(prisma.notification.count).not.toHaveBeenCalled();
+    expect(prisma.notification.count).toHaveBeenCalled();
   });
 
   it('live-counts the page bell excluding check-in and daily-content kinds', async () => {
@@ -1084,11 +1085,15 @@ describe('NotificationsService.markNewPostsRead', () => {
 describe('NotificationReadStateService board thread read + nav dots', () => {
   function build(counts: number[]) {
     const notification = {
+      findFirst: jest.fn(async () => ({ id: 'unread' })),
       updateMany: jest.fn(async () => ({ count: 2 })),
       count: jest.fn(async () => counts.shift() ?? 0),
     };
     const prisma = {
       notification,
+      user: { findUnique: jest.fn(async () => ({ accountKind: 'person' })) },
+      userBlock: { findMany: jest.fn(async () => []) },
+      userMute: { findMany: jest.fn(async () => []) },
       $transaction: jest.fn(async (fn: (tx: any) => Promise<any>) => fn({ notification, $executeRaw: jest.fn() })),
     };
     const presenceRealtime = {
@@ -1107,6 +1112,13 @@ describe('NotificationReadStateService board thread read + nav dots', () => {
 
   it('reads every notification in the thread, including nested replies, and clears the thread for other tabs', async () => {
     const { readState, notification, presenceRealtime } = build([4, 1, 0, 3]);
+    notification.count.mockImplementation(async (...args: any[]) => {
+      const where = args[0]?.where;
+      if (where?.deliveredAt === null) return 4;
+      if (where?.subjectArticleId) return 0;
+      if (where?.kind === 'comment') return 3;
+      return 1;
+    });
 
     await readState.markReadBySubject('viewer-1', { boardThreadId: 't1' });
 
@@ -1121,15 +1133,17 @@ describe('NotificationReadStateService board thread read + nav dots', () => {
     });
     await new Promise((resolve) => setImmediate(resolve));
     expect(presenceRealtime.emitNotificationsNavUnreadChanged).toHaveBeenCalledWith('viewer-1', {
+      undeliveredCount: 4,
       boardUnreadCount: 1,
       articlesUnreadCount: 0,
+      hasUnreadNotifications: true,
     });
   });
 
   it('counts unread Board and article notifications separately from the bell', async () => {
     const { readState, notification } = build([2, 5]);
 
-    await expect(readState.getNavUnread('viewer-1')).resolves.toEqual({ boardUnreadCount: 2, articlesUnreadCount: 5 });
+    await expect(readState.getNavUnread('viewer-1')).resolves.toEqual({ boardUnreadCount: 2, articlesUnreadCount: 5, hasUnreadNotifications: true });
     expect(notification.count).toHaveBeenCalledWith({
       where: expect.objectContaining({ recipientUserId: 'viewer-1', readAt: null, subjectArticleId: { not: null } }),
     });
@@ -1149,7 +1163,13 @@ describe('NotificationReadStateService board thread read + nav dots', () => {
   });
 
   it('explicit bulk read reads and delivers Board activity through the invocation time', async () => {
-    const { readState, notification, presenceRealtime } = build([7, 0, 2]);
+    const { readState, notification, presenceRealtime } = build([]);
+    notification.count.mockImplementation(async (...args: any[]) => {
+      const where = args[0]?.where;
+      if (where?.deliveredAt === null) return 7;
+      if (where?.subjectArticleId) return 2;
+      return 0;
+    });
 
     await readState.markReadByFilter('viewer-1', 'board');
 
@@ -1170,10 +1190,29 @@ describe('NotificationReadStateService board thread read + nav dots', () => {
     expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalledWith('viewer-1', { undeliveredCount: 7 });
     await new Promise((resolve) => setImmediate(resolve));
     expect(presenceRealtime.emitNotificationsNavUnreadChanged).toHaveBeenCalledWith('viewer-1', {
+      undeliveredCount: 7,
       boardUnreadCount: 0,
       articlesUnreadCount: 2,
+      hasUnreadNotifications: true,
     });
   });
+  it('keeps the unread dot after seen and clears it only after read', async () => {
+    const { readState, notification } = build([0, 0, 0, 0]);
+    expect((await readState.getNavUnread('viewer-1')).hasUnreadNotifications).toBe(true);
+    notification.findFirst.mockResolvedValueOnce(null as any);
+    expect((await readState.getNavUnread('viewer-1')).hasUnreadNotifications).toBe(false);
+    for (const [query] of notification.count.mock.calls as any) expect(query.where.deliveredAt).toBeUndefined();
+  });
+
+  it('bulk reads Articles without matching Board or later arrivals', async () => {
+    const { readState, notification } = build([0, 0, 0]);
+    await readState.markReadByFilter('viewer-1', 'articles');
+    expect(notification.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ recipientUserId: 'viewer-1', subjectArticleId: { not: null }, readAt: null, createdAt: { lte: expect.any(Date) } }),
+      data: { readAt: expect.any(Date) },
+    });
+  });
+
 });
 
 // ---------------------------------------------------------------------------

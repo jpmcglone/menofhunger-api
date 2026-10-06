@@ -1,3 +1,4 @@
+import { startSpan } from '@sentry/nestjs';
 import {
   BadRequestException,
   Body,
@@ -210,7 +211,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<{ data: AuthMeDto | null }> {
     const token = getSessionCookie(req);
-    const sessionResult = await this.auth.meFromSessionToken(token);
+    const sessionResult = await startSpan({ name: 'auth.me.session', op: 'auth.me' }, () => this.auth.meFromSessionToken(token));
     if (!sessionResult?.user?.id) return { data: null };
 
     if (sessionResult.renewed && token) {
@@ -221,7 +222,8 @@ export class AuthController {
     // not in every auth guard invocation.
     let { user } = sessionResult;
     if (token) {
-      user = await this.auth.runMeChecks(token, user.id, (user as any).pinnedPostId ?? null, user);
+      user = await startSpan({ name: 'auth.me.checks', op: 'auth.me' }, () =>
+        this.auth.runMeChecks(token, user.id, (user as any).pinnedPostId ?? null, user));
     }
 
     const notifications = this.moduleRef.get(NotificationsService, { strict: false });
@@ -257,16 +259,16 @@ export class AuthController {
       impersonationRes,
       accountSwitchRes,
     ] = await Promise.allSettled([
-      notifications?.getUndeliveredCount(user.id) ?? Promise.resolve(0),
-      notifications?.getUnreadCommentCount(user.id) ?? Promise.resolve(0),
-      notifications?.getGroupsUnread(user.id) ?? Promise.resolve({ total: 0, byGroupId: {} }),
-      crewInvites?.countInboxPending(user.id) ?? Promise.resolve(0),
-      groupInvites?.countInboxPending(user.id) ?? Promise.resolve(0),
-      messages?.getUnreadSummary(user.id) ?? Promise.resolve({ primary: 0, requests: 0 }),
-      prisma?.post.count({ where: totalUserPostsWhere(user.id) }) ?? Promise.resolve(null),
-      prisma?.article.count({ where: totalUserArticlesWhere(user.id) }) ?? Promise.resolve(null),
-      this.impersonation.describe(sessionResult.impersonatedByUserId),
-      this.accountSwitch.describe(sessionResult.operatedByUserId),
+      startSpan({ name: 'auth.me.notifications', op: 'auth.me' }, () => notifications?.getUndeliveredCount(user.id) ?? Promise.resolve(0)),
+      startSpan({ name: 'auth.me.unread_comments', op: 'auth.me' }, () => notifications?.getUnreadCommentCount(user.id) ?? Promise.resolve(0)),
+      startSpan({ name: 'auth.me.groups', op: 'auth.me' }, () => notifications?.getGroupsUnread(user.id) ?? Promise.resolve({ total: 0, byGroupId: {} })),
+      startSpan({ name: 'auth.me.crew_invites', op: 'auth.me' }, () => crewInvites?.countInboxPending(user.id) ?? Promise.resolve(0)),
+      startSpan({ name: 'auth.me.group_invites', op: 'auth.me' }, () => groupInvites?.countInboxPending(user.id) ?? Promise.resolve(0)),
+      startSpan({ name: 'auth.me.messages', op: 'auth.me' }, () => messages?.getUnreadSummary(user.id) ?? Promise.resolve({ primary: 0, requests: 0 })),
+      startSpan({ name: 'auth.me.post_count', op: 'auth.me' }, () => prisma?.post.count({ where: totalUserPostsWhere(user.id) }) ?? Promise.resolve(null)),
+      startSpan({ name: 'auth.me.article_count', op: 'auth.me' }, () => prisma?.article.count({ where: totalUserArticlesWhere(user.id) }) ?? Promise.resolve(null)),
+      startSpan({ name: 'auth.me.impersonation', op: 'auth.me' }, () => this.impersonation.describe(sessionResult.impersonatedByUserId)),
+      startSpan({ name: 'auth.me.account_switch', op: 'auth.me' }, () => this.accountSwitch.describe(sessionResult.operatedByUserId)),
     ]);
 
     const notificationUndeliveredCount =

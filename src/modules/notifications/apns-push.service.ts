@@ -1,3 +1,4 @@
+import { BadgeSummaryService } from '../../common/badges/badge-summary.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { ApnsClient, ApnsError, Host, Notification as ApnsNotification, Priority, PushType } from 'apns2';
 import type { CallVoipPushPayloadDto } from '../../common/dto/call.dto';
@@ -44,6 +45,7 @@ export class ApnsPushService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly cache: CacheService,
+    private readonly badges: BadgeSummaryService = new BadgeSummaryService(prisma),
   ) {}
 
   configured(): boolean {
@@ -134,28 +136,8 @@ export class ApnsPushService {
    * Pages never own tokens; if called with a page id, return that page's own count.
    */
   async computeAppIconBadge(userId: string): Promise<number> {
-    const uid = (userId ?? '').trim();
-    if (!uid) return 0;
-    const user = await this.prisma.user.findUnique({
-      where: { id: uid },
-      select: {
-        accountKind: true,
-        undeliveredNotificationCount: true,
-        undeliveredGroupPostCount: true,
-      },
-    });
-    const self = iconBadgeFromCounts(user);
-    if (!user || user.accountKind === 'page') return self;
-
-    const pages = await this.prisma.userPageOperator.findMany({
-      where: { operatorUserId: uid },
-      select: {
-        page: {
-          select: { undeliveredNotificationCount: true, undeliveredGroupPostCount: true },
-        },
-      },
-    });
-    return pages.reduce((sum, row) => sum + iconBadgeFromCounts(row.page), self);
+    const uid = userId.trim();
+    return uid ? this.badges.appIconCount(uid) : 0;
   }
 
   /**
@@ -438,11 +420,3 @@ export class ApnsPushService {
 }
 
 type TokenRow = { id: string; token: string; environment: string; kind?: string | null };
-
-function iconBadgeFromCounts(
-  user: { undeliveredNotificationCount?: number | null; undeliveredGroupPostCount?: number | null } | null | undefined,
-): number {
-  const bell = Math.max(0, Math.floor(Number(user?.undeliveredNotificationCount) || 0));
-  const groups = Math.max(0, Math.floor(Number(user?.undeliveredGroupPostCount) || 0));
-  return bell + groups;
-}

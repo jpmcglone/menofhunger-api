@@ -39,6 +39,7 @@ export type SwitchableAccountDto = {
   isCurrent: boolean;
   /** Bell + groups + chat unread for this identity. Hidden on the current row. */
   unreadBadgeCount: number;
+  hasUnreadNotifications?: boolean;
 };
 
 export type AuthMeDto = UserDto & {

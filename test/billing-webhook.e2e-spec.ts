@@ -18,6 +18,7 @@ import { BillingService } from '../src/modules/billing/billing.service';
 import { EntitlementService } from '../src/modules/billing/entitlement.service';
 import { ReferralService } from '../src/modules/billing/referral.service';
 import { AffiliateService } from '../src/modules/billing/affiliate.service';
+import { LocalBillingTestService } from '../src/modules/billing/local-billing-test.service';
 import { AppleIapService } from '../src/modules/billing/apple-iap.service';
 import { PrismaService } from '../src/modules/prisma/prisma.service';
 import { AppConfigService } from '../src/modules/app/app-config.service';
@@ -27,6 +28,7 @@ import { UsersPublicRealtimeService } from '../src/modules/users/users-public-re
 import { PosthogService } from '../src/common/posthog/posthog.service';
 import { SlackService } from '../src/common/slack/slack.service';
 import { SideEffectsService } from '../src/modules/side-effects/side-effects.service';
+import { AuthService } from '../src/modules/auth/auth.service';
 import { AuthGuard } from '../src/modules/auth/auth.guard';
 
 const WEBHOOK_SECRET = 'whsec_test_secret';
@@ -72,7 +74,9 @@ describe('POST /billing/webhook (e2e)', () => {
       controllers: [BillingController],
       providers: [
         BillingService,
+        { provide: LocalBillingTestService, useValue: {} },
         EntitlementService,
+        { provide: AuthService, useValue: { bustSessionCachesForUser: jest.fn(async () => undefined) } },
         { provide: PrismaService, useValue: prisma },
         {
           provide: AppConfigService,
@@ -101,7 +105,7 @@ describe('POST /billing/webhook (e2e)', () => {
       ],
     })
       // The webhook route is unauthenticated; other routes on this controller use
-      // AuthGuard, which we stub out so the testing module doesn't need AuthService.
+      // AuthGuard; keep those routes inaccessible in this webhook-only fixture.
       .overrideGuard(AuthGuard)
       .useValue({ canActivate: () => false })
       .compile();

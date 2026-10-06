@@ -44,6 +44,11 @@ export class GroupInvitesService {
     private readonly marvIdentity: MarvinBotIdentityService,
   ) {}
 
+  private syncBadge(userId: string): void {
+    this.sideEffects.dispatch('account.cluster.badge', { userId });
+    this.sideEffects.dispatch('notification.badge.sync', { recipientUserId: userId });
+  }
+
   // ---------- internals ----------
 
   private expiryDate(): Date {
@@ -471,6 +476,7 @@ export class GroupInvitesService {
     }
 
     const dto = this.toDto(inviteRow);
+    this.syncBadge(inviteeId);
     this.presenceRealtime.emitGroupInviteReceived(inviteeId, { invite: dto });
     this.presenceRealtime.emitGroupInviteUpdated([params.viewerUserId], { invite: dto });
 
@@ -496,6 +502,7 @@ export class GroupInvitesService {
       data: { status: 'cancelled', respondedAt: new Date() },
       include: INVITE_INCLUDE,
     });
+    this.syncBadge(updated.inviteeUserId);
     const dto = this.toDto(updated);
     this.presenceRealtime.emitGroupInviteUpdated(
       [invite.invitedByUserId, invite.inviteeUserId, params.viewerUserId],
@@ -528,6 +535,7 @@ export class GroupInvitesService {
       data: { status: 'declined', respondedAt: now, lastDeclinedAt: now },
       include: INVITE_INCLUDE,
     });
+    this.syncBadge(updated.inviteeUserId);
     const dto = this.toDto(updated);
     this.presenceRealtime.emitGroupInviteUpdated(
       [invite.invitedByUserId, invite.inviteeUserId],
@@ -634,6 +642,7 @@ export class GroupInvitesService {
       where: { id: invite.id },
       include: INVITE_INCLUDE,
     });
+    this.syncBadge(updated.inviteeUserId);
     const dto = this.toDto(updated);
     this.presenceRealtime.emitGroupInviteUpdated(
       [invite.invitedByUserId, invite.inviteeUserId],
@@ -667,6 +676,7 @@ export class GroupInvitesService {
       data: { status: 'expired', respondedAt: now },
     });
     for (const row of expiring) {
+      this.syncBadge(row.inviteeUserId);
       this.presenceRealtime.emitGroupInviteUpdated(
         [row.invitedByUserId, row.inviteeUserId],
         { invite: { id: row.id, status: 'expired' } },

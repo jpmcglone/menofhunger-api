@@ -853,6 +853,7 @@ export type SwitchableAccountDto = {
   isCurrent: boolean;
   /** Bell + groups + chat unread for this identity. Hidden on the current row. */
   unreadBadgeCount: number;
+  hasUnreadNotifications?: boolean;
 };
 
 export type AuthMeDto = UserDto & {
@@ -3105,8 +3106,10 @@ export type NotificationsDeletedPayloadDto = {
  * Separate from the bell, which counts unseen rows. Emitted whenever either count can change.
  */
 export type NotificationsNavUnreadPayloadDto = {
+  undeliveredCount?: number;
   boardUnreadCount: number;
   articlesUnreadCount: number;
+  hasUnreadNotifications?: boolean;
 };
 
 /** Drop lock-screen APNs the user already saw in the matching in-app section. */
@@ -3118,6 +3121,7 @@ export type NotificationsLockScreenClearPayloadDto = {
 export type AccountsBadgeUpdatedPayloadDto = {
   userId: string;
   unreadBadgeCount: number;
+  hasUnreadNotifications?: boolean;
 };
 
 /**

@@ -15,7 +15,11 @@ function makeService(overrides: { prisma?: any; auth?: any } = {}) {
     ...overrides.auth,
   };
   const appConfig = { r2: jest.fn(() => null) };
-  const svc = new AccountSwitchService(prisma as any, appConfig as any, auth as any);
+  const badges = { forIdentities: jest.fn(async () => new Map([
+    ['john', { unreadBadgeCount: 3, hasUnreadNotifications: false }],
+    ['news', { unreadBadgeCount: 7, hasUnreadNotifications: true }],
+  ])) };
+  const svc = new AccountSwitchService(prisma as any, appConfig as any, auth as any, badges as any);
   return { svc, prisma, auth };
 }
 
@@ -60,7 +64,7 @@ describe('AccountSwitchService', () => {
 
     expect(accounts).toHaveLength(2);
     expect(accounts[0]).toMatchObject({ id: 'john', isCurrent: true, accountKind: 'person', unreadBadgeCount: 3 });
-    expect(accounts[1]).toMatchObject({ id: 'news', isCurrent: false, accountKind: 'page', unreadBadgeCount: 7 });
+    expect(accounts[1]).toMatchObject({ id: 'news', isCurrent: false, accountKind: 'page', unreadBadgeCount: 7, hasUnreadNotifications: true });
   });
 
   it('lists token owners as operators for a page', async () => {

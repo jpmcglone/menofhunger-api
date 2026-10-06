@@ -9,29 +9,9 @@ import { notificationFilterWhere } from './notification-category';
 
 export type NotificationUnreadByKind = Partial<Record<NotificationKind | 'all', number>>;
 
-export const BELL_EXCLUDED_KINDS: NotificationKind[] = ['message', 'community_group_post'];
-
-/**
- * Person-accountability surfaces. Pages inherit operator premium, so they would
- * otherwise get "have you checked in?" and daily-content bells. Operators already
- * receive those on the person account — the page inbox should stay about the page.
- */
-export const PERSON_ONLY_NOTIFICATION_KINDS: NotificationKind[] = [
-  'word_of_the_day',
-  'quote_of_the_day',
-  'checkin_reminder',
-  'on_this_day',
-  'checkin_post',
-  'nudge',
-];
-
-export function bellExcludedKindsForAccount(
-  accountKind?: string | null,
-): NotificationKind[] {
-  return accountKind === 'page'
-    ? [...BELL_EXCLUDED_KINDS, ...PERSON_ONLY_NOTIFICATION_KINDS]
-    : BELL_EXCLUDED_KINDS;
-}
+import { BELL_EXCLUDED_KINDS } from './notification-kinds';
+export { BELL_EXCLUDED_KINDS, PERSON_ONLY_NOTIFICATION_KINDS, bellExcludedKindsForAccount } from './notification-kinds';
+import { BadgeSummaryService } from '../../common/badges/badge-summary.service';
 
 /**
  * Notification kinds that are counted in the bell badge but must never trigger
@@ -66,6 +46,7 @@ export class NotificationReadStateService {
     private readonly posthog: PosthogService,
     private readonly sideEffects: SideEffectsService,
     private readonly cacheInvalidation?: CacheInvalidationService,
+    private readonly badges: BadgeSummaryService = new BadgeSummaryService(prisma),
   ) {}
 
   /** Queue badge-only APNs (debounced in the worker). Never throws. */
@@ -101,25 +82,24 @@ export class NotificationReadStateService {
     void this.emitNavUnreadForUser(recipientUserId);
   }
 
-  /** Board counts unseen arrivals; Articles retain their existing unread semantics. */
-  async getNavUnread(recipientUserId: string): Promise<{ boardUnreadCount: number; articlesUnreadCount: number }> {
-    const base: Prisma.NotificationWhereInput = {
-      recipientUserId,
-      readAt: null,
-      kind: { notIn: BELL_EXCLUDED_KINDS },
-    };
-    const [boardUnreadCount, articlesUnreadCount] = await Promise.all([
-      this.prisma.notification.count({ where: { ...base, deliveredAt: null, ...notificationFilterWhere('board') } }),
-      this.prisma.notification.count({ where: { ...base, subjectArticleId: { not: null } } }),
+  /** Navigation dots follow unread activity, independently of the unseen bell count. */
+  async getNavUnread(recipientUserId: string) {
+    const base = { ...await this.badges.notificationWhere(recipientUserId), readAt: null };
+    const [boardUnreadCount, articlesUnreadCount, unread] = await Promise.all([
+      this.prisma.notification.count({ where: { ...base, ...notificationFilterWhere('board'), kind: { in: ['comment', 'mention', 'followed_post'] }, actorUserId: { not: recipientUserId } } }),
+      this.prisma.notification.count({ where: { ...base, ...notificationFilterWhere('articles') } }),
+      this.prisma.notification.findFirst({ where: base, select: { id: true } }),
     ]);
-    return { boardUnreadCount, articlesUnreadCount };
+    return { boardUnreadCount, articlesUnreadCount, hasUnreadNotifications: unread != null };
   }
 
   /** Best-effort `notifications:navUnreadChanged` emit; never throws. */
   async emitNavUnreadForUser(recipientUserId: string): Promise<void> {
     try {
-      const counts = await this.getNavUnread(recipientUserId);
-      this.presenceRealtime.emitNotificationsNavUnreadChanged(recipientUserId, counts);
+      const [counts, undeliveredCount] = await Promise.all([
+        this.getNavUnread(recipientUserId), this.getUndeliveredCount(recipientUserId),
+      ]);
+      this.presenceRealtime.emitNotificationsNavUnreadChanged(recipientUserId, { ...counts, undeliveredCount });
     } catch (err) {
       this.logger.debug(`[notifications] Failed to emit nav unread: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -134,20 +114,9 @@ export class NotificationReadStateService {
   }
 
   async getUndeliveredCount(recipientUserId: string): Promise<number> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: recipientUserId },
-      select: { undeliveredNotificationCount: true, accountKind: true },
+    return this.prisma.notification.count({
+      where: { ...await this.badges.notificationWhere(recipientUserId), deliveredAt: null },
     });
-    if (user?.accountKind === 'page') {
-      return this.prisma.notification.count({
-        where: {
-          recipientUserId,
-          deliveredAt: null,
-          kind: { notIn: bellExcludedKindsForAccount('page') },
-        },
-      });
-    }
-    return Math.max(0, Math.floor(Number(user?.undeliveredNotificationCount) || 0));
   }
 
   async getUnreadCountsByKind(recipientUserId: string, blockedActorIds: string[] = []): Promise<NotificationUnreadByKind> {
@@ -522,7 +491,7 @@ export class NotificationReadStateService {
   }
 
   /** Explicit bulk read, including unloaded rows, bounded to activity existing at invocation. */
-  async markReadByFilter(recipientUserId: string, filter: 'board'): Promise<void> {
+  async markReadByFilter(recipientUserId: string, filter: 'board' | 'articles'): Promise<void> {
     const now = new Date();
     const where = {
       recipientUserId,
@@ -886,14 +855,14 @@ export class NotificationReadStateService {
 
   /** Mark all of the user's notifications as read and as seen (clears highlight and badge). */
   async markAllRead(recipientUserId: string): Promise<void> {
+    const now = new Date();
     const undeliveredCount = await this.prisma.$transaction(async (tx) => {
-      const now = new Date();
       await tx.notification.updateMany({
-        where: { recipientUserId, readAt: null },
+        where: { recipientUserId, readAt: null, createdAt: { lte: now } },
         data: { readAt: now },
       });
       const deliveredRes = await tx.notification.updateMany({
-        where: this.undeliveredBellWhere(recipientUserId),
+        where: { ...this.undeliveredBellWhere(recipientUserId), createdAt: { lte: now } },
         data: { deliveredAt: now },
       });
       if (deliveredRes.count > 0) {

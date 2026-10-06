@@ -24,7 +24,7 @@ describe('NotificationSideEffectsHandler.onBadgeSync', () => {
     const accountSwitch = {
       listTokenOwnerIds: jest.fn(async (id: string) => [id]),
       listClusterUserIds: jest.fn(async (id: string) => [id]),
-      unreadBadgeCountForUser: jest.fn(async () => 0),
+      badgeSummaryForUser: jest.fn(async () => ({ unreadBadgeCount: 0, hasUnreadNotifications: false })),
     };
     const presenceRealtime = { emitAccountsBadgeUpdated: jest.fn() };
     const handler = new NotificationSideEffectsHandler(
@@ -51,15 +51,17 @@ describe('NotificationSideEffectsHandler.onBadgeSync', () => {
     expect(presenceRealtime.emitAccountsBadgeUpdated).not.toHaveBeenCalled();
 
     accountSwitch.listClusterUserIds.mockResolvedValueOnce(['john', 'news']);
-    accountSwitch.unreadBadgeCountForUser.mockResolvedValueOnce(5);
+    accountSwitch.badgeSummaryForUser.mockResolvedValueOnce({ unreadBadgeCount: 5, hasUnreadNotifications: true });
     await clusterHandler({ userId: 'news' });
     expect(presenceRealtime.emitAccountsBadgeUpdated).toHaveBeenCalledWith('john', {
       userId: 'news',
       unreadBadgeCount: 5,
+      hasUnreadNotifications: true,
     });
     expect(presenceRealtime.emitAccountsBadgeUpdated).toHaveBeenCalledWith('news', {
       userId: 'news',
       unreadBadgeCount: 5,
+      hasUnreadNotifications: true,
     });
   });
 
