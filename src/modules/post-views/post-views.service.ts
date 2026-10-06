@@ -468,10 +468,103 @@ export class PostViewsService {
       return acks;
     }
 
-    const acks = (await Promise.all(
-      expanded.map((pid) => this.markViewed(null, pid, anonId, ids.includes(pid) ? source : 'embedded', { skipMarkRead: true })),
-    )).filter((ack): ack is PostViewAckDto => ack != null);
-    return acks;
+    return this.markAnonymousViewsBatch(expanded, anonId!, ids, source);
+  }
+
+  /** Guest batches use bounded writes and the rows actually claimed by each gate. */
+  private async markAnonymousViewsBatch(
+    postIds: string[], anonId: string, openedIds: string[], source?: string | null,
+  ): Promise<PostViewAckDto[]> {
+    try {
+      const [posts, identity] = await Promise.all([
+        this.prisma.post.findMany({
+          where: { id: { in: postIds }, deletedAt: null, visibility: 'public' },
+          select: { id: true },
+        }),
+        this.prisma.viewerIdentity.findUnique({ where: { anonId }, select: { userId: true } }),
+      ]);
+      if (!posts.length) return [];
+      const publicIds = posts.map(post => post.id);
+      const linkedViews = identity?.userId ? await this.prisma.postView.findMany({
+        where: { userId: identity.userId, postId: { in: publicIds } }, select: { postId: true },
+      }) : [];
+      const linkedIds = new Set(linkedViews.map(row => row.postId));
+      const guestIds = publicIds.filter(id => !linkedIds.has(id));
+      const acks = identity?.userId && linkedIds.size
+        ? await this.markAuthenticatedViewsBatch(identity.userId, [...linkedIds], anonId, 'anon_linked')
+        : [];
+      const now = new Date();
+      if (guestIds.length) {
+        const counted = await this.prisma.$transaction(async tx => {
+          const created = await tx.postAnonView.createManyAndReturn({
+            data: guestIds.map(postId => ({ postId, anonId, lastViewedAt: now, impressionCount: 1, lastImpressionAt: now })),
+            skipDuplicates: true, select: { postId: true },
+          });
+          const refreshed = await tx.postAnonView.updateManyAndReturn({
+            where: { anonId, postId: { in: guestIds }, lastViewedAt: { lt: cutoffForAnonRecount(now) } },
+            data: { lastViewedAt: now }, select: { postId: true },
+          });
+          const impressed = await tx.postAnonView.updateManyAndReturn({
+            where: { anonId, postId: { in: guestIds }, lastImpressionAt: { lt: cutoffForTotalViewRecount(now) } },
+            data: { lastImpressionAt: now, impressionCount: { increment: 1 } }, select: { postId: true },
+          });
+          const createdIds = new Set(created.map(row => row.postId));
+          const weightedIds = new Set(refreshed.map(row => row.postId));
+          const impressedIds = new Set(impressed.map(row => row.postId));
+          const groups = [
+            { ids: [...createdIds], unique: true, weighted: true, total: true },
+            { ids: [...weightedIds].filter(id => impressedIds.has(id)), unique: false, weighted: true, total: true },
+            { ids: [...weightedIds].filter(id => !impressedIds.has(id)), unique: false, weighted: true, total: false },
+            { ids: [...impressedIds].filter(id => !weightedIds.has(id)), unique: false, weighted: false, total: true },
+          ];
+          for (const group of groups) {
+            if (!group.ids.length) continue;
+            await tx.post.updateMany({
+              where: { id: { in: group.ids } },
+              data: {
+                ...(group.unique ? { viewerCount: { increment: 1 } } : {}),
+                ...(group.weighted ? { weightedViewCount: { increment: ANON_VIEW_WEIGHT } } : {}),
+                ...(group.total ? { totalViewCount: { increment: 1 } } : {}),
+              },
+            });
+          }
+          const counts = await tx.post.findMany({
+            where: { id: { in: guestIds } }, select: { id: true, viewerCount: true, totalViewCount: true },
+          });
+          return counts.map(post => ({ ...post, uniqueCounted: createdIds.has(post.id), totalCounted: createdIds.has(post.id) || impressedIds.has(post.id) }));
+        });
+        const changed = counted.filter(ack => ack.uniqueCounted || ack.totalCounted);
+        if (changed.length) {
+          void this.redis.del(...changed.map(ack => breakdownCacheKey(ack.id))).catch(() => undefined);
+          await Promise.all(changed.map(ack => this.emitViewCounts(ack.id, ack)));
+        }
+        acks.push(...counted);
+      }
+      // Only actual detail opens count, never embedded quote/repost impressions.
+      if (source === 'post_open' || source === 'permalink_engaged') {
+        const where = {
+          postId: { in: acks.map(ack => ack.id).filter(id => openedIds.includes(id)) },
+          post: { kind: 'board' as const },
+          OR: [{ lastOpenedAt: null }, { lastOpenedAt: { lt: cutoffForTotalViewRecount(now) } }],
+        };
+        const data = { lastOpenedAt: now, openCount: { increment: 1 } };
+        const guestOpens = await this.prisma.postAnonView.updateManyAndReturn({
+          where: { ...where, anonId }, data, select: { postId: true },
+        });
+        for (const row of guestOpens) this.posthog.capture(anonId, 'board_thread_opened', { post_id: row.postId, viewer_type: 'guest' });
+        if (identity?.userId && linkedIds.size) {
+          const userOpens = await this.prisma.postView.updateManyAndReturn({
+            where: { ...where, userId: identity.userId, postId: { in: [...linkedIds].filter(id => openedIds.includes(id)) } },
+            data, select: { postId: true },
+          });
+          for (const row of userOpens) this.posthog.capture(identity.userId, 'board_thread_opened', { post_id: row.postId, viewer_type: 'user' });
+        }
+      }
+      return acks;
+    } catch (err) {
+      this.logger.warn(`markAnonymousViewsBatch failed: ${String(err)}`);
+      return [];
+    }
   }
 
   /**

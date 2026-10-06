@@ -116,34 +116,34 @@ export class PostsTopicsBackfillCron {
           refRows.map((p) => [p.id, (Array.isArray(p.topics) ? (p.topics as string[]) : [])] as const),
         );
 
-        await this.prisma.$transaction(
-          rows.map((p: BackfillPostRow) => {
-            const hashtags = p.hashtags ?? [];
-            const topics = inferTopicsFromText(p.body ?? '', {
-              hashtags,
-              relatedTopics: Array.from(
-                new Set([
-                  ...(topicsById.get(p.parentId ?? '') ?? []),
-                  ...(topicsById.get(p.rootId ?? '') ?? []),
-                ]),
-              ).filter(Boolean),
-            });
-            const thin = hashtags.length === 0 && (p.body ?? '').trim().length < 24;
-            return this.prisma.post.update({
-              where: { id: p.id },
-              data: {
-                topics,
-                ...(thin && topics.length === 0
-                  ? { topicsClassifiedAt: new Date() }
-                  : wipeExisting
-                    ? { topicsClassifiedAt: null }
-                    : {}),
-              },
-            });
-          }),
-        );
+        const updates = rows.map((p) => {
+          const hashtags = p.hashtags ?? [];
+          const topics = inferTopicsFromText(p.body ?? '', {
+            hashtags,
+            relatedTopics: [...new Set([
+              ...(topicsById.get(p.parentId ?? '') ?? []),
+              ...(topicsById.get(p.rootId ?? '') ?? []),
+            ])].filter(Boolean),
+          });
+          return {
+            id: p.id, body: p.body, hashtags, topics,
+            thin: hashtags.length === 0 && (p.body ?? '').trim().length < 24 && topics.length === 0,
+          };
+        });
+        // One bounded update, not one round trip (and full Post RETURNING) per row.
+        // Preserve concurrent edits/classifications while the batch was inferred.
+        total += await this.prisma.$executeRaw`
+          UPDATE "Post" p SET topics = ARRAY(SELECT jsonb_array_elements_text(v.topics)),
+            "topicsClassifiedAt" = CASE WHEN v.thin THEN NOW()
+              WHEN ${wipeExisting} THEN NULL ELSE p."topicsClassifiedAt" END
+          FROM jsonb_to_recordset(${JSON.stringify(updates)}::jsonb)
+            AS v(id text, body text, hashtags jsonb, topics jsonb, thin boolean)
+          WHERE p.id = v.id AND p."deletedAt" IS NULL
+            AND p.body IS NOT DISTINCT FROM v.body
+            AND p.hashtags = ARRAY(SELECT jsonb_array_elements_text(v.hashtags))
+            AND (${wipeExisting} OR (p.topics = ARRAY[]::text[] AND p."topicsClassifiedAt" IS NULL))
+        `;
 
-        total += rows.length;
         const last: BackfillPostRow = rows[rows.length - 1]!;
         cursor = { createdAt: last.createdAt, id: last.id };
 

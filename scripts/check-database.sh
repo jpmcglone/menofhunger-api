@@ -25,7 +25,7 @@ node scripts/prepare-database-baseline.mjs --sql > "$baseline_sql"
 node_modules/.bin/prisma db execute --url "$DATABASE_URL" --file "$baseline_sql"
 node_modules/.bin/prisma migrate deploy
 node_modules/.bin/prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
-node_modules/.bin/jest --runInBand --runTestsByPath src/modules/auth/account-erasure.integration.spec.ts
+node_modules/.bin/jest --runInBand --runTestsByPath src/modules/auth/account-erasure.integration.spec.ts src/modules/post-views/post-views-batch.integration.spec.ts
 REGRESSION_DATABASE_URL="$DATABASE_URL" node_modules/.bin/jest --runInBand --config test/jest-e2e.json --runTestsByPath test/coin-and-chat-regressions.e2e-spec.ts
 docker exec "$container" createdb -U postgres moh_ranking_fixture
 RUN_POST_RANKING_SQL_TESTS=1 POST_RANKING_FIXTURE_CONTAINER="$container" node_modules/.bin/jest --runInBand --runTestsByPath src/modules/posts/posts-ranking.postgres.spec.ts
