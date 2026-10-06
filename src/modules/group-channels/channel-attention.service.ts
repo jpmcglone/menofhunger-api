@@ -2,22 +2,31 @@ import { SideEffectsService } from '../side-effects/side-effects.service';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { parseMentionsFromBody } from '../../common/mentions/mention-regex';
+import { broadcastMentionsIn } from '../../common/mentions/broadcast-mentions';
+import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChannelAccessService } from './channel-access.service';
 import { ChannelsService } from './channels.service';
 
 @Injectable()
 export class ChannelAttentionService {
-  constructor(private readonly prisma: PrismaService, private readonly access: ChannelAccessService, private readonly channels: ChannelsService, private readonly effects: SideEffectsService) {}
+  constructor(private readonly prisma: PrismaService, private readonly access: ChannelAccessService, private readonly channels: ChannelsService, private readonly effects: SideEffectsService, private readonly presence: PresenceRedisStateService) {}
 
   /** Called inside the message transaction; one row holds both personal reasons. */
-  async reconcile(tx: Prisma.TransactionClient, input: { groupId: string; channelId: string; messageId: string; senderId: string; body: string; threadRootId: string | null; edited?: boolean }) {
+  async reconcile(tx: Prisma.TransactionClient, input: { groupId: string; channelId: string; messageId: string; senderId: string; body: string; threadRootId: string | null; edited?: boolean; broadcast?: boolean }) {
     const eligible = (await this.access.recipients(input.groupId, input.channelId, tx)).map(m => m.userId).filter(id => id !== input.senderId);
     const previous = await tx.groupChannelAttention.findMany({ where: { messageId: input.messageId }, select: { userId: true, mentioned: true } });
     const priorMentions = new Set(previous.filter(row => row.mentioned).map(row => row.userId));
     const mentions = parseMentionsFromBody(input.body);
     const mentioned = mentions.length ? await tx.user.findMany({ where: { id: { in: eligible }, OR: mentions.map(username => ({ username: { equals: username, mode: 'insensitive' as const } })) }, select: { id: true } }) : [];
     const mentionedIds = new Set(mentioned.map(u => u.id));
+    // @everyone reaches every member with access; @here only those online now. Leaders only, so a stray token from a member stays plain text.
+    const special = input.broadcast ? broadcastMentionsIn(mentions) : { everyone: false, here: false };
+    if (special.everyone) eligible.forEach(id => mentionedIds.add(id));
+    else if (special.here) {
+      const online = new Set(await this.presence.onlineUserIds());
+      eligible.filter(id => online.has(id)).forEach(id => mentionedIds.add(id));
+    }
     const followed = input.threadRootId && !input.edited ? await tx.groupChannelThreadState.findMany({ where: { rootMessageId: input.threadRootId, following: true, userId: { in: eligible } }, select: { userId: true } }) : [];
     // An edit can remove a mention without erasing an independent followed-reply reason.
     await tx.groupChannelAttention.updateMany({ where: { messageId: input.messageId, userId: { notIn: [...mentionedIds] } }, data: { mentioned: false } });

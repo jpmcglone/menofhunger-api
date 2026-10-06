@@ -12,7 +12,8 @@ function setup() {
   const access: any = { lockGroup: jest.fn(), channel: jest.fn().mockResolvedValue({ channel: { conversationId: 'conversation', lastSequence: 20 } }), recipients: jest.fn().mockResolvedValue([{ userId: 'author' }, { userId: 'viewer' }]) };
   const channels: any = { viewerChanged: jest.fn() };
   const effects: any = { dispatch: jest.fn() };
-  return { tx, access, channels, effects, service: new ChannelAttentionService(prisma, access, channels, effects) };
+  const presence: any = { onlineUserIds: jest.fn().mockResolvedValue(['viewer']) };
+  return { presence, tx, access, channels, effects, service: new ChannelAttentionService(prisma, access, channels, effects, presence) };
 }
 const message = { groupId: 'group', channelId: 'channel', messageId: 'message', senderId: 'author', body: '@viewer hello', threadRootId: 'root' };
 
@@ -58,5 +59,18 @@ describe('channel personal attention', () => {
     expect(tx.groupChannelThreadState.updateMany).toHaveBeenCalledWith({ where: { rootMessageId: 'root', userId: 'viewer' }, data: { readThrough: 7 } });
     expect(tx.groupChannelAttention.upsert).not.toHaveBeenCalled();
     expect(effects.dispatch).not.toHaveBeenCalled();
+  });
+  it('@everyone reaches every eligible member and @here only those online, for leaders only', async () => {
+    const { tx, access, presence, service } = setup();
+    access.recipients.mockResolvedValue([{ userId: 'viewer' }, { userId: 'away' }, { userId: 'author' }]);
+    await service.reconcile(tx, { ...message, body: '@everyone standup', broadcast: true });
+    expect(tx.groupChannelAttention.upsert.mock.calls.map((call: any) => call[0].create.userId).sort()).toEqual(['away', 'viewer']);
+    tx.groupChannelAttention.upsert.mockClear();
+    await service.reconcile(tx, { ...message, body: '@here standup', broadcast: true });
+    expect(presence.onlineUserIds).toHaveBeenCalled();
+    expect(tx.groupChannelAttention.upsert.mock.calls.map((call: any) => call[0].create.userId)).toEqual(['viewer']);
+    tx.groupChannelAttention.upsert.mockClear();
+    await service.reconcile(tx, { ...message, body: '@everyone standup' });
+    expect(tx.groupChannelAttention.upsert).not.toHaveBeenCalled();
   });
 });

@@ -218,7 +218,7 @@ export class ChannelMessagesService {
       const rootMessageId = threadRootId ?? created.id;
       await tx.groupChannelThreadState.upsert({ where: { rootMessageId_userId: { rootMessageId, userId } }, create: { rootMessageId, userId, following: true }, update: {} });
       await tx.groupChannelThreadState.updateMany({ where: { rootMessageId, userId, unfollowed: false }, data: { following: true } });
-      await this.attention.reconcile(tx, { groupId, channelId, messageId: created.id, senderId: userId, body, threadRootId });
+      await this.attention.reconcile(tx, { groupId, channelId, messageId: created.id, senderId: userId, body, threadRootId, broadcast: isChannelLeader(member.role) });
       createdNow = true;
       return created;
     });
@@ -252,7 +252,7 @@ export class ChannelMessagesService {
       await this.advanceRevision(tx, channelId, messageId);
       const hiddenPreviews = message.hiddenPreviews.filter(url => body.includes(url));
       await tx.message.update({ where: { id: messageId }, data: { body, hiddenPreviews, editedAt: new Date() } });
-      await this.attention.reconcile(tx, { groupId, channelId, messageId, senderId: userId, body, threadRootId: message.threadRootId, edited: true });
+      await this.attention.reconcile(tx, { groupId, channelId, messageId, senderId: userId, body, threadRootId: message.threadRootId, edited: true, broadcast: isChannelLeader(member.role) });
     });
     await this.broadcast(groupId, channelId, messageId);
     this.effects.dispatch('channel.message.changed', { groupId, channelId, messageId, edited: true });

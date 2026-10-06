@@ -19,7 +19,7 @@ const enabled = url && new URL(url).hostname === '127.0.0.1' && new URL(url).pat
   const effects: any = { dispatch: jest.fn() };
   const access = new ChannelAccessService(db as any, config);
   const channels = new ChannelsService(db as any, access, realtime, effects);
-  const attention = new ChannelAttentionService(db as any, access, channels, effects);
+  const attention = new ChannelAttentionService(db as any, access, channels, effects, { onlineUserIds: async () => [] } as any);
   const messages = new ChannelMessagesService(db as any, access, channels, attention, config, realtime, {} as any, effects);
   let group: string, owner: string, member: string, moderator: string, general: string, announcements: string;
   beforeEach(async () => {

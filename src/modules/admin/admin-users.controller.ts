@@ -325,7 +325,7 @@ export class AdminUsersController {
   @Get("username/available")
   async usernameAvailable(@Query() query: unknown) {
     const { username } = adminUsernameSchema.parse(query);
-    const parsed = validateUsername(username ?? "", { minLen: 2 });
+    const parsed = validateUsername(username ?? "", { minLen: 2, allowReserved: true });
     if (!parsed.ok)
       return {
         data: { available: false, normalized: null, error: parsed.error },
@@ -720,7 +720,7 @@ export class AdminUsersController {
         data.username = null;
         data.usernameIsSet = false;
       } else {
-        const validated = validateUsername(parsed.username, { minLen: 2 });
+        const validated = validateUsername(parsed.username, { minLen: 2, allowReserved: true });
         if (!validated.ok) throw new BadRequestException(validated.error);
         data.username = validated.username;
         data.usernameIsSet = true;
