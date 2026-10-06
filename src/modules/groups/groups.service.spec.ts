@@ -51,6 +51,7 @@ function makeService(prismaOverrides: Record<string, any> = {}) {
   const redis: any = {
     getJson: jest.fn(async () => null),
     setJson: jest.fn(async () => undefined),
+    del: jest.fn(async () => 1),
   };
 
   const marvIdentity: any = { cachedMarvUserId: jest.fn(() => null), getMarvUserId: jest.fn(async () => null) };
@@ -1390,5 +1391,40 @@ describe('Group member preferences and activity snapshots', () => {
     const where = { recipientUserId: 'u1', subjectGroupId: 'g1', kind: 'community_group_post', deliveredAt: null, createdAt: { lte: new Date(result.through) }, subjectPost: { deletedAt: null, isDraft: false } };
     expect(count).toHaveBeenCalledWith({ where });
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where, take: 100 }));
+  });
+});
+
+describe('GroupsService.deleteGroup', () => {
+  function setup(role: string | null, isSiteAdmin = false) {
+    const update = jest.fn(async () => ({}));
+    const updateMany = jest.fn(async () => ({ count: 0 }));
+    const h = makeService({
+      communityGroup: { findFirst: jest.fn(async () => ({ id: 'g1', name: 'Iron Men' })), update },
+      communityGroupMember: { findUnique: jest.fn(async () => (role ? { role, status: 'active' } : null)) },
+      communityGroupInvite: { updateMany },
+      $transaction: jest.fn(async (ops: Promise<unknown>[]) => Promise.all(ops)),
+    });
+    return { ...h, update, updateMany, isSiteAdmin };
+  }
+
+  it('soft-deletes for the owner who types the exact name and cancels pending invites', async () => {
+    const { service, update, updateMany } = setup('owner');
+    await expect(service.deleteGroup({ viewerUserId: 'u1', isSiteAdmin: false, groupId: 'g1', confirmName: ' Iron Men ' })).resolves.toEqual({ deleted: true });
+    expect(update).toHaveBeenCalledWith({ where: { id: 'g1' }, data: { deletedAt: expect.any(Date), isFeatured: false } });
+    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { groupId: 'g1', status: 'pending' } }));
+  });
+
+  it('rejects a wrong confirmation name and non-owners', async () => {
+    const owner = setup('owner');
+    await expect(owner.service.deleteGroup({ viewerUserId: 'u1', isSiteAdmin: false, groupId: 'g1', confirmName: 'iron men' })).rejects.toThrow(BadRequestException);
+    const mod = setup('moderator');
+    await expect(mod.service.deleteGroup({ viewerUserId: 'u2', isSiteAdmin: false, groupId: 'g1', confirmName: 'Iron Men' })).rejects.toThrow(ForbiddenException);
+    expect(mod.update).not.toHaveBeenCalled();
+  });
+
+  it('lets a site admin delete without membership', async () => {
+    const { service, update } = setup(null);
+    await service.deleteGroup({ viewerUserId: 'admin', isSiteAdmin: true, groupId: 'g1', confirmName: 'Iron Men' });
+    expect(update).toHaveBeenCalled();
   });
 });

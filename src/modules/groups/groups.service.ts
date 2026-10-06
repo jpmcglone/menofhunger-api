@@ -482,6 +482,47 @@ export class GroupsService {
     };
   }
 
+  /**
+   * Soft-deletes a group. Only the owner (or a site admin) may do it, and the caller must retype
+   * the exact group name. Channel access, shells, invites and discovery all key off `deletedAt`,
+   * so the group disappears everywhere at once; the slug stays reserved.
+   */
+  async deleteGroup(params: {
+    viewerUserId: string;
+    isSiteAdmin: boolean;
+    groupId: string;
+    confirmName: string;
+  }): Promise<{ deleted: true }> {
+    const g = await this.prisma.communityGroup.findFirst({
+      where: { id: params.groupId, deletedAt: null },
+      select: { id: true, name: true },
+    });
+    if (!g) throw new NotFoundException('Group not found.');
+    const mem = await this.prisma.communityGroupMember.findUnique({
+      where: { groupId_userId: { groupId: g.id, userId: params.viewerUserId } },
+      select: { role: true, status: true },
+    });
+    const isOwner = mem?.status === 'active' && mem.role === 'owner';
+    if (!isOwner && !params.isSiteAdmin) throw new ForbiddenException('Only the owner can delete this group.');
+    if (params.confirmName.trim() !== g.name.trim()) {
+      throw new BadRequestException('Type the exact group name to confirm.');
+    }
+
+    const now = new Date();
+    await this.prisma.$transaction([
+      this.prisma.communityGroup.update({
+        where: { id: g.id },
+        data: { deletedAt: now, isFeatured: false },
+      }),
+      this.prisma.communityGroupInvite.updateMany({
+        where: { groupId: g.id, status: 'pending' },
+        data: { status: 'cancelled', respondedAt: now },
+      }),
+    ]);
+    void this.redis.del(...['anon', params.viewerUserId].map((id) => RedisKeys.groupsFeatured(id))).catch(() => undefined);
+    return { deleted: true };
+  }
+
   async join(params: { viewerUserId: string; groupId: string }) {
     const viewer = await this.prisma.user.findUnique({
       where: { id: params.viewerUserId },

@@ -287,6 +287,17 @@ export class GroupsController {
   }
 
   @UseGuards(AuthGuard)
+  @Throttle({
+    default: { limit: rateLimitLimit('postCreate', 30), ttl: rateLimitTtl('postCreate', 60) },
+  })
+  @Post(':groupId/delete')
+  async deleteGroup(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Body() body: unknown) {
+    const { confirmName } = z.object({ confirmName: z.string().trim().min(1).max(200) }).parse(body);
+    const u = await this.prisma.user.findUnique({ where: { id: viewerUserId }, select: { siteAdmin: true } });
+    return { data: await this.groups.deleteGroup({ viewerUserId, isSiteAdmin: Boolean(u?.siteAdmin), groupId, confirmName }) };
+  }
+
+  @UseGuards(AuthGuard)
   @Post(':groupId/join')
   async join(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string) {
     return await this.groups.join({ viewerUserId, groupId });
