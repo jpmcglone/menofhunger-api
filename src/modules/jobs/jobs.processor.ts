@@ -32,6 +32,7 @@ import { NotificationWriterService } from '../notifications/notification-writer.
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { TranscriptionService } from '../transcription/transcription.service';
 import { CallsService } from '../calls/calls.service';
+import { EmbeddingsCron } from '../embeddings/embeddings.cron';
 
 @Processor(MOH_BACKGROUND_QUEUE)
 export class JobsProcessor extends WorkerHost {
@@ -67,6 +68,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly calls: CallsService,
     private readonly delegation: DelegationRunnerService,
     private readonly transcription: TranscriptionService,
+    private readonly embeddingsCron: EmbeddingsCron,
   ) {
     super();
   }
@@ -76,6 +78,7 @@ export class JobsProcessor extends WorkerHost {
     const startedAt = Date.now();
     try {
       switch (name) {
+        case JOBS.embeddingsBackfill: await this.embeddingsCron.run(); return { ok: true };
         case JOBS.mediaTranscribe: await this.transcription.process(String(job.data?.mediaId ?? ''), job.attemptsMade + 1 >= (job.opts.attempts ?? 1)); return { ok: true };
         case JOBS.adminDelegationRun: await this.delegation.run(String(job.data?.runId ?? '')); return { ok: true };
         case JOBS.adminDelegationSweep: await this.delegation.sweep(); return { ok: true };

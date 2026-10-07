@@ -569,6 +569,23 @@ export const envSchema = z
     TYPESAFE_ADDRESSING_ENABLED: z.enum(["true", "false"]).default("true"),
     TYPESAFE_TRIAGE_ENABLED: z.enum(["true", "false"]).default("true"),
 
+    // Semantic search, related content, and matching. Uses OPENAI_API_KEY; set EMBEDDINGS_ENABLED=false to turn off.
+    // Free OpenAI moderation check on posts from new accounts or posts with links. Flags go to the admin report queue.
+    CONTENT_SCREEN_ENABLED: z.enum(["true", "false"]).default("true"),
+    EMBEDDINGS_ENABLED: z.enum(["true", "false"]).default("true"),
+    OPENAI_EMBEDDING_MODEL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    EMBEDDINGS_DAILY_BUDGET_USD: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.coerce.number().nonnegative().optional(),
+    ),
+    EMBEDDINGS_USD_PER_MILLION_TOKENS: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.coerce.number().positive().optional(),
+    ),
+
     // OpenAI Responses API. Member Marv personality lives in code
     // (`marvin-system-prompt.ts`) and is sent as `instructions`. Need an API key.
     OPENAI_API_KEY: z.preprocess(

@@ -2915,6 +2915,17 @@ export type NotificationPreferencesDto = {
   inAppFollowOnline: boolean;
 };
 
+// ─── src/common/dto/onboarding-matches.dto.ts ──────────────────────────────────
+
+export type OnboardingMatchesDto = {
+  /** Open groups the member has not joined, closest to their interests first. */
+  groups: CommunityGroupShellDto[];
+  /** Members worth following, closest to their interests first. */
+  people: UserListDto[];
+  /** False when nothing in the member's answers could be matched and the lists are simply popular picks. */
+  personalized: boolean;
+};
+
 // ─── src/common/dto/post.dto.ts ────────────────────────────────────────────────
 
 export type PostAuthorDto = {

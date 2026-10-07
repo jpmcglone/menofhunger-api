@@ -14,6 +14,7 @@ export const JOBS = {
   postsPollResultsReadySweep: 'posts.pollResultsReadySweep',
   postsTopicsBackfill: 'posts.topicsBackfill',
   postsTopicsAiClassify: 'posts.topicsAiClassify',
+  embeddingsBackfill: 'embeddings.backfill',
   postsPopularScoreRefresh: 'posts.popularScoreRefresh',
   postsRefreshSinglePostScore: 'posts.refreshSinglePostScore',
   postsScheduledPublishSweep: 'posts.scheduledPublishSweep',

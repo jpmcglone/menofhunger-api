@@ -1,3 +1,4 @@
+import { EmbeddingsService } from '../embeddings/embeddings.service';
 import { BadRequestException, ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
@@ -57,6 +58,10 @@ const USER_SCORE = {
 
 /** A post search returning fewer rows than this is thin enough to try topic matching. */
 const TOPIC_RESCUE_BELOW = 3;
+/** Meaning-based matches fill in when wording alone finds fewer than this many posts. */
+const SEMANTIC_RESCUE_BELOW = 10;
+/** Cosine distance cutoff for a post to count as about the query. Tuned on live data. */
+const SEMANTIC_MAX_DISTANCE = 0.66;
 
 const POST_SCORE = {
   hashtagMatch: 110,
@@ -69,6 +74,8 @@ const POST_SCORE = {
   bodyAnyWord: 45,
   authorUsernameAnyWord: 35,
   authorNameAnyWord: 30,
+  semanticBase: 40,
+  semanticSpan: 20,
 } as const;
 
 const ARTICLE_SCORE = {
@@ -180,6 +187,7 @@ export class SearchService {
     private readonly viewerContext: ViewerContextService,
     private readonly ticker: TickerService,
     @Optional() private readonly jevTopics?: JevTopicsService,
+    @Optional() private readonly embeddings?: EmbeddingsService,
   ) {}
 
   private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
@@ -1341,6 +1349,36 @@ export class SearchService {
       }
     }
 
+    // Still thin: add posts whose meaning is close to the query. The SQL carries the same visibility and
+    // group-readability filters as the keyword search, so a vector never surfaces a post the viewer cannot read.
+    const semanticById = new Map<string, number>();
+    if (this.embeddings && raw.length < SEMANTIC_RESCUE_BELOW && hashtags.length === 0 && phrases.length === 0 && qMatchBase.length >= 3) {
+      const vector = await this.embeddings.embedQuery(qMatchBase);
+      if (vector) {
+        const allowedSql = allowed.map((v) => Prisma.sql`${v}::"PostVisibility"`);
+        const visibilitySql = viewer?.id
+          ? Prisma.sql`AND p."visibility" IN (${Prisma.join(allowedSql)})`
+          : Prisma.sql`AND p."visibility" = 'public'`;
+        const kindSql = kind ? Prisma.sql`AND p."kind" = ${kind}::"PostKind"` : Prisma.sql`AND p."kind" <> 'repost'`;
+        const near = await this.embeddings
+          .nearestPosts(vector, {
+            limit: fetchSize,
+            maxDistance: SEMANTIC_MAX_DISTANCE,
+            where: Prisma.sql`${this.readableGroupPostSql(viewer)} ${visibilitySql} ${kindSql}`,
+          })
+          .catch(() => []);
+        if (near.length) {
+          for (const row of near) semanticById.set(row.id, 1 - row.distance / SEMANTIC_MAX_DISTANCE);
+          const have = new Set(raw.map((p) => p.id));
+          const missing = near.map((r) => r.id).filter((id) => !have.has(id));
+          if (missing.length) {
+            const extra = await this.prisma.post.findMany({ where: { id: { in: missing } }, include: SEARCH_POST_INCLUDE });
+            raw = [...raw, ...extra];
+          }
+        }
+      }
+    }
+
     const postIds = raw.map((p) => p.id);
     await this.posts.ensureBoostScoresFresh(postIds);
     const popularityByPostId = await this.posts.computeScoresForPostIds(postIds);
@@ -1374,6 +1412,8 @@ export class SearchService {
       if (words.some((w) => body.includes(w))) score = Math.max(score, POST_SCORE.bodyAnyWord);
       if (words.some((w) => un.includes(w))) score = Math.max(score, POST_SCORE.authorUsernameAnyWord);
       if (words.some((w) => nm.includes(w))) score = Math.max(score, POST_SCORE.authorNameAnyWord);
+      const closeness = semanticById.get(p.id);
+      if (closeness !== undefined) score = Math.max(score, POST_SCORE.semanticBase + closeness * POST_SCORE.semanticSpan);
       return score;
     }
 

@@ -2,7 +2,7 @@
 # Synthetic PostgreSQL only. Never reads DATABASE_URL or production credentials.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-container=$(docker run --rm --detach -e POSTGRES_PASSWORD=synthetic-fixture -e POSTGRES_DB=moh_delegation_fixture postgres:16)
+container=$(docker run --rm --detach -e POSTGRES_PASSWORD=synthetic-fixture -e POSTGRES_DB=moh_delegation_fixture pgvector/pgvector:pg16)
 trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM

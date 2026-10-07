@@ -973,6 +973,23 @@ export class AppConfigService {
     };
   }
 
+  contentScreen() {
+    const apiKey = this.config.get<string>("OPENAI_API_KEY")?.trim() ?? "";
+    return { enabled: Boolean(apiKey) && this.readBool("CONTENT_SCREEN_ENABLED", true), apiKey };
+  }
+
+  embeddings() {
+    const apiKey = this.config.get<string>("OPENAI_API_KEY")?.trim() ?? "";
+    return {
+      enabled: Boolean(apiKey) && this.readBool("EMBEDDINGS_ENABLED", true),
+      apiKey,
+      model: this.config.get<string>("OPENAI_EMBEDDING_MODEL")?.trim() || "text-embedding-3-small",
+      dimensions: 512,
+      dailyBudgetUsd: Math.max(0, Number(this.config.get<string>("EMBEDDINGS_DAILY_BUDGET_USD") ?? 0.5) || 0),
+      usdPerMillionTokens: Math.max(0.000001, Number(this.config.get<string>("EMBEDDINGS_USD_PER_MILLION_TOKENS") ?? 0.02) || 0.02),
+    };
+  }
+
   marvOpenAI(): MarvOpenAIConfig {
     const apiKey = this.config.get<string>("OPENAI_API_KEY")?.trim() ?? "";
     const fastModel =

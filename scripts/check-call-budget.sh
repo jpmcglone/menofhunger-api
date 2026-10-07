@@ -2,7 +2,7 @@
 # Isolated synthetic fixture; never connects to DATABASE_URL.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-container=$(docker run --rm --detach -e POSTGRES_PASSWORD=synthetic-fixture -e POSTGRES_DB=moh_call_budget -p 127.0.0.1::5432 postgres:16)
+container=$(docker run --rm --detach -e POSTGRES_PASSWORD=synthetic-fixture -e POSTGRES_DB=moh_call_budget -p 127.0.0.1::5432 pgvector/pgvector:pg16)
 trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
 for ((attempt=0; attempt<30; attempt++)); do
   if docker exec "$container" pg_isready -U postgres -d moh_call_budget >/dev/null 2>&1; then break; fi

@@ -12,6 +12,7 @@ type Opts = {
   redisOk?: boolean;
   typeSafeProbe?: any;
   typeSafeHealth?: any;
+  pgvector?: boolean;
 };
 
 function make(opts: Opts = {}) {
@@ -25,6 +26,7 @@ function make(opts: Opts = {}) {
     marvBot: () => ({ enabled: true }),
     marvOpenAI: () => ({ apiKey: env.OPENAI_API_KEY ?? "" }),
     appleIap: () => null,
+    embeddings: () => ({ enabled: true, model: "text-embedding-3-small" }),
     r2: () => null,
     typeSafe: () => ({
       model: "jev-latest",
@@ -36,7 +38,7 @@ function make(opts: Opts = {}) {
   const prisma: any = {
     $queryRaw: jest.fn(async () => {
       if (opts.dbOk === false) throw new Error("connection refused");
-      return [];
+      return opts.pgvector === false ? [] : [{ ok: 1 }];
     }),
   };
   const redis: any = {
@@ -115,5 +117,14 @@ describe("AdminServiceStatusService", () => {
     const first = await svc.report();
     expect(await svc.report()).toBe(first);
     expect(await svc.report({ refresh: true })).toBe(first);
+  });
+
+  it("flags a database without the pgvector extension", async () => {
+    const env = { OPENAI_API_KEY: "k" };
+    const missing = find(await make({ env, pgvector: false }).report({ refresh: true }), "embeddings");
+    expect(missing.state).toBe("failing");
+    expect(missing.detail).toMatch(/pgvector/);
+    const ok = find(await make({ env }).report({ refresh: true }), "embeddings");
+    expect(ok.state).toBe("connected");
   });
 });

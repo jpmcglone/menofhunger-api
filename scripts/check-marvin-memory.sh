@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 fixture_container=$(docker run --rm --detach -e POSTGRES_PASSWORD=synthetic-fixture \
-  -e POSTGRES_DB=moh_memory_fixture postgres:16)
+  -e POSTGRES_DB=moh_memory_fixture pgvector/pgvector:pg16)
 trap 'docker rm -f "$fixture_container" >/dev/null 2>&1 || true' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM

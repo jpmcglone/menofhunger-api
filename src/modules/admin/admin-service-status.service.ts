@@ -1,9 +1,10 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Optional } from "@nestjs/common";
 import OpenAI from "openai";
 import { AppConfigService } from "../app/app-config.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { RedisService } from "../redis/redis.service";
 import { TypeSafeService } from "../typesafe/typesafe.service";
+import { EmbeddingsService } from "../embeddings/embeddings.service";
 import type {
   AdminServiceFeatureDto,
   AdminServiceLevel,
@@ -57,6 +58,7 @@ export class AdminServiceStatusService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly typeSafe: TypeSafeService,
+    @Optional() private readonly embeddings?: EmbeddingsService,
   ) {}
 
   async report(opts: { refresh?: boolean } = {}): Promise<AdminServiceStatusDto> {
@@ -237,6 +239,22 @@ export class AdminServiceStatusService {
           const health = this.typeSafe.healthSnapshot();
           if (health.budgetExhausted) return { failing: true, detail: `Daily budget of $${health.dailyBudgetUsd} reached ($${health.spentTodayUsd.toFixed(2)} spent); Jev is paused until tomorrow (UTC).` };
           return health.consecutiveFailures >= 3 ? { failing: true, detail: health.lastFailure } : null;
+        },
+      },
+      {
+        id: "embeddings", name: "Semantic search (embeddings + pgvector)", group: "AI", keys: ["OPENAI_API_KEY"], missingLevel: "yellow", failureLevel: "yellow",
+        impact: "Search matches wording only, and onboarding suggestions use popular picks. Nothing breaks.",
+        probe: () => timed(async () => {
+          const rows = await this.prisma.$queryRaw<Array<{ ok: number }>>`SELECT 1 AS ok FROM pg_extension WHERE extname = 'vector'`;
+          if (rows.length === 0) throw new Error("The pgvector extension is not installed in this database.");
+        }),
+        features: () => [{ label: `Model: ${this.appConfig.embeddings().model}`, enabled: this.appConfig.embeddings().enabled }],
+        disabled: () => (this.appConfig.envIsSet("OPENAI_API_KEY") && !this.appConfig.embeddings().enabled ? "Switched off (EMBEDDINGS_ENABLED=false)" : null),
+        extra: () => {
+          const health = this.embeddings?.health();
+          return health?.budgetExhausted
+            ? { failing: true, detail: `Daily budget of $${health.dailyBudgetUsd} reached ($${health.spentTodayUsd.toFixed(2)} spent); embeddings are paused until tomorrow (UTC).` }
+            : null;
         },
       },
       {

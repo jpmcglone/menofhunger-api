@@ -2,7 +2,7 @@
 # Isolated synthetic PostgreSQL only; never reads DATABASE_URL.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-container=$(docker run --rm --detach -e POSTGRES_PASSWORD=synthetic-fixture postgres:16)
+container=$(docker run --rm --detach -e POSTGRES_PASSWORD=synthetic-fixture pgvector/pgvector:pg16)
 trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
 for ((attempt=0; attempt<30; attempt++)); do
   if docker exec "$container" pg_isready -U postgres >/dev/null 2>&1; then break; fi

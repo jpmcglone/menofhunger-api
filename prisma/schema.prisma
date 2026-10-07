@@ -330,6 +330,7 @@ enum SpaceMode {
 
 model User {
   adminAssistantTurns AdminAssistantTurn[]
+  embedding           UserEmbedding?
 
   id                           String             @id @default(cuid())
   createdAt                    DateTime           @default(now())
@@ -1096,6 +1097,7 @@ model CommunityGroup {
   scheduledPosts    Post[]                 @relation("Post_scheduledCommunityGroup")
   notifications     Notification[]         @relation("Notification_subjectGroup")
   userSearchTargets UserSearch[]           @relation("UserSearchGroupTarget")
+  embedding         GroupEmbedding?
 
   @@index([deletedAt, isFeatured, featuredOrder])
   @@index([createdAt])
@@ -1547,6 +1549,7 @@ model Post {
    * Keeps the cron from re-paying OpenAI for the same empty post.
    */
   topicsClassifiedAt        DateTime?
+  embedding                 PostEmbedding?
   /**
    * User-created hashtags (parsed from body) used for search/autocomplete. Stored lowercase.
    */
@@ -4384,4 +4387,33 @@ model GroupChannelDelivery {
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@id([messageId, userId, reason])
+}
+
+// Semantic vectors (pgvector, 512 dims). Read and written only with raw SQL; the HNSW indexes live in the migration.
+// contentHash lets reindexing skip unchanged text, so each piece of content is embedded once.
+model PostEmbedding {
+  postId      String   @id
+  model       String   @db.VarChar(64)
+  contentHash String   @db.VarChar(64)
+  embedding   Unsupported("vector(512)")
+  updatedAt   DateTime @default(now())
+  post        Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+}
+
+model GroupEmbedding {
+  groupId     String   @id
+  model       String   @db.VarChar(64)
+  contentHash String   @db.VarChar(64)
+  embedding   Unsupported("vector(512)")
+  updatedAt   DateTime @default(now())
+  group       CommunityGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+}
+
+model UserEmbedding {
+  userId      String   @id
+  model       String   @db.VarChar(64)
+  contentHash String   @db.VarChar(64)
+  embedding   Unsupported("vector(512)")
+  updatedAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

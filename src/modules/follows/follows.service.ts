@@ -1,7 +1,8 @@
 import type { UserNotificationPreference, UserNotificationPreferencesDto } from '../../common/dto/user.dto';
 import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { EmbeddingsService } from '../embeddings/embeddings.service';
 import type { FollowVisibility, VerifiedStatus } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import * as crypto from 'node:crypto';
@@ -29,6 +30,8 @@ import {
 } from '../../common/discovery/user-affinity.sql';
 
 const RECOMMENDATIONS_CACHE_TTL_SECONDS = 15 * 60;
+/** Cosine distance under which a member profile counts as a match for an intent. */
+const MEANING_MAX_DISTANCE = 0.7;
 const RECOMMENDATION_POOL_MULTIPLIER = 8;
 const RECOMMENDATION_MAX_POOL_SIZE = 200;
 const RECOMMENDATION_JITTER_MAX = 7;
@@ -110,6 +113,7 @@ export class FollowsService {
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly viewerContext: ViewerContextService,
     private readonly posthog: PosthogService,
+    @Optional() private readonly embeddings?: EmbeddingsService,
   ) {}
 
   private recommendationsCacheKey(
@@ -487,6 +491,38 @@ export class FollowsService {
       .catch(() => undefined);
 
     return { users };
+  }
+
+  /**
+   * Members whose profile is close in meaning to `vector` (a free-text intent or the viewer's own interests).
+   * Excludes the viewer, people already followed, and either direction of block. Null when vectors are unavailable.
+   */
+  async recommendUsersByMeaning(params: {
+    viewerUserId: string;
+    vector: number[];
+    limit: number;
+  }): Promise<FollowListUser[] | null> {
+    if (!this.embeddings?.available()) return null;
+    const { viewerUserId } = params;
+    const limit = Math.max(1, Math.min(30, Math.floor(params.limit)));
+    const near = await this.embeddings
+      .nearestUsers(params.vector, { limit: limit * 3, maxDistance: MEANING_MAX_DISTANCE, excludeUserIds: [viewerUserId] })
+      .catch(() => null);
+    if (!near) return null;
+    if (near.length === 0) return [];
+    const ids = near.map((r) => r.id);
+    const [rows, following] = await Promise.all([
+      this.prisma.user.findMany({
+        where: { id: { in: ids }, usernameIsSet: true, bannedAt: null },
+        select: { id: true, username: true, name: true, premium: true, premiumPlus: true, isOrganization: true, verifiedStatus: true, avatarKey: true, avatarUpdatedAt: true, createdAt: true },
+      }),
+      this.prisma.follow.findMany({ where: { followerId: viewerUserId, followingId: { in: ids } }, select: { followingId: true } }),
+    ]);
+    const followed = new Set(following.map((f) => f.followingId));
+    const byId = new Map(rows.map((r) => [r.id, r] as const));
+    const ordered = ids.map((id) => byId.get(id)).filter((r): r is NonNullable<typeof r> => Boolean(r) && !followed.has(r!.id));
+    const users = await this.buildFollowListUsers({ viewerUserId, rows: ordered.slice(0, limit * 2) });
+    return (await this.withoutBlocked(viewerUserId, users)).slice(0, limit);
   }
 
   /**

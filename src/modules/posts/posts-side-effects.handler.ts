@@ -1,3 +1,5 @@
+import { EmbeddingsService } from '../embeddings/embeddings.service';
+import { ContentScreenService } from '../moderation-screen/content-screen.service';
 import { Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common';
 import { BOARD_THREAD_PREVIEW_INCLUDE } from '../../common/prisma-includes/post.include';
 import type { Prisma } from '@prisma/client';
@@ -88,6 +90,8 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     private readonly sideEffects: SideEffectsService,
     private readonly topicsClassify: PostsTopicsClassifyService,
     @Optional() private readonly marvAddressing?: MarvinAddressingService,
+    @Optional() private readonly embeddings?: EmbeddingsService,
+    @Optional() private readonly contentScreen?: ContentScreenService,
   ) {}
 
   onModuleInit(): void {
@@ -99,6 +103,15 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     this.registry.register('post.deleted', (payload) => this.onPostDeleted(payload));
     this.registry.register('post.engagement.changed', (payload) => this.onEngagementChanged(payload));
     this.registry.register('post.quote.changed', (payload) => this.onQuoteChanged(payload));
+  }
+
+  private async screenPost(postId: string): Promise<void> {
+    if (!this.contentScreen) return;
+    try {
+      await this.contentScreen.screenPost(postId, await this.marvIdentity.getMarvUserId());
+    } catch (err) {
+      this.logger.warn(`[content-screen] ${postId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // ─── post.engagement.changed ──────────────────────────────────────────
@@ -261,6 +274,8 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     }
 
     void this.topicsClassify.enqueueIfNeeded(postId);
+    void this.embeddings?.indexPost(postId).catch(() => undefined);
+    void this.screenPost(postId);
 
     const parentId = post.parentId ?? null;
     const visibility = post.visibility as PostVisibility;
