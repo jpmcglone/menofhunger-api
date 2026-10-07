@@ -261,7 +261,7 @@ export class NotificationWriterService {
       return;
     }
 
-    if (!(await permitsFollowNotification(this.prisma, params))) return;
+    if (!(await permitsFollowNotification({ follow: this.prisma.follow, post: this.postsRead.read }, params))) return;
 
     const fallbackTitle =
       title ??

@@ -29,6 +29,7 @@ import {
 } from '../services/marvin-thread-context.service';
 import { LinkMetadataService } from '../../link-metadata/link-metadata.service';
 import { fillVisionSlots } from '../services/marvin-vision-media';
+import { PostsReadService } from '../../posts-read/posts-read.service';
 /**
  * How often to re-emit `posts:typing` while the AI call is in flight.
  * The web client expires the indicator after 7 000ms (`usePostTyping.TYPING_TTL_MS`),
@@ -88,6 +89,7 @@ export class MarvinPublicReplyProcessor {
     private readonly threadContext: MarvinThreadContextService,
     private readonly linkMetadata: LinkMetadataService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly postsRead: PostsReadService,
     @Optional() private readonly jev?: MarvinJevService,
   ) {}
 
@@ -100,7 +102,7 @@ export class MarvinPublicReplyProcessor {
     if (!this.jev.replyGateAvailable()) return false;
     // "yes please" only makes sense next to what it answers, so give Jev the message being replied to.
     const parent = parentId
-      ? await this.prisma.post.findFirst({
+      ? await this.postsRead.read.findFirst({
           where: { id: parentId, deletedAt: null },
           select: { body: true, user: { select: { id: true } } },
         })
@@ -119,7 +121,7 @@ export class MarvinPublicReplyProcessor {
     priorEffectiveMode: ResolvedMarvinMode | null;
   }> {
     if (!parentId) return { replyingTo: null, priorEffectiveMode: null };
-    const parent = await this.prisma.post.findFirst({
+    const parent = await this.postsRead.read.findFirst({
       where: { id: parentId, deletedAt: null },
       select: { body: true, parentId: true, userId: true },
     });
@@ -198,7 +200,7 @@ export class MarvinPublicReplyProcessor {
     }
 
     // 3. Load the post + author + premium-flag + media + poll.
-    const post = await this.prisma.post.findFirst({
+    const post = await this.postsRead.read.findFirst({
       where: { id: postId, deletedAt: null },
       select: {
         id: true,
@@ -245,7 +247,7 @@ export class MarvinPublicReplyProcessor {
       if (!marvUserIdForTyping || post.userId === marvUserIdForTyping ||
           !post.mentions.some(mention => mention.user.id === marvUserIdForTyping)) return;
       // A delivery may have committed before the worker lost its connection.
-      const existing = await this.prisma.post.findUnique({ where: { id: boardMarvReplyId(postId) }, select: { id: true } });
+      const existing = await this.postsRead.read.findUnique({ where: { id: boardMarvReplyId(postId) }, select: { id: true } });
       if (existing) return;
     }
     if (post.user.bannedAt) {

@@ -1214,7 +1214,7 @@ export class NotificationPushService {
     try {
       const prefs = await this.preferences.getPreferencesInternal(recipientUserId);
       if (!this.shouldSendPushForKind(prefs, kind)) return;
-      if (!(await permitsFollowNotification(this.prisma, params))) return;
+      if (!(await permitsFollowNotification({ follow: this.prisma.follow, post: this.postsRead.read }, params))) return;
       const mediaPostId = params.actorPostId ?? params.subjectPostId ?? null;
       const threadPostId = params.subjectPostId ?? params.actorPostId ?? null;
       const [actor, mediaPost, threadPost, group] = await Promise.all([

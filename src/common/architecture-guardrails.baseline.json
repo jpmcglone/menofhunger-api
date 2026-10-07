@@ -1,14 +1,11 @@
 {
   "controllersUsingPrisma": [],
   "postTableOutsidePostsModule": [
-    "modules/admin/admin-new-member-posts.read.ts",
     "modules/articles/articles.service.ts",
     "modules/board/board.service.ts",
     "modules/fitness/fitness.service.ts",
     "modules/groups/groups.service.ts",
-    "modules/marvin/jobs/marvin-public-reply.processor.ts",
     "modules/marvin/services/marvin-bot-identity.service.ts",
-    "modules/notifications/follow-notification-policy.ts",
     "modules/pickax/pickax-crosspost.service.ts",
     "modules/post-views/post-views.service.ts",
     "modules/x/x-crosspost.service.ts",

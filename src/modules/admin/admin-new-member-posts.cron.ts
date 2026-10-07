@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { SlackService } from '../../common/slack/slack.service';
 import { readUnansweredNewMemberPosts } from './admin-new-member-posts.read';
+import { PostsReadService } from '../posts-read/posts-read.service';
 
 const ALERT_KIND = 'newMemberPostAlert';
 const NEW_MEMBER_DAYS = 7;
@@ -21,6 +22,7 @@ export class AdminNewMemberPostsCron {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly slack: SlackService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   @Cron('*/30 * * * *')
@@ -35,7 +37,7 @@ export class AdminNewMemberPostsCron {
 
   async alertWaiting(now: Date): Promise<number> {
     const { posts } = await readUnansweredNewMemberPosts(
-      this.prisma,
+      this.postsRead.read,
       { newMemberDays: NEW_MEMBER_DAYS, minAgeMinutes: MIN_AGE_MINUTES, limit: 25 },
       now,
     );

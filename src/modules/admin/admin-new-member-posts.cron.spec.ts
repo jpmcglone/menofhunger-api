@@ -1,3 +1,4 @@
+import { PostsReadService } from '../posts-read/posts-read.service';
 import { AdminNewMemberPostsCron } from './admin-new-member-posts.cron';
 
 const now = new Date('2026-10-07T12:00:00Z');
@@ -22,7 +23,7 @@ function make(posts: ReturnType<typeof post>[], seen: string[] = []) {
   };
   const slack: any = { isConfigured: true, notifyNewMemberPostsWaiting: jest.fn() };
   const appConfig: any = { runSchedulers: () => true };
-  return { cron: new AdminNewMemberPostsCron(prisma, appConfig, slack), prisma, slack };
+  return { cron: new AdminNewMemberPostsCron(prisma, appConfig, slack, new PostsReadService(prisma)), prisma, slack };
 }
 
 describe('AdminNewMemberPostsCron', () => {

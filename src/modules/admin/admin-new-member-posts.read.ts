@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@prisma/client';
+import type { PostReadDelegate } from '../posts-read/posts-read.service';
 import type { AdminNewMemberPostsDto } from '../../common/dto';
 
 const SNIPPET_MAX = 160;
@@ -8,14 +8,14 @@ const SNIPPET_MAX = 160;
  * `minAgeMinutes` leaves a grace period before a post counts as waiting.
  */
 export async function readUnansweredNewMemberPosts(
-  prisma: Pick<PrismaClient, 'post'>,
+  posts: PostReadDelegate,
   opts: { newMemberDays: number; minAgeMinutes: number; limit: number },
   now: Date = new Date(),
 ): Promise<AdminNewMemberPostsDto> {
   const joinedAfter = new Date(now.getTime() - opts.newMemberDays * 24 * 60 * 60 * 1000);
   const postedBefore = new Date(now.getTime() - opts.minAgeMinutes * 60_000);
   const postedAfter = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
-  const rows = await prisma.post.findMany({
+  const rows = await posts.findMany({
     where: {
       parentId: null,
       deletedAt: null,

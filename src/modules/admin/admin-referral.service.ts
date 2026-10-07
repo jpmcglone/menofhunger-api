@@ -2,18 +2,22 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { readAdminAcquisition } from './admin-acquisition.read';
 import { readUnansweredNewMemberPosts } from './admin-new-member-posts.read';
+import { PostsReadService } from '../posts-read/posts-read.service';
 import type { AdminAcquisitionDto, AdminNewMemberPostsDto, AdminReferralAnalyticsDto } from '../../common/dto';
 
 @Injectable()
 export class AdminReferralService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly postsRead: PostsReadService,
+  ) {}
 
   acquisition(days: number): Promise<AdminAcquisitionDto> {
     return readAdminAcquisition(this.prisma, days);
   }
 
   newMemberPosts(input: { newMemberDays: number; minAgeMinutes: number; limit: number }): Promise<AdminNewMemberPostsDto> {
-    return readUnansweredNewMemberPosts(this.prisma, input);
+    return readUnansweredNewMemberPosts(this.postsRead.read, input);
   }
 
   async referralAnalytics(): Promise<AdminReferralAnalyticsDto> {

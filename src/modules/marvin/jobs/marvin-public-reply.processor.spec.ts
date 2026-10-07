@@ -249,6 +249,7 @@ function makeProcessor(opts?: {
     threadContext,
     linkMetadata,
     presenceRealtime,
+    new PostsReadService(prisma as never),
     opts?.jev,
   );
 
