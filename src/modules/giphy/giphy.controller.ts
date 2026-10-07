@@ -3,7 +3,7 @@ import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { AuthGuard } from '../auth/auth.guard';
 import { AppConfigService } from '../app/app-config.service';
-import { PrismaService } from '../prisma/prisma.service';
+import { UserLookupService } from '../user-lookup/user-lookup.service';
 import { CurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { RedisKeys } from '../redis/redis-keys';
@@ -62,15 +62,12 @@ function mapGiphyItems(json: GiphySearchResponse) {
 export class GiphyController {
   constructor(
     private readonly cfg: AppConfigService,
-    private readonly prisma: PrismaService,
+    private readonly userLookup: UserLookupService,
     private readonly cache: CacheService,
   ) {}
 
   private async assertVerified(userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { verifiedStatus: true },
-    });
+    const user = await this.userLookup.findById(userId, { verifiedStatus: true });
     if (!user) throw new ForbiddenException('Not allowed.');
     if (!user.verifiedStatus || user.verifiedStatus === 'none') {
       throw new ForbiddenException('Verify your account to use GIF search.');

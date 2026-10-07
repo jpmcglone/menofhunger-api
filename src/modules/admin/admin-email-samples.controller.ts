@@ -2,7 +2,7 @@ import { BadRequestException, Body, Controller, Post, Req, Res, UseGuards } from
 import type { Response } from 'express';
 import { z } from 'zod';
 import { AdminGuard, type AdminRequest } from './admin.guard';
-import { PrismaService } from '../prisma/prisma.service';
+import { UserLookupService } from '../user-lookup/user-lookup.service';
 import { AppConfigService } from '../app/app-config.service';
 import { EmailService } from '../email/email.service';
 import { EMAIL, EMAIL_DARK, escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
@@ -23,7 +23,7 @@ type SampleType = z.infer<typeof schema>['type'];
 @Controller('admin/email-samples')
 export class AdminEmailSamplesController {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly userLookup: UserLookupService,
     private readonly appConfig: AppConfigService,
     private readonly email: EmailService,
   ) {}
@@ -44,9 +44,12 @@ export class AdminEmailSamplesController {
     const adminId = req.user?.id ?? '';
     if (!adminId) throw new BadRequestException('Missing admin user.');
 
-    const admin = await this.prisma.user.findUnique({
-      where: { id: adminId },
-      select: { id: true, email: true, emailVerifiedAt: true, name: true, username: true },
+    const admin = await this.userLookup.findById(adminId, {
+      id: true,
+      email: true,
+      emailVerifiedAt: true,
+      name: true,
+      username: true,
     });
     if (!admin) throw new BadRequestException('Admin user not found.');
     const to = (admin.email ?? '').trim();

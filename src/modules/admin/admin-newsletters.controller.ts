@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { CurrentUserId } from '../users/users.decorator';
-import { PrismaService } from '../prisma/prisma.service';
+import { UserLookupService } from '../user-lookup/user-lookup.service';
 import { newsletterAudienceFiltersSchema } from '../newsletters/newsletter-audience';
 import { NewslettersService } from '../newsletters/newsletters.service';
 import { AdminGuard } from './admin.guard';
@@ -37,7 +37,7 @@ const listSchema = z.object({ limit: z.coerce.number().int().min(1).max(50).opti
 export class AdminNewslettersController {
   constructor(
     private readonly newsletters: NewslettersService,
-    private readonly prisma: PrismaService,
+    private readonly userLookup: UserLookupService,
   ) {}
 
   @Get()
@@ -93,10 +93,7 @@ export class AdminNewslettersController {
 
   @Post(':id/preview-send')
   async previewSend(@Param('id') id: string, @CurrentUserId() adminUserId: string) {
-    const admin = await this.prisma.user.findUnique({
-      where: { id: adminUserId },
-      select: { id: true, email: true, emailVerifiedAt: true, name: true, username: true },
-    });
+    const admin = await this.userLookup.findById(adminUserId, { id: true, email: true, emailVerifiedAt: true, name: true, username: true });
     if (!admin) {
       return { data: { sent: false, reason: 'admin_not_found' } };
     }

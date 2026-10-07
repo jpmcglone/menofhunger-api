@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { AdminGuard, type AdminRequest } from './admin.guard';
 import { EntitlementService } from '../billing/entitlement.service';
 import { BillingService } from '../billing/billing.service';
-import { PrismaService } from '../prisma/prisma.service';
+import { UserLookupService } from '../user-lookup/user-lookup.service';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
@@ -22,7 +22,7 @@ export class AdminBillingController {
   constructor(
     private readonly entitlement: EntitlementService,
     private readonly billing: BillingService,
-    private readonly prisma: PrismaService,
+    private readonly userLookup: UserLookupService,
     private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
     private readonly usersMeRealtime: UsersMeRealtimeService,
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
@@ -31,10 +31,7 @@ export class AdminBillingController {
   ) {}
 
   private async requireUser(id: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id },
-      select: { id: true, username: true, name: true, premium: true, premiumPlus: true },
-    });
+    const user = await this.userLookup.findById(id, { id: true, username: true, name: true, premium: true, premiumPlus: true });
     if (!user) throw new NotFoundException('User not found.');
     return user;
   }

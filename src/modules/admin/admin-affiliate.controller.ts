@@ -2,7 +2,7 @@ import { Body, Controller, Get, NotFoundException, Param, Patch, Post, UseGuards
 import { z } from 'zod';
 import { AdminGuard } from './admin.guard';
 import { AffiliateService } from '../billing/affiliate.service';
-import { PrismaService } from '../prisma/prisma.service';
+import { UserLookupService } from '../user-lookup/user-lookup.service';
 import type { AdminAffiliateUserDto, AdminAffiliateSettleDto } from '../../common/dto';
 
 const setAffiliateSchema = z.object({
@@ -14,7 +14,7 @@ const setAffiliateSchema = z.object({
 export class AdminAffiliateController {
   constructor(
     private readonly affiliate: AffiliateService,
-    private readonly prisma: PrismaService,
+    private readonly userLookup: UserLookupService,
   ) {}
 
   /** List all affiliates with pending/settled totals. */
@@ -28,7 +28,7 @@ export class AdminAffiliateController {
   async getUserAffiliate(
     @Param('id') id: string,
   ): Promise<{ data: { userId: string; isAffiliate: boolean; affiliateAt: string | null } }> {
-    const user = await this.prisma.user.findUnique({ where: { id }, select: { id: true, affiliateAt: true } });
+    const user = await this.userLookup.findById(id, { id: true, affiliateAt: true });
     if (!user) throw new NotFoundException('User not found.');
     return {
       data: {

@@ -2,7 +2,7 @@ import { Controller, Post, Req, UseGuards } from '@nestjs/common';
 import { AdminGuard, type AdminRequest } from './admin.guard';
 import { ApnsPushService } from '../notifications/apns-push.service';
 import { NotificationPushService } from '../notifications/notification-push.service';
-import { PrismaService } from '../prisma/prisma.service';
+import { UserLookupService } from '../user-lookup/user-lookup.service';
 import { AppConfigService } from '../app/app-config.service';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 
@@ -20,7 +20,7 @@ export class AdminPushController {
   constructor(
     private readonly apns: ApnsPushService,
     private readonly push: NotificationPushService,
-    private readonly prisma: PrismaService,
+    private readonly userLookup: UserLookupService,
     private readonly appConfig: AppConfigService,
   ) {}
 
@@ -44,15 +44,12 @@ export class AdminPushController {
       };
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: {
+    const user = await this.userLookup.findById(userId, {
         username: true,
         name: true,
         avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
         avatarUpdatedAt: true,
-      },
-    });
+      });
     const frontendBase =
       this.appConfig.pushFrontendBaseUrl() ??
       this.appConfig.allowedOrigins()[0]?.trim() ??
