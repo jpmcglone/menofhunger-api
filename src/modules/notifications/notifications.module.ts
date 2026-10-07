@@ -18,6 +18,9 @@ import { ApnsPushService } from './apns-push.service';
 import { NotificationReadStateService } from './notification-read-state.service';
 import { NotificationQueryService } from './notification-query.service';
 import { NotificationWriterService } from './notification-writer.service';
+import { NotificationWriterSupportService } from './notification-writer-support.service';
+import { NotificationWriterCommunityService } from './notification-writer-community.service';
+import { NotificationWriterFanoutService } from './notification-writer-fanout.service';
 import { MessagePushEventsHandler } from './message-push-events.handler';
 import { MessageInstantEmailEventsHandler } from './message-instant-email-events.handler';
 import { StatusNotificationEventsHandler } from './status-notification-events.handler';
@@ -34,6 +37,9 @@ import { OnThisDayCron } from './on-this-day.cron';
     ApnsPushService,
     NotificationReadStateService,
     NotificationQueryService,
+    NotificationWriterSupportService,
+    NotificationWriterCommunityService,
+    NotificationWriterFanoutService,
     NotificationWriterService,
     MessagePushEventsHandler,
     MessageInstantEmailEventsHandler,
