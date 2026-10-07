@@ -28,7 +28,7 @@ function fixture() {
     {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
     effects as any, { enqueueIfNeeded: jest.fn(async () => undefined) } as any,
   );
-  jest.spyOn(service as any, 'resolveMentionUsernames').mockImplementation(async (names: any) => names);
+  jest.spyOn((service as any).support, 'resolveMentionUsernames').mockImplementation(async (names: any) => names);
   return { service, tx, effects };
 }
 

@@ -12,7 +12,6 @@
     "modules/notifications/notification-push.service.ts",
     "modules/notifications/notification-query.service.ts",
     "modules/notifications/notifications-email.cron.ts",
-    "modules/posts/posts-mutation.service.ts",
     "modules/posts/posts.controller.ts",
     "modules/search/search.service.ts"
   ],

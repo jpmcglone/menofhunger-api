@@ -30,6 +30,9 @@ import { PostsFeedLookupService } from './posts-feed-lookup.service';
 import { PostsFeedMediaService } from './posts-feed-media.service';
 import { PostsDiscoverMoreService } from './posts-discover-more.service';
 import { PostsMutationService } from './posts-mutation.service';
+import { PostsMutationSupportService } from './posts-mutation-support.service';
+import { PostsMutationEditsService } from './posts-mutation-edits.service';
+import { PostsMutationWriteService } from './posts-mutation-write.service';
 import { PostsSideEffectsHandler } from './posts-side-effects.handler';
 import { ScheduledPostsService } from './scheduled-posts.service';
 import { ScheduledPostsController } from './scheduled-posts.controller';
@@ -56,6 +59,9 @@ import { ScheduledPostsPublishCron } from './scheduled-posts-publish.cron';
     PostsFeedMediaService,
     PostsFeedQueryService,
     PostsDiscoverMoreService,
+    PostsMutationSupportService,
+    PostsMutationEditsService,
+    PostsMutationWriteService,
     PostsMutationService,
     // Lives in this module (not the worker-only consumers module) so the handler resolves in
     // every process — that's what lets SideEffectsService fall back to running it in-process
