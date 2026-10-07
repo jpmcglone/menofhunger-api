@@ -227,10 +227,9 @@ describe('allPostIds includes embedded post IDs (source guardrail)', () => {
     require('node:path').join(__dirname, 'posts-feed-lookup.service.ts'),
     'utf8',
   );
-  const controllerSource = require('node:fs').readFileSync(
-    require('node:path').join(__dirname, 'posts.controller.ts'),
-    'utf8',
-  );
+  const controllerSource = ['posts.controller.ts', 'posts-get.query.ts', 'posts-list.query.ts']
+    .map((file) => require('node:fs').readFileSync(require('node:path').join(__dirname, file), 'utf8'))
+    .join('\n');
 
   it('composeFeedPostDtos seeds the ancestor CTE with reposted and quoted ids', () => {
     expect(feedQuerySource).toContain('collectAncestorPostIds');

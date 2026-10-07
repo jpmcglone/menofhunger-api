@@ -5,7 +5,8 @@ import {
   isCheckinOpen,
 } from './checkin-schedule';
 import { CheckinsService } from './checkins.service';
-import { PostsMutationService } from '../posts/posts-mutation.service';
+import { PostsMutationSupportService } from '../posts/posts-mutation-support.service';
+import { PostsMutationWriteService } from '../posts/posts-mutation-write.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
 describe('daily check-in window', () => {
@@ -98,7 +99,8 @@ describe('check-in schedule enforcement', () => {
   it('also enforces the window at the underlying post mutation boundary', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-09-08T04:00:00Z'));
     try {
-      const posts = Object.create(PostsMutationService.prototype) as PostsMutationService;
+      const posts = Object.create(PostsMutationWriteService.prototype) as PostsMutationWriteService;
+      Object.assign(posts, { support: Object.create(PostsMutationSupportService.prototype) });
       await expect(posts.createPost({ userId: 'user', body: 'Answer', visibility: 'verifiedOnly',
         kind: 'checkin', checkinDayKey: '2026-09-08', checkinPrompt: 'Question' } as never))
         .rejects.toThrow('The day here is Eastern. Check-ins open at 5pm.');

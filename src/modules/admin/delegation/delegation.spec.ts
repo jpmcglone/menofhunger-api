@@ -1,4 +1,5 @@
-import { PostsMutationService } from "../../posts/posts-mutation.service";
+import { PostsMutationSupportService } from "../../posts/posts-mutation-support.service";
+import { PostsMutationWriteService } from "../../posts/posts-mutation-write.service";
 import { DelegationPolicyService } from "./delegation-policy.service";
 import { DelegationService } from "./delegation.service";
 import {
@@ -393,7 +394,8 @@ describe("existing post service permission enforcement", () => {
   ])(
     "rejects disallowed %s before any post write",
     async (visibility, verifiedStatus, premium, message) => {
-      const mutation = Object.create(PostsMutationService.prototype);
+      const mutation = Object.create(PostsMutationWriteService.prototype);
+      mutation.support = Object.create(PostsMutationSupportService.prototype);
       mutation.viewerContextService = {
         getViewer: jest.fn(async () => ({
           id: "actor",

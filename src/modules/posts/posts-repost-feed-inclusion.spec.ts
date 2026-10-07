@@ -1,11 +1,14 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Prisma } from '@prisma/client';
 import { PostsPopularScoreCron } from './posts-popular-score.cron';
 import { PostsRankingService } from './posts-ranking.service';
 
 describe('repost feed inclusion guardrails', () => {
-  const feedSource = readFileSync(join(__dirname, 'posts-feed-query.service.ts'), 'utf8');
+  const feedSource = readdirSync(__dirname)
+    .filter((file) => /^posts-feed-.*\.service\.ts$/.test(file))
+    .map((file) => readFileSync(join(__dirname, file), 'utf8'))
+    .join('\n');
 
   it('does not globally exclude repost rows from profile or home feeds', () => {
     // listQuotes legitimately excludes flat-repost shells (kind='repost') because a
