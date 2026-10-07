@@ -26,14 +26,16 @@ function build(opts: { autoVerify: boolean; autoVerifyRecruiterId: string | null
   };
   const notifications = { create: jest.fn(async () => undefined) };
   const registry = { register: jest.fn() };
+  const sideEffects = { dispatch: jest.fn() };
 
   const handler = new VerificationSideEffectsHandler(
     userVerification as any,
     siteConfig as any,
     notifications as any,
     registry as any,
+    sideEffects as any,
   );
-  return { handler, userVerification, siteConfig, notifications, registry };
+  return { handler, userVerification, siteConfig, notifications, registry, sideEffects };
 }
 
 describe('user.auto-verify', () => {
@@ -88,5 +90,13 @@ describe('user.verified', () => {
     expect(notifications.create).toHaveBeenCalledWith(
       expect.objectContaining({ recipientUserId: 'u1', kind: 'account_verified', subjectUserId: 'u1' }),
     );
+  });
+
+  it('hands referral rewards and invite codes to billing', async () => {
+    const { handler, sideEffects } = build({ autoVerify: false, autoVerifyRecruiterId: null });
+
+    await handler['onVerified']({ userId: 'u1' });
+
+    expect(sideEffects.dispatch).toHaveBeenCalledWith('referral.verified', { userId: 'u1' });
   });
 });

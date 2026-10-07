@@ -8,7 +8,7 @@ const GET_PATHS = [
   /^auth\/me$/,
   /^auth\/accounts$/,
   /^posts\/[A-Za-z0-9_-]+$/,
-  /^admin\/analytics(?:\/referrals)?$/,
+  /^admin\/analytics(?:\/referrals|\/acquisition|\/new-member-posts)?$/,
   /^admin\/users\/search$/,
   /^admin\/users\/by-username\/[A-Za-z0-9_-]+$/,
   /^admin\/users\/[A-Za-z0-9_-]+\/(?:subscription-grants|referral)$/,

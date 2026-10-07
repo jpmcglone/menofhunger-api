@@ -88,6 +88,128 @@ describe('MarvinRoutingService', () => {
     });
   });
 
+  describe('AI trick questions step up one tier', () => {
+    const traps = [
+      "how many r's are in strawberry",
+      'how many rs in strawberry',
+      'how many letters are in hippopotamus',
+      "count the r's in strawberry",
+      'how many times does the letter r appear in strawberry',
+      'spell strawberry backwards',
+      'reverse the letters in drawer',
+      'repeat the word cat 50 times',
+    ];
+    for (const text of traps) {
+      it(`upgrades auto → regular for "${text}"`, () => {
+        const r = svc.resolveRules({
+          requested: 'auto',
+          source: 'public_thread',
+          estimatedInputTokens: 20,
+          text,
+        });
+        expect(r.mode).toBe('regular');
+        expect(r.reason).toBe('ai_trick');
+      });
+    }
+
+    it('upgrades an explicit regular request to smart', () => {
+      const r = svc.resolveRules({
+        requested: 'regular',
+        source: 'public_thread',
+        estimatedInputTokens: 20,
+        text: "how many r's are in strawberry",
+      });
+      expect(r.mode).toBe('smart');
+      expect(r.reason).toBe('ai_trick');
+    });
+
+    it('leaves an explicit smart request on smart', () => {
+      const r = svc.resolveRules({
+        requested: 'smart',
+        source: 'public_thread',
+        estimatedInputTokens: 20,
+        text: "how many r's are in strawberry",
+      });
+      expect(r.mode).toBe('smart');
+      expect(r.reason).toBe('user_selected_smart');
+    });
+
+    it('does not treat ordinary counting as a trick', () => {
+      const r = svc.resolveRules({
+        requested: 'auto',
+        source: 'public_thread',
+        estimatedInputTokens: 20,
+        text: 'how many people are in the group',
+      });
+      expect(r.mode).toBe('fast');
+      expect(r.reason).toBe('auto_routed');
+    });
+  });
+
+  describe('Pushback steps up from the model that just answered', () => {
+    const replyingTo = { text: 'There are 2.', fromMarv: true };
+
+    it('upgrades a first correction of Marv from fast to regular', () => {
+      const r = svc.resolveRules({
+        requested: 'auto',
+        source: 'public_thread',
+        estimatedInputTokens: 20,
+        text: "actually there are 3 r's in strawberry lol",
+        replyingTo,
+      });
+      expect(r.mode).toBe('regular');
+      expect(r.reason).toBe('user_pushback');
+    });
+
+    it('climbs to smart when the answer being challenged was already regular', () => {
+      const r = svc.resolveRules({
+        requested: 'auto',
+        source: 'public_thread',
+        estimatedInputTokens: 20,
+        text: "you're wrong",
+        replyingTo,
+        priorEffectiveMode: 'regular',
+      });
+      expect(r.mode).toBe('smart');
+      expect(r.reason).toBe('user_pushback');
+    });
+
+    it('stacks on a trick question so the correction is a tier above the miss', () => {
+      const r = svc.resolveRules({
+        requested: 'auto',
+        source: 'public_thread',
+        estimatedInputTokens: 20,
+        text: "how many r's are in strawberry? you're wrong",
+        replyingTo,
+      });
+      expect(r.mode).toBe('smart');
+      expect(r.reason).toBe('user_pushback');
+    });
+
+    it('does not treat a new question that says actually as pushback', () => {
+      const r = svc.resolveRules({
+        requested: 'auto',
+        source: 'public_thread',
+        estimatedInputTokens: 20,
+        text: 'actually what time is the gym',
+      });
+      expect(r.mode).toBe('fast');
+    });
+
+    it('leaves smart in place', () => {
+      const r = svc.resolveRules({
+        requested: 'smart',
+        source: 'public_thread',
+        estimatedInputTokens: 20,
+        text: "you're wrong",
+        replyingTo,
+        priorEffectiveMode: 'smart',
+      });
+      expect(r.mode).toBe('smart');
+      expect(r.reason).toBe('user_selected_smart');
+    });
+  });
+
   describe('Soft fast → regular upgrade for medium context', () => {
     it('promotes fast → regular at REGULAR_TOKEN_THRESHOLD', () => {
       const r = svc.resolveRules({

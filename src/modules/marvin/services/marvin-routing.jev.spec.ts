@@ -6,6 +6,8 @@ const calm: JevRoutingSignals = {
   sensitive: 0.05,
   explicitSearch: 0.02,
   liveInfo: 0.05,
+  modelTrap: 0.02,
+  pushback: 0.02,
   complexity: { level: 'simple', confidence: 0.95 },
 };
 
@@ -107,6 +109,50 @@ describe('MarvinRoutingService with Jev', () => {
     expect((await confident.svc.resolve({ ...base, text: 'compare these two plans' })).reason).toBe('moderate_request+jev');
     const unsure = makeService({ complexity: { level: 'moderate', confidence: 0.5 } });
     expect((await unsure.svc.resolve({ ...base, text: 'compare these two plans' })).mode).toBe('fast');
+  });
+
+  it('steps a model trap up one tier even when Jev calls the question simple', async () => {
+    const { svc } = makeService({ modelTrap: 0.92, complexity: { level: 'simple', confidence: 0.99 } });
+    const text = 'which is larger, 9.11 or 9.9';
+    expect(svc.resolveRules({ ...base, text }).mode).toBe('fast');
+    const fromFast = await svc.resolve({ ...base, text });
+    expect(fromFast).toMatchObject({ mode: 'regular', reason: 'ai_trick+jev' });
+    const fromRegular = await svc.resolve({ ...base, requested: 'regular', text });
+    expect(fromRegular).toMatchObject({ mode: 'smart', reason: 'ai_trick+jev' });
+  });
+
+  it('lets an unsure Jev defer a letter-count to the keyword rule', async () => {
+    const { svc } = makeService({ modelTrap: 0.5 });
+    const result = await svc.resolve({ ...base, text: "how many r's are in strawberry" });
+    expect(result).toMatchObject({ mode: 'regular', reason: 'ai_trick' });
+  });
+
+  it('clears a keyword hit when Jev is sure it is not a model trap', async () => {
+    const { svc } = makeService({ modelTrap: 0.05 });
+    const result = await svc.resolve({ ...base, text: 'how many letters are in the mail I should send' });
+    expect(svc.resolveRules({ ...base, text: 'how many letters are in the mail I should send' }).mode).toBe('regular');
+    expect(result.mode).toBe('fast');
+  });
+
+  it('steps a confident correction up one tier, and climbs again from the model that just answered', async () => {
+    const { svc } = makeService({ pushback: 0.9, complexity: { level: 'simple', confidence: 0.99 } });
+    const text = 'that answer missed it';
+    expect(svc.resolveRules({ ...base, text }).mode).toBe('fast');
+    const first = await svc.resolve({ ...base, text });
+    expect(first).toMatchObject({ mode: 'regular', reason: 'user_pushback+jev' });
+    const again = await svc.resolve({ ...base, text, priorEffectiveMode: 'regular' });
+    expect(again).toMatchObject({ mode: 'smart', reason: 'user_pushback+jev' });
+  });
+
+  it('lets an unsure Jev keep a keyword correction, and drops one it is sure is not pushback', async () => {
+    const unsure = makeService({ pushback: 0.5 });
+    const text = "actually there are 3 r's in strawberry";
+    const replyingTo = { text: '2', fromMarv: true as const };
+    expect((await unsure.svc.resolve({ ...base, text, replyingTo })).reason).toBe('user_pushback');
+    const clear = makeService({ pushback: 0.05 });
+    const cleared = await clear.svc.resolve({ ...base, text: "you're wrong about the meeting time" });
+    expect(clear.svc.resolveRules({ ...base, text: "you're wrong about the meeting time" }).mode).toBe('regular');
+    expect(cleared.mode).toBe('fast');
   });
 
   it('sends a clearly complex request to Smart, and never downgrades Smart', async () => {

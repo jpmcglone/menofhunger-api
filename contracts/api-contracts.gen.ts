@@ -1056,10 +1056,9 @@ export type BillingMeDto = {
   /** Whether the one-time referral bonus has been granted to this user. */
   referralBonusGranted: boolean;
   /**
-   * True when the viewer was recruited by someone who is currently a paying subscriber,
-   * meaning their first Premium payment will earn them a free second month.
-   * False when there is no recruiter, the recruiter is not paying, or the bonus has
-   * already been granted.
+   * True when the viewer was recruited and the bonus has not been granted yet,
+   * meaning verifying their account will earn them a free month.
+   * False when there is no recruiter or the bonus has already been granted.
    */
   recruitBonusEligible: boolean;
 };
@@ -2909,6 +2908,7 @@ export type NotificationPreferencesDto = {
   emailStreakReminder: boolean;
   /** Send an email when someone you follow publishes a new article. */
   emailFollowedArticle: boolean;
+  emailOnboarding: boolean;
   /** Admin-authored lodge newsletter. On by default. */
   emailNewsletter: boolean;
   /** In-app heads-up (never push) when someone you follow comes online. Throttled server-side. */
@@ -2939,6 +2939,8 @@ export type PostAuthorDto = {
   avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   orgAffiliations: Array<{ id: string; username: string | null; name: string | null; avatarUrl: string | null }>;
   isBot?: boolean;
+  /** Joined within the last NEW_MEMBER_DAYS days. Omitted otherwise so older payloads stay small. */
+  isNewMember?: boolean;
   /** When true, author is banned; id/username/name/avatar are redacted. */
   authorBanned?: boolean;
 };
@@ -3811,6 +3813,37 @@ export type AdminReferralInfoDto = {
   bonusGrantedAt: string | null;
   recruiter: { id: string; username: string | null; name: string | null } | null;
   recruits: RecruitDto[];
+};
+
+export type AdminAcquisitionRowDto = { key: string; signups: number; verified: number };
+
+export type AdminAcquisitionDto = {
+  days: number;
+  since: string;
+  asOf: string;
+  totalSignups: number;
+  totalVerified: number;
+  /** Distinct members who recruited at least one signup in the window. */
+  distinctRecruiters: number;
+  bySource: AdminAcquisitionRowDto[];
+  byCampaign: AdminAcquisitionRowDto[];
+};
+
+export type AdminNewMemberPostDto = {
+  id: string;
+  createdAt: string;
+  waitingMinutes: number;
+  visibility: string;
+  snippet: string;
+  author: { id: string; username: string | null; name: string | null; joinedAt: string };
+};
+
+export type AdminNewMemberPostsDto = {
+  asOf: string;
+  newMemberDays: number;
+  minAgeMinutes: number;
+  count: number;
+  posts: AdminNewMemberPostDto[];
 };
 
 export type AdminReferralAnalyticsDto = {

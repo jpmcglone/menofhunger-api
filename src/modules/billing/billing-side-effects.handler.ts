@@ -5,6 +5,7 @@ import type { SideEffectPayloads } from '../side-effects/side-effects.constants'
 import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { BillingService } from './billing.service';
+import { ReferralService } from './referral.service';
 
 /**
  * Billing side effects: sends a bell notification when the user's premium access
@@ -25,11 +26,13 @@ export class BillingSideEffectsHandler implements OnModuleInit {
     private readonly registry: SideEffectsRegistry,
     private readonly billing: BillingService,
     private readonly sideEffects: SideEffectsService,
+    private readonly referral: ReferralService,
   ) {}
 
   onModuleInit(): void {
     this.registry.register('billing.premium.changed', (p) => this.onPremiumChanged(p));
     this.registry.register('referral.bonus.granted', (p) => this.onReferralBonusGranted(p));
+    this.registry.register('referral.verified', (p) => this.onReferralVerified(p));
   }
 
   private async onPremiumChanged(
@@ -72,5 +75,38 @@ export class BillingSideEffectsHandler implements OnModuleInit {
     const { recruitId, recruiterId } = payload;
     await this.billing.syncGrantTrialToSubscription(recruiterId);
     await this.billing.syncGrantTrialToSubscription(recruitId);
+    await this.notifyReferralBonus(recruitId, recruiterId);
+  }
+
+  /** Tells both men about the free month. Re-reads names so a delayed retry stays current. */
+  private async notifyReferralBonus(recruitId: string, recruiterId: string): Promise<void> {
+    const people = await this.prisma.user.findMany({
+      where: { id: { in: [recruitId, recruiterId] } },
+      select: { id: true, username: true, name: true },
+    });
+    const label = (id: string) => {
+      const person = people.find((p) => p.id === id);
+      return person?.name?.trim() || (person?.username ? `@${person.username}` : 'Your friend');
+    };
+    await this.notifications.create({
+      recipientUserId: recruiterId,
+      kind: 'generic',
+      subjectUserId: recruitId,
+      title: `${label(recruitId)} verified. You both got a free month`,
+      body: 'A free month of Premium is on your account.',
+    });
+    await this.notifications.create({
+      recipientUserId: recruitId,
+      kind: 'generic',
+      subjectUserId: recruiterId,
+      title: 'Welcome. You got a free month of Premium',
+      body: `You and ${label(recruiterId)} both got a free month.`,
+    });
+  }
+
+  private async onReferralVerified(
+    payload: SideEffectPayloads['referral.verified'],
+  ): Promise<void> {
+    await this.referral.onMemberVerified(payload.userId);
   }
 }

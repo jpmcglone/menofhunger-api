@@ -84,8 +84,29 @@ export class MarvinChannelReplyProcessor {
     const evidence = new Map<string, ChannelMarvEvidence>();
     try {
       ownerId = await this.credits.resolveCreditOwnerId(input.requesterId);
+      let replyingTo: { text: string; fromMarv: boolean } | null = null;
+      let priorEffectiveMode: ReturnType<typeof MarvinRoutingService.asResolvedMode> = null;
+      if (authorized.trigger.replyToId) {
+        const parent = await this.prisma.message.findFirst({
+          where: { id: authorized.trigger.replyToId, deletedForAll: false },
+          select: { body: true, senderId: true },
+        });
+        if (parent) {
+          const fromMarv = parent.senderId === authorized.grant.botId;
+          replyingTo = { text: parent.body ?? '', fromMarv };
+          if (fromMarv) {
+            const prior = await this.prisma.marvinUsageEvent.findFirst({
+              where: { source: 'private_session', sourceId: authorized.channel.conversationId, errorCode: null },
+              orderBy: { createdAt: 'desc' },
+              select: { effectiveMode: true },
+            });
+            priorEffectiveMode = MarvinRoutingService.asResolvedMode(prior?.effectiveMode);
+          }
+        }
+      }
       const routed = await this.routing.resolve({ requested, source: 'private_session', text: authorized.trigger.body,
-        estimatedInputTokens: this.routing.estimateTokens(authorized.trigger.body), webSearchEnabled: false });
+        estimatedInputTokens: this.routing.estimateTokens(authorized.trigger.body), webSearchEnabled: false,
+        replyingTo, priorEffectiveMode });
       const cost = this.credits.costForMode(routed.mode);
       const reserve = cost + this.credits.threadContextSurcharge(60);
       await this.credits.reserve(ownerId, reserve); held = reserve;

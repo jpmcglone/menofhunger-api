@@ -13,6 +13,7 @@ import { AffiliateService } from './affiliate.service';
 import { toUserListDto } from '../../common/dto/user.dto';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import type { ReferralMeDto, RecruitDto } from '../../common/dto/referral.dto';
+import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 
 // Validated after uppercasing, so lowercase input is accepted and normalized.
@@ -157,12 +158,43 @@ export class ReferralService {
    * Once set, the recruiter can never be changed by the user.
    * The code owner must be verified (or premium) at the time of linking.
    */
+  /** Public, cookie-free lookup so the invite landing page can show who invited the visitor. */
+  async lookupPublicInviter(
+    code: string,
+  ): Promise<{ username: string | null; name: string | null; avatarUrl: string | null }> {
+    const normalized = code.trim().toUpperCase();
+    if (!REFERRAL_CODE_REGEX.test(normalized)) throw new NotFoundException('Invite not found.');
+    const inviter = await this.prisma.user.findFirst({
+      where: { referralCode: normalized, bannedAt: null },
+      select: {
+        username: true,
+        name: true,
+        premium: true,
+        verifiedStatus: true,
+        avatarKey: true,
+        avatarUpdatedAt: true,
+      },
+    });
+    if (!inviter || (!inviter.premium && inviter.verifiedStatus === 'none')) {
+      throw new NotFoundException('Invite not found.');
+    }
+    return {
+      username: inviter.username ?? null,
+      name: inviter.name ?? null,
+      avatarUrl: publicAssetUrl({
+        publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
+        key: inviter.avatarKey ?? null,
+        updatedAt: inviter.avatarUpdatedAt ?? null,
+      }),
+    };
+  }
+
   async setRecruiter(userId: string, code: string): Promise<{ recruiter: { username: string | null; name: string | null } }> {
     const normalized = code.trim().toUpperCase();
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { recruitedById: true },
+      select: { recruitedById: true, verifiedStatus: true },
     });
     if (!user) throw new NotFoundException('User not found.');
     if (user.recruitedById) {
@@ -205,48 +237,43 @@ export class ReferralService {
       source: 'auto_referral',
     });
 
+    // A member who verified before linking a recruiter would otherwise never trigger the bonus.
+    if (user.verifiedStatus !== 'none') {
+      this.sideEffects.dispatch('referral.verified', { userId });
+    }
+
     return { recruiter: { username: recruiter.username ?? null, name: recruiter.name ?? null } };
   }
 
   // ─── Bonus grant ────────────────────────────────────────────────────────────
 
   /**
-   * Award the one-time referral bonus after the recruit's first Premium payment.
+   * Award the one-time, two-sided referral bonus when a recruited member becomes verified.
    *
-   * Rules:
-   *   - The **inviter (recruiter) always** receives +1 month of Premium.
-   *   - The **recruit also** receives +1 month, but **only** when the recruiter has an
-   *     active paid subscription (Stripe or Apple IAP) at the time the bonus fires.
-   *     A recruiter whose premium comes only from a comp/grant does not trigger the
-   *     recruit's bonus — the offer is "go Premium yourself and he gets one too."
+   * Both the recruiter and the recruit receive +1 month of Premium, with no paid plan
+   * required. Verification is the abuse gate, so an unverified recruit or a banned
+   * recruiter never triggers it.
    *
-   * Idempotent: uses an atomic DB update on `referralBonusGrantedAt` so concurrent
-   * calls race-free.  Dispatches `referral.bonus.granted` so the side-effects worker
-   * can call syncGrantTrialToSubscription for both parties (fixing the Stripe trial
-   * window without a DI cycle into BillingService from here).
+   * Idempotent: an atomic DB update on `referralBonusGrantedAt` makes concurrent calls
+   * race-free. Dispatches `referral.bonus.granted` so the side-effects worker can sync
+   * Stripe trial windows and notify both parties (without a DI cycle into BillingService).
    */
   async maybeGrantReferralBonus(recruitId: string): Promise<void> {
     const recruit = await this.prisma.user.findUnique({
       where: { id: recruitId },
       select: {
         id: true,
+        verifiedStatus: true,
         referralBonusGrantedAt: true,
         recruitedById: true,
-        recruitedBy: {
-          select: {
-            id: true,
-            verifiedStatus: true,
-            stripeSubscriptionStatus: true,
-            appleStatus: true,
-            appleExpiresAt: true,
-          },
-        },
+        recruitedBy: { select: { id: true, bannedAt: true } },
       },
     });
 
     if (!recruit) return;
     if (recruit.referralBonusGrantedAt) return;
-    if (!recruit.recruitedById || !recruit.recruitedBy) return;
+    if (recruit.verifiedStatus === 'none') return;
+    if (!recruit.recruitedById || !recruit.recruitedBy || recruit.recruitedBy.bannedAt) return;
 
     const now = new Date();
 
@@ -258,34 +285,69 @@ export class ReferralService {
     if (count === 0) return;
 
     const recruiterId = recruit.recruitedById;
-    const recruiterIsPaying = isPayingSubscriber(recruit.recruitedBy, now);
 
-    // Recruiter always earns a month.
     await this.issueReferralGrant(recruiterId, now);
-    // Recruit earns a month only when the recruiter has a paid subscription.
-    if (recruiterIsPaying) {
-      await this.issueReferralGrant(recruitId, now);
-    }
+    await this.issueReferralGrant(recruitId, now);
 
     await this.entitlement.recomputeAndApply(recruiterId);
     await this.entitlement.recomputeAndApply(recruitId);
 
-    this.logger.log(
-      `[referral] Bonus granted: recruit=${recruitId} recruiter=${recruiterId} recruiterIsPaying=${recruiterIsPaying}`,
-    );
+    this.logger.log(`[referral] Bonus granted: recruit=${recruitId} recruiter=${recruiterId}`);
 
-    // Side effect: sync Stripe trial windows for both parties so the free month
-    // actually defers billing.  Dispatched (not awaited) to avoid the DI cycle that
-    // would arise from injecting BillingService here — BillingService already injects
-    // ReferralService.
     this.sideEffects.dispatch('referral.bonus.granted', { recruitId, recruiterId });
+  }
 
-    // Record affiliate cash earning for the premium milestone (best-effort; idempotent).
+  /** Affiliate cash milestone for a recruit's first paid Premium (idempotent, best-effort). */
+  async recordPremiumMilestone(recruitId: string): Promise<void> {
     try {
       await this.affiliate.maybeRecordEarning(recruitId, 'premium');
     } catch (err) {
       this.logger.warn(`[affiliate] Failed to record premium earning for recruit=${recruitId}: ${err}`);
     }
+  }
+
+  /**
+   * Give a verified member a referral link without them having to pick a code.
+   * Derived from the username (already `[A-Za-z0-9_]`), with a numeric suffix on collision.
+   * Never replaces an existing code.
+   */
+  async ensureCode(userId: string): Promise<string | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { username: true, referralCode: true, verifiedStatus: true, premium: true },
+    });
+    if (!user) return null;
+    if (user.referralCode) return user.referralCode;
+    if (user.verifiedStatus === 'none' && !user.premium) return null;
+    const base = (user.username ?? '').toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+    if (base.length < 3) return null;
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const suffix = attempt === 0 ? '' : String(attempt + 1);
+      const candidate = `${base.slice(0, 20 - suffix.length)}${suffix}`;
+      try {
+        // Guarded write: only fills the code when it is still empty.
+        const { count } = await this.prisma.user.updateMany({
+          where: { id: userId, referralCode: null },
+          data: { referralCode: candidate },
+        });
+        if (count === 0) {
+          const current = await this.prisma.user.findUnique({ where: { id: userId }, select: { referralCode: true } });
+          return current?.referralCode ?? null;
+        }
+        return candidate;
+      } catch (err) {
+        if ((err as { code?: string })?.code === 'P2002') continue;
+        throw err;
+      }
+    }
+    return null;
+  }
+
+  /** Runs everything a newly verified member is owed from the referral program. */
+  async onMemberVerified(userId: string): Promise<void> {
+    await this.ensureCode(userId);
+    await this.maybeGrantReferralBonus(userId);
   }
 
   private async issueReferralGrant(userId: string, now: Date): Promise<void> {

@@ -23,7 +23,7 @@ function makeDeps(appleIapCfg: unknown = APPLE_CFG) {
     appConfig: { appleIap: jest.fn(() => appleIapCfg) },
     entitlement: { recomputeAndApply: jest.fn(async () => undefined) },
     billing: { getMe: jest.fn(async () => ({})) },
-    referral: { maybeGrantReferralBonus: jest.fn(async () => undefined) },
+    referral: { recordPremiumMilestone: jest.fn(async () => undefined) },
   };
 }
 
@@ -93,7 +93,7 @@ describe('Apple review transaction delivery', () => {
     expect(deps.prisma.user.update).toHaveBeenCalledWith({ where: { id: 'u1' }, data: expect.objectContaining({ appleSandboxOriginalTransactionId: 'sandbox-123', appleSandboxStatus: 'active' }) });
     expect(deps.prisma.user.update.mock.calls[0][0].data).not.toHaveProperty('appleOriginalTransactionId');
     expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u1');
-    expect(deps.referral.maybeGrantReferralBonus).not.toHaveBeenCalled();
+    expect(deps.referral.recordPremiumMilestone).not.toHaveBeenCalled();
   });
   it('rejects a verified transaction already owned by another account', async () => {
     const { service, deps } = makeService();
@@ -134,7 +134,7 @@ describe('Apple purchase lifecycle recovery', () => {
     await service.handleNotification('synthetic-signed-notification');
     expect(deps.prisma.user.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ appleSandboxStatus: expected }) }));
     expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u1');
-    expect(deps.referral.maybeGrantReferralBonus).not.toHaveBeenCalled();
+    expect(deps.referral.recordPremiumMilestone).not.toHaveBeenCalled();
   });
 
   it('recovers after persistence succeeded but entitlement activation timed out', async () => {
@@ -146,7 +146,7 @@ describe('Apple purchase lifecycle recovery', () => {
     await expect(service.verifyTransaction('u1', 'synthetic')).resolves.toEqual({});
     expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledTimes(2);
     expect(deps.prisma.user.update.mock.calls[0]).toEqual(deps.prisma.user.update.mock.calls[1]);
-    expect(deps.referral.maybeGrantReferralBonus).not.toHaveBeenCalled();
+    expect(deps.referral.recordPremiumMilestone).not.toHaveBeenCalled();
   });
 
   it('rejects unknown products without persistence or entitlement changes', async () => {

@@ -31,6 +31,8 @@ describe('MarvinJevService', () => {
       sensitive: { noul: 0.7 },
       explicitSearch: { noul: 0.9 },
       liveInfo: { noul: 0.8 },
+      modelTrap: { noul: 0.91 },
+      pushback: { noul: 0.04 },
       complexity: { choice: 'moderate', confidence: 0.75 },
     };
     const { svc, typeSafe } = makeService({ result: { answers } });
@@ -39,6 +41,8 @@ describe('MarvinJevService', () => {
       sensitive: 0.7,
       explicitSearch: 0.9,
       liveInfo: 0.8,
+      modelTrap: 0.91,
+      pushback: 0.04,
       complexity: { level: 'moderate', confidence: 0.75 },
     });
     await expect(svc.routingSignals({ text: 'hello', webSearchEnabled: false })).resolves.toMatchObject({
@@ -49,6 +53,23 @@ describe('MarvinJevService', () => {
     expect(call.purpose).toBe('marv.routing');
     expect(call.timeoutMs).toBeLessThanOrEqual(3000);
     expect(call.state).toEqual({ message: 'hello' });
+  });
+
+  it('gives Jev the message being corrected so pushback can be judged against it', async () => {
+    const { svc, typeSafe } = makeService({ result: { answers: {
+      crisis: { noul: 0 }, sensitive: { noul: 0 }, explicitSearch: { noul: 0 }, liveInfo: { noul: 0 },
+      modelTrap: { noul: 0 }, pushback: { noul: 0.95 }, complexity: { choice: 'simple', confidence: 0.9 },
+    } } });
+    await svc.routingSignals({
+      text: 'actually there are 3',
+      webSearchEnabled: false,
+      replyingTo: { text: 'There are 2.', fromMarv: true },
+    });
+    expect(typeSafe.decide.mock.calls[0][0].state).toEqual({
+      message: 'actually there are 3',
+      previousMessage: 'There are 2.',
+      previousAuthor: 'Marv',
+    });
   });
 
   it('returns null so callers use rules when Jev fails', async () => {

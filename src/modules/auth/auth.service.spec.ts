@@ -680,6 +680,46 @@ describe('AuthService.verifyPhoneCode — referral signup linking', () => {
     expect(result.accountDeletionCancelled).toBe(false);
   });
 
+  it('persists sanitized signup attribution on new users and defaults to invite with a recruiter', async () => {
+    const prisma = {
+      user: {
+        findUnique: jest.fn(async () => null),
+        findFirst: jest.fn(async () => ({ id: 'recruiter-1', verifiedStatus: 'identity' })),
+        create: jest.fn(async () => makeMinimalUser({ id: 'new-user', phone: '+15555550000' })),
+      },
+      phoneOtp: { findFirst: jest.fn(async () => null), update: jest.fn() },
+      follow: { create: jest.fn(async () => ({})) },
+      session: { create: jest.fn(async () => ({ id: 'session-1' })) },
+      post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+    };
+    const { svc } = makeService({ prisma });
+
+    await svc.verifyPhoneCode('+15555550000', '000000', makeResponse(), 'john-code', {
+      utmCampaign: 'Bring-One-Man',
+      landingPath: '/bring-one-man',
+    });
+
+    expect(prisma.user.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        signupSource: 'invite',
+        signupCampaign: 'bring-one-man',
+        signupLandingPath: '/bring-one-man',
+      }),
+    });
+  });
+
+  it('never writes attribution for existing users', async () => {
+    const prisma = {
+      user: { findUnique: jest.fn(async () => makeMinimalUser({ id: 'u1', phone: '+15555550000' })), create: jest.fn() },
+      phoneOtp: { findFirst: jest.fn(async () => null), update: jest.fn() },
+      session: { create: jest.fn(async () => ({ id: 'session-1' })) },
+      post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+    };
+    const { svc } = makeService({ prisma });
+    await svc.verifyPhoneCode('+15555550000', '000000', makeResponse(), null, { src: 'newsletter' });
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
   it('does not link a recruiter for existing users even when a referral code is supplied', async () => {
     const existingUser = makeMinimalUser({ id: 'existing-user', phone: '+15555550000' });
     const prisma = {

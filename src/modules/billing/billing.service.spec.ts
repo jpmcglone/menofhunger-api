@@ -94,7 +94,7 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
       })),
       extendGrantsAfterPause: jest.fn(async () => undefined),
     },
-    referral: { maybeGrantReferralBonus: jest.fn(async () => undefined) },
+    referral: { recordPremiumMilestone: jest.fn(async () => undefined) },
     ...overrides,
   };
 }

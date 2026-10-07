@@ -21,6 +21,7 @@ import {
   SESSION_TTL_DAYS,
 } from './auth.constants';
 import { hmacSha256Hex, randomSessionToken } from './auth.utils';
+import { resolveSignupAttribution, type SignupAttribution, type SignupAttributionInput } from './signup-attribution';
 import { OTP_PROVIDER } from './otp/otp-provider.token';
 import type { OtpProvider } from './otp/otp-provider';
 import { toUserDto } from '../users/user.dto';
@@ -224,7 +225,10 @@ export class AuthService {
     return Boolean(parked && parked.releaseAt > new Date());
   }
 
-  async verifyPhoneCode(phone: string, code: string, res: Response, referralCode?: string | null) {
+  async verifyPhoneCode(phone: string, code: string, res: Response,
+    referralCode?: string | null,
+    attribution?: SignupAttributionInput,
+  ) {
     const now = new Date();
     const isProd = this.appConfig.isProd();
     const disableTwilioInDev = !isProd && this.appConfig.disableTwilioInDev();
@@ -312,7 +316,17 @@ export class AuthService {
     }
 
     const restoredPendingDeletion = canRestorePendingDeletion;
-    const user = await this.resolveVerifiedUser({ phone, existing, restoredPendingDeletion, now, recruitedById });
+    const signupAttribution = isNewUser
+      ? resolveSignupAttribution(attribution, { referralApplied: Boolean(recruitedById) })
+      : null;
+    const user = await this.resolveVerifiedUser({
+      phone,
+      existing,
+      restoredPendingDeletion,
+      now,
+      recruitedById,
+      signupAttribution,
+    });
 
     // Auto-follow the recruiter on signup so the new user's feed is populated immediately.
     if (isNewUser && recruitedById) {
@@ -382,7 +396,10 @@ export class AuthService {
     this.presence.markSeenFromHttp(user.id);
 
     if (isNewUser) {
-      this.posthog.capture(user.id, 'user_signed_up');
+      this.posthog.capture(user.id, 'user_signed_up', {
+        signup_source: user.signupSource ?? null,
+        signup_campaign: user.signupCampaign ?? null,
+      });
       this.slack.notifySignup({ userId: user.id });
 
       // Auto-verify (coins, affiliate earnings, billing hooks) never blocks a signup.
@@ -424,8 +441,9 @@ export class AuthService {
     restoredPendingDeletion: boolean;
     now: Date;
     recruitedById: string | null;
+    signupAttribution: SignupAttribution | null;
   }): Promise<User> {
-    const { phone, existing, restoredPendingDeletion, now, recruitedById } = params;
+    const { phone, existing, restoredPendingDeletion, now, recruitedById, signupAttribution } = params;
 
     if (existing) {
       if (!restoredPendingDeletion) return existing;
@@ -461,6 +479,7 @@ export class AuthService {
           lastSeenAt: now,
           lastOnlineAt: now,
           ...(recruitedById ? { recruitedById } : {}),
+          ...(signupAttribution ?? {}),
         },
       });
     } catch (err) {

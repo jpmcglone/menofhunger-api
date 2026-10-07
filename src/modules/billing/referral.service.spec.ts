@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ReferralService } from './referral.service';
 
 // ─── Test doubles ─────────────────────────────────────────────────────────────
@@ -145,114 +145,76 @@ describe('ReferralService.setRecruiter', () => {
 // ─── maybeGrantReferralBonus ──────────────────────────────────────────────────
 
 describe('ReferralService.maybeGrantReferralBonus', () => {
-  function recruiterWithStripe() {
+  function recruit(overrides: Record<string, unknown> = {}) {
     return {
-      id: 'recruiter1',
+      id: 'recruit1',
       verifiedStatus: 'identity',
-      stripeSubscriptionStatus: 'active',
-      appleStatus: null,
-      appleExpiresAt: null,
+      referralBonusGrantedAt: null,
+      recruitedById: 'recruiter1',
+      recruitedBy: { id: 'recruiter1', bannedAt: null },
+      ...overrides,
     };
   }
 
-  function recruiterNoSubscription() {
-    return {
-      id: 'recruiter1',
-      verifiedStatus: 'identity',
-      stripeSubscriptionStatus: null,
-      appleStatus: null,
-      appleExpiresAt: null,
-    };
-  }
-
-  it('grants the inviter a month when recruiter is not a paying subscriber', async () => {
+  it('grants both the recruiter and the recruit, with no paid plan required', async () => {
     const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'recruit1',
-      referralBonusGrantedAt: null,
-      recruitedById: 'recruiter1',
-      recruitedBy: recruiterNoSubscription(),
-    });
+    deps.prisma.user.findUnique.mockResolvedValue(recruit());
 
     await service.maybeGrantReferralBonus('recruit1');
 
-    const grantCalls = deps.prisma.subscriptionGrant.create.mock.calls;
-    // Exactly 1 grant — to the recruiter (inviter). Recruit gets nothing since recruiter is not paying.
-    expect(grantCalls).toHaveLength(1);
-    expect(grantCalls[0][0].data.userId).toBe('recruiter1');
-  });
-
-  it('grants both when recruiter is a paying subscriber (Stripe)', async () => {
-    const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'recruit1',
-      referralBonusGrantedAt: null,
-      recruitedById: 'recruiter1',
-      recruitedBy: recruiterWithStripe(),
-    });
-
-    await service.maybeGrantReferralBonus('recruit1');
-
-    const grantCalls = deps.prisma.subscriptionGrant.create.mock.calls;
-    expect(grantCalls).toHaveLength(2);
-    const userIds = grantCalls.map((c: any) => c[0].data.userId);
-    expect(userIds).toContain('recruiter1');
-    expect(userIds).toContain('recruit1');
-  });
-
-  it('issues grants with requiresActiveSubscription: false', async () => {
-    const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'recruit1',
-      referralBonusGrantedAt: null,
-      recruitedById: 'recruiter1',
-      recruitedBy: recruiterWithStripe(),
-    });
-
-    await service.maybeGrantReferralBonus('recruit1');
-
-    for (const call of deps.prisma.subscriptionGrant.create.mock.calls as any[]) {
+    const grantCalls = deps.prisma.subscriptionGrant.create.mock.calls as any[];
+    expect(grantCalls.map((c) => c[0].data.userId).sort()).toEqual(['recruit1', 'recruiter1']);
+    for (const call of grantCalls) {
       expect(call[0].data.requiresActiveSubscription).toBe(false);
+      expect(call[0].data.source).toBe('referral');
     }
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledTimes(2);
   });
 
-  it('is idempotent — does not re-grant when already marked', async () => {
+  it('does nothing until the recruit is verified', async () => {
     const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'recruit1',
-      referralBonusGrantedAt: new Date(),
-      recruitedById: 'recruiter1',
-      recruitedBy: recruiterWithStripe(),
-    });
+    deps.prisma.user.findUnique.mockResolvedValue(recruit({ verifiedStatus: 'none' }));
+
+    await service.maybeGrantReferralBonus('recruit1');
+
+    expect(deps.prisma.user.updateMany).not.toHaveBeenCalled();
+    expect(deps.prisma.subscriptionGrant.create).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when the recruiter is banned', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue(
+      recruit({ recruitedBy: { id: 'recruiter1', bannedAt: new Date() } }),
+    );
 
     await service.maybeGrantReferralBonus('recruit1');
 
     expect(deps.prisma.subscriptionGrant.create).not.toHaveBeenCalled();
   });
 
-  it('is idempotent under a concurrent race (updateMany returns count=0)', async () => {
+  it('is idempotent when already marked', async () => {
     const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'recruit1',
-      referralBonusGrantedAt: null,
-      recruitedById: 'recruiter1',
-      recruitedBy: recruiterWithStripe(),
-    });
-    deps.prisma.user.updateMany.mockResolvedValue({ count: 0 });
+    deps.prisma.user.findUnique.mockResolvedValue(recruit({ referralBonusGrantedAt: new Date() }));
 
     await service.maybeGrantReferralBonus('recruit1');
 
     expect(deps.prisma.subscriptionGrant.create).not.toHaveBeenCalled();
   });
 
-  it('dispatches referral.bonus.granted side effect', async () => {
+  it('grants exactly once when two verifications race', async () => {
     const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'recruit1',
-      referralBonusGrantedAt: null,
-      recruitedById: 'recruiter1',
-      recruitedBy: recruiterWithStripe(),
-    });
+    deps.prisma.user.findUnique.mockResolvedValue(recruit());
+    deps.prisma.user.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValue({ count: 0 });
+
+    await Promise.all([service.maybeGrantReferralBonus('recruit1'), service.maybeGrantReferralBonus('recruit1')]);
+
+    expect(deps.prisma.subscriptionGrant.create).toHaveBeenCalledTimes(2);
+    expect(deps.sideEffects.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('dispatches referral.bonus.granted', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue(recruit());
 
     await service.maybeGrantReferralBonus('recruit1');
 
@@ -264,38 +226,92 @@ describe('ReferralService.maybeGrantReferralBonus', () => {
 
   it('does nothing when the recruit has no recruiter', async () => {
     const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'recruit1',
-      referralBonusGrantedAt: null,
-      recruitedById: null,
-      recruitedBy: null,
-    });
+    deps.prisma.user.findUnique.mockResolvedValue(recruit({ recruitedById: null, recruitedBy: null }));
 
     await service.maybeGrantReferralBonus('recruit1');
 
     expect(deps.prisma.subscriptionGrant.create).not.toHaveBeenCalled();
     expect(deps.sideEffects.dispatch).not.toHaveBeenCalled();
   });
+});
 
-  it('grants when recruiter has active Apple IAP', async () => {
+describe('ReferralService.recordPremiumMilestone', () => {
+  it('records the affiliate premium milestone and never throws', async () => {
     const { service, deps } = makeService();
-    const futureDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    deps.affiliate.maybeRecordEarning.mockRejectedValueOnce(new Error('boom'));
+    await expect(service.recordPremiumMilestone('recruit1')).resolves.toBeUndefined();
+    expect(deps.affiliate.maybeRecordEarning).toHaveBeenCalledWith('recruit1', 'premium');
+  });
+});
+
+// ─── ensureCode ───────────────────────────────────────────────────────────────
+
+describe('ReferralService.ensureCode', () => {
+  it('derives an uppercase code from the username', async () => {
+    const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'recruit1',
-      referralBonusGrantedAt: null,
-      recruitedById: 'recruiter1',
-      recruitedBy: {
-        id: 'recruiter1',
-        verifiedStatus: 'identity',
-        stripeSubscriptionStatus: null,
-        appleStatus: 'active',
-        appleExpiresAt: futureDate,
-      },
+      username: 'John_Doe', referralCode: null, verifiedStatus: 'identity', premium: false,
     });
 
-    await service.maybeGrantReferralBonus('recruit1');
+    await expect(service.ensureCode('u1')).resolves.toBe('JOHN_DOE');
+    expect(deps.prisma.user.updateMany).toHaveBeenCalledWith({
+      where: { id: 'u1', referralCode: null },
+      data: { referralCode: 'JOHN_DOE' },
+    });
+  });
 
-    const grantCalls = deps.prisma.subscriptionGrant.create.mock.calls;
-    expect(grantCalls).toHaveLength(2);
+  it('retries with a numeric suffix on a unique collision', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue({
+      username: 'johndoe', referralCode: null, verifiedStatus: 'manual', premium: false,
+    });
+    deps.prisma.user.updateMany
+      .mockRejectedValueOnce(Object.assign(new Error('unique'), { code: 'P2002' }))
+      .mockResolvedValueOnce({ count: 1 });
+
+    await expect(service.ensureCode('u1')).resolves.toBe('JOHNDOE2');
+  });
+
+  it('keeps an existing code and skips unverified members', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValueOnce({
+      username: 'johndoe', referralCode: 'MINE', verifiedStatus: 'identity', premium: false,
+    });
+    await expect(service.ensureCode('u1')).resolves.toBe('MINE');
+
+    deps.prisma.user.findUnique.mockResolvedValueOnce({
+      username: 'johndoe', referralCode: null, verifiedStatus: 'none', premium: false,
+    });
+    await expect(service.ensureCode('u2')).resolves.toBeNull();
+    expect(deps.prisma.user.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('ReferralService.lookupPublicInviter', () => {
+  it('returns the inviter display fields for an active code', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findFirst.mockResolvedValue({
+      username: 'john', name: 'John', premium: false, verifiedStatus: 'identity',
+      avatarKey: null, avatarUpdatedAt: null,
+    });
+
+    await expect(service.lookupPublicInviter('john')).resolves.toEqual({
+      username: 'john', name: 'John', avatarUrl: null,
+    });
+    expect(deps.prisma.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { referralCode: 'JOHN', bannedAt: null } }),
+    );
+  });
+
+  it('404s for unknown, malformed, or unverified codes', async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findFirst.mockResolvedValue(null);
+    await expect(service.lookupPublicInviter('nobody')).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.lookupPublicInviter('!!')).rejects.toBeInstanceOf(NotFoundException);
+
+    deps.prisma.user.findFirst.mockResolvedValue({
+      username: 'x', name: 'X', premium: false, verifiedStatus: 'none', avatarKey: null, avatarUpdatedAt: null,
+    });
+    await expect(service.lookupPublicInviter('xcode')).rejects.toBeInstanceOf(NotFoundException);
   });
 });

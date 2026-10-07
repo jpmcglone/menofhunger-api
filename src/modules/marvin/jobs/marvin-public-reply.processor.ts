@@ -113,6 +113,31 @@ export class MarvinPublicReplyProcessor {
     return probability !== null && probability < MENTION_NO_REPLY_THRESHOLD;
   }
 
+  /** Parent post plus the tier of the Marv answer it replied to, when this turn is a correction. */
+  private async correctionContext(parentId: string | null): Promise<{
+    replyingTo: { text: string; fromMarv: boolean } | null;
+    priorEffectiveMode: ResolvedMarvinMode | null;
+  }> {
+    if (!parentId) return { replyingTo: null, priorEffectiveMode: null };
+    const parent = await this.prisma.post.findFirst({
+      where: { id: parentId, deletedAt: null },
+      select: { body: true, parentId: true, userId: true },
+    });
+    if (!parent) return { replyingTo: null, priorEffectiveMode: null };
+    const marvId = this.identity.cachedMarvUserId();
+    const fromMarv = Boolean(marvId && parent.userId === marvId);
+    let priorEffectiveMode: ResolvedMarvinMode | null = null;
+    if (fromMarv && parent.parentId) {
+      const prior = await this.prisma.marvinUsageEvent.findFirst({
+        where: { source: 'public_thread', sourceId: parent.parentId, errorCode: null },
+        orderBy: { createdAt: 'desc' },
+        select: { effectiveMode: true },
+      });
+      priorEffectiveMode = MarvinRoutingService.asResolvedMode(prior?.effectiveMode);
+    }
+    return { replyingTo: { text: parent.body ?? '', fromMarv }, priorEffectiveMode };
+  }
+
   async process(payload: MarvinPublicReplyJobPayload): Promise<void> {
     const startedAt = Date.now();
     const { postId, rootPostId, requestingUserId } = payload;
@@ -330,12 +355,15 @@ export class MarvinPublicReplyProcessor {
     }
 
     // 5. Routing decision (mode + crisis detection).
+    const correction = await this.correctionContext(post.parentId);
     const routed = await this.routing.resolve({
       requested: requestedMode,
       source: 'public_thread',
       estimatedInputTokens: this.routing.estimateTokens(text),
       text,
       webSearchEnabled: this.appConfig.marvOpenAI().webSearchEnabled,
+      replyingTo: correction.replyingTo,
+      priorEffectiveMode: correction.priorEffectiveMode,
     });
     const effectiveMode: ResolvedMarvinMode = routed.mode;
     this.logger.log(

@@ -22,6 +22,7 @@ import { AuthService, type SessionResult } from './auth.service';
 import { AccountDeletionService } from './account-deletion.service';
 import { OTP_CODE_LENGTH } from './auth.constants';
 import { normalizePhone } from './auth.utils';
+import { signupAttributionSchema } from './signup-attribution';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -80,6 +81,7 @@ const verifySchema = z.object({
     .max(OTP_CODE_LENGTH)
     .regex(/^\d+$/, 'Code must be numeric'),
   referralCode: z.string().max(50).optional().nullable(),
+  attribution: signupAttributionSchema,
 });
 
 @ApiTags('Auth')
@@ -155,7 +157,7 @@ export class AuthController {
     } catch {
       throw new BadRequestException('Invalid phone number format');
     }
-    const result = await this.auth.verifyPhoneCode(phone, parsed.code, res, parsed.referralCode);
+    const result = await this.auth.verifyPhoneCode(phone, parsed.code, res, parsed.referralCode, parsed.attribution);
     return { data: result };
   }
 

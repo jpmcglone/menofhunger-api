@@ -16,6 +16,14 @@ export type JevRoutingSignals = {
   explicitSearch: number | null;
   /** Probability a good answer needs current or real-time information. Null when web search is off. */
   liveInfo: number | null;
+  /**
+   * Probability this is a task weaker models systematically miss (letter counts, exact
+   * spelling, lookalike numbers) even though a person finds it easy. Independent of
+   * {@link complexity}, which treats these as simple.
+   */
+  modelTrap: number;
+  /** Probability the author is correcting or rejecting a previous answer, especially Marv's. */
+  pushback: number;
   complexity: { level: 'simple' | 'moderate' | 'complex'; confidence: number };
 };
 
@@ -38,15 +46,28 @@ export class MarvinJevService {
     return this.typeSafe.isConfigured() && this.appConfig.typeSafe().replyGateEnabled;
   }
 
-  async routingSignals(args: { text: string; webSearchEnabled: boolean }): Promise<JevRoutingSignals | null> {
+  async routingSignals(args: {
+    text: string;
+    webSearchEnabled: boolean;
+    replyingTo?: { text: string; fromMarv: boolean } | null;
+  }): Promise<JevRoutingSignals | null> {
     const message = args.text.trim();
     if (!message || !this.routingAvailable()) return null;
 
+    const previous = args.replyingTo?.text.trim();
     const result = await this.typeSafe.decide({
       purpose: 'marv.routing',
       timeoutMs: JEV_BUDGET_MS,
       signal: AbortSignal.timeout(JEV_BUDGET_MS),
-      state: { message: message.slice(0, MAX_TEXT_CHARS) },
+      state: {
+        message: message.slice(0, MAX_TEXT_CHARS),
+        ...(previous
+          ? {
+              previousMessage: previous.slice(0, 1_500),
+              previousAuthor: args.replyingTo?.fromMarv ? 'Marv' : 'another member',
+            }
+          : {}),
+      },
       questions: {
         crisis: noul(
           'Does the author express suicidal thoughts, a wish to die, self-harm, or severe hopelessness about going on living?',
@@ -70,6 +91,20 @@ export class MarvinJevService {
           'Would a good answer require current or real-time information, such as news, scores, prices, weather, or recent events?',
           { true: 'Depends on facts that change over time or happened recently.', false: 'Answerable from stable knowledge or reasoning.' },
         ),
+        modelTrap: noul(
+          'Is this a task weaker language models systematically get wrong, even though a person finds it easy? Count specific letters or characters in a word, spell or reverse a word exactly, repeat a phrase an exact number of times, or compare lookalike numbers such as 9.11 and 9.9. Ordinary counting of people or things, riddles, and hard reasoning do not count.',
+          {
+            true: 'A precise character, spelling, repetition, or lookalike-number task that models often miss.',
+            false: 'Any other message, including casual chat, real counting questions, riddles, and difficult reasoning.',
+          },
+        ),
+        pushback: noul(
+          'Is the author correcting, rejecting, or challenging a previous answer, especially one Marv just gave? Use previousMessage when it is present. A new question, a thanks, or agreement is not pushback.',
+          {
+            true: 'A clear correction or "that is wrong" aimed at the prior answer.',
+            false: 'A new request, thanks, agreement, or a mild aside that does not reject the prior answer.',
+          },
+        ),
         complexity: choice('How demanding is it to answer this message well?', {
           simple: 'A brief direct answer, casual exchange, or a well-known fact or opinion.',
           moderate: 'Needs a multi-part explanation, comparison, careful drafting, or some synthesis.',
@@ -85,6 +120,8 @@ export class MarvinJevService {
       sensitive: answers.sensitive.noul,
       explicitSearch: args.webSearchEnabled ? answers.explicitSearch.noul : null,
       liveInfo: args.webSearchEnabled ? answers.liveInfo.noul : null,
+      modelTrap: answers.modelTrap.noul,
+      pushback: answers.pushback.noul,
       complexity: { level: answers.complexity.choice, confidence: answers.complexity.confidence },
     };
   }

@@ -38,6 +38,37 @@ export type AdminReferralInfoDto = {
   recruits: RecruitDto[];
 };
 
+export type AdminAcquisitionRowDto = { key: string; signups: number; verified: number };
+
+export type AdminAcquisitionDto = {
+  days: number;
+  since: string;
+  asOf: string;
+  totalSignups: number;
+  totalVerified: number;
+  /** Distinct members who recruited at least one signup in the window. */
+  distinctRecruiters: number;
+  bySource: AdminAcquisitionRowDto[];
+  byCampaign: AdminAcquisitionRowDto[];
+};
+
+export type AdminNewMemberPostDto = {
+  id: string;
+  createdAt: string;
+  waitingMinutes: number;
+  visibility: string;
+  snippet: string;
+  author: { id: string; username: string | null; name: string | null; joinedAt: string };
+};
+
+export type AdminNewMemberPostsDto = {
+  asOf: string;
+  newMemberDays: number;
+  minAgeMinutes: number;
+  count: number;
+  posts: AdminNewMemberPostDto[];
+};
+
 export type AdminReferralAnalyticsDto = {
   totalCodesCreated: number;
   totalRecruits: number;

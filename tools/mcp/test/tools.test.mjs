@@ -288,6 +288,28 @@ test('activation and attention use shared admin routes and bounded validated inp
   assert.equal(calls.at(-1)[0], 'admin/operations/attention');
 });
 
+test('signup_sources reads the acquisition route with a bounded window', async () => {
+  const calls = [];
+  const api = { get: async (...args) => { calls.push(args); return { data: {} }; } };
+  const tools = createTools({ api, localArtifacts: false });
+  const tool = tools.find(item => item.name === 'signup_sources');
+  const command = await parseCommand(['signups']);
+  assert.equal(command.toolName, 'signup_sources');
+  await tool.execute(command.args);
+  assert.deepEqual(calls[0], ['admin/analytics/acquisition', { days: 7 }]);
+  await assert.rejects(tool.execute({ days: 365 }));
+});
+
+test('new_member_posts reads the unanswered new-member route', async () => {
+  const calls = [];
+  const api = { get: async (...args) => { calls.push(args); return { data: {} }; } };
+  const tools = createTools({ api, localArtifacts: false });
+  const tool = tools.find(item => item.name === 'new_member_posts');
+  await tool.execute({});
+  assert.deepEqual(calls[0], ['admin/analytics/new-member-posts', { newMembersDays: 7, minAgeMinutes: 60, limit: 25 }]);
+  await assert.rejects(tool.execute({ limit: 500 }));
+});
+
 test('plainBodyToNewsletterJson matches delegation multi-paragraph conversion', () => {
   assert.equal(
     plainBodyToNewsletterJson('Hello'),

@@ -20,6 +20,13 @@ export type MarvinRouteArgs = {
   distinctAuthors?: number;
   /** When true, web search is available at Regular/Smart; time-sensitive queries upgrade Fast→Regular. */
   webSearchEnabled?: boolean;
+  /** The message this turn replies to, when there is one. Pushback keywords only widen when it is Marv's. */
+  replyingTo?: { text: string; fromMarv: boolean } | null;
+  /**
+   * Tier that produced the Marv answer being challenged. A confident correction
+   * steps up from this, so a second pushback climbs again.
+   */
+  priorEffectiveMode?: ResolvedMarvinMode | null;
 };
 
 export type MarvinRouteResult = {
@@ -39,6 +46,10 @@ type RouteSignals = {
   webSearchSignal: boolean;
   /** Content-derived upgrade, only ever set from Jev. */
   complexity: 'moderate' | 'complex' | null;
+  /** Letter counts, exact spelling, and other tasks weaker models miss. */
+  modelTrap: boolean;
+  /** The author is correcting or rejecting an answer, strongly enough to trust. */
+  pushback: boolean;
 };
 
 /** Crisis is deliberately over-triggered: a missed signal costs far more than an extra Smart reply. */
@@ -56,6 +67,11 @@ const JEV_COMPLEX_CONFIDENCE = 0.8;
  *  - Smart is never auto-downgraded.
  *  - Fast/Regular auto-upgrade to Smart for sensitive or complex topics.
  *  - Fast/Regular auto-upgrade to Smart when context is very long.
+ *  - Questions that trip weaker models (letter counts, exact spelling) step up one tier:
+ *    Fast → Regular, Regular → Smart. Smart stays put.
+ *  - A confident correction of Marv steps up one tier from the model that just answered.
+ *    Pushback has to clear the same Jev confidence bar as other upgrades. A second
+ *    correction climbs again because the prior tier is passed back in.
  *  - Despair / self-harm signals always force Smart (and the caller should also
  *    surface a "consider seeking proper help" nudge — handled in the prompt builder).
  */
@@ -132,6 +148,38 @@ export class MarvinRoutingService {
    * Crisis / despair / self-harm patterns. These force Smart AND set a flag the prompt
    * builder uses to add a "encourage seeking proper help" instruction.
    */
+  /**
+   * Tasks weaker models miss even when the question looks trivial. Jev catches paraphrases;
+   * these patterns are the floor when Jev is off or unsure. Kept narrow so "how many people
+   * are in the group" does not qualify.
+   */
+  private static readonly AI_TRICK_PATTERNS: ReadonlyArray<RegExp> = [
+    /\bhow many\s+(?:(?!is\b|as\b|us\b)[a-z]['’]?s|letters?|characters?|vowels?|consonants?)\s+(?:are\s+)?in\b/i,
+    /\b(?:count|number of)\s+(?:the\s+)?(?:(?!is\b|as\b|us\b)[a-z]['’]?s|letters?|characters?|vowels?|consonants?)\b/i,
+    /\bhow many times does (?:the )?letter\b/i,
+    /\b(?:the )?letter\s+['"]?[a-z]['"]?\b.{0,40}\b(?:in|appear|occurs?)\b/i,
+    /\bspell\b.{0,80}\b(?:backwards|backward|in reverse)\b/i,
+    /\b(?:reverse|backwards)\b.{0,40}\b(?:letters?|spelling|the word)\b/i,
+    /\b(?:repeat|say|write)\s+(?:the word\s+\w+|['"“][^'"”]{1,40}['"”]).{0,40}\b\d+\s+times\b/i,
+  ];
+
+  /**
+   * Obvious corrections. Softer disagreement ("actually…") is left to Jev so a new
+   * request that happens to say "actually" does not spend a higher tier.
+   */
+  private static readonly PUSHBACK_PATTERNS: ReadonlyArray<RegExp> = [
+    /\b(?:you(?:'re| are)|that(?:'s| is))\s+wrong\b/i,
+    /\b(?:incorrect|miscounted|you miscounted)\b/i,
+    /\b(?:no|nope),?\s+you\b/i,
+    /\bactually\b.{0,80}\bthere (?:are|is)\s+(?:only\s+)?\d+\b/i,
+  ];
+
+  /** Corrections that are only meaningful as a reply to something Marv just said. */
+  private static readonly PUSHBACK_TO_MARV_PATTERNS: ReadonlyArray<RegExp> = [
+    /\bnot\s+\d+\b/i,
+    /\bthere (?:are|is)\s+(?:only\s+)?\d+\b/i,
+  ];
+
   private static readonly CRISIS_PATTERNS: ReadonlyArray<RegExp> = [
     /\b(suicid\w+|kill\s+myself|end\s+it\s+all|end\s+my\s+life|don'?t\s+want\s+to\s+live)\b/i,
     /\b(self[-\s]?harm|cut\s+myself|hurt\s+myself)\b/i,
@@ -155,6 +203,7 @@ export class MarvinRoutingService {
     const signals = await jev.routingSignals({
       text: args.text ?? '',
       webSearchEnabled: Boolean(args.webSearchEnabled),
+      replyingTo: args.replyingTo ?? null,
     });
     if (!signals) return rules;
 
@@ -187,6 +236,8 @@ export class MarvinRoutingService {
         ? MarvinRoutingService.WEB_SEARCH_PATTERNS.some((re) => re.test(text))
         : false,
       complexity: null,
+      modelTrap: MarvinRoutingService.AI_TRICK_PATTERNS.some((re) => re.test(text)),
+      pushback: MarvinRoutingService.pushbackIn(text, args.replyingTo),
     };
   }
 
@@ -211,6 +262,8 @@ export class MarvinRoutingService {
       explicitSearch,
       webSearchSignal: !explicitSearch && liveInfo,
       complexity,
+      modelTrap: confident(jev.modelTrap, rules.modelTrap),
+      pushback: confident(jev.pushback, rules.pushback),
     };
   }
 
@@ -221,7 +274,11 @@ export class MarvinRoutingService {
       mode: ResolvedMarvinMode,
       reason: string,
       webSearchDemanded: boolean,
-    ): MarvinRouteResult => ({ mode, reason, crisisDetected, webSearchDemanded, engine: 'rules' });
+    ): MarvinRouteResult => this.applyPushback(
+      { mode, reason, crisisDetected, webSearchDemanded, engine: 'rules' },
+      signals.pushback,
+      args.priorEffectiveMode,
+    );
 
     // 'auto' is treated as a routing hint to start from 'fast' and upgrade as needed —
     // same as if the user picked fast but with full upgrade eligibility.
@@ -238,6 +295,13 @@ export class MarvinRoutingService {
     }
     if (distinctAuthors >= 4) return done('smart', 'multi_user_thread', explicitSearch);
     if (signals.complexity === 'complex') return done('smart', 'complex_request', explicitSearch);
+
+    // One tier up. These look simple, so complexity routing would leave them on Fast,
+    // where letter-counting and exact spelling fail.
+    if (signals.modelTrap) {
+      if (baseMode === 'fast') return done('regular', 'ai_trick', explicitSearch);
+      if (baseMode === 'regular') return done('smart', 'ai_trick', explicitSearch);
+    }
 
     // Soft upgrades Fast → Regular.
     if (baseMode === 'fast') {
@@ -256,6 +320,39 @@ export class MarvinRoutingService {
     if (explicitSearch) return done(baseMode, 'explicit_search_demand', true);
 
     return done(baseMode, args.requested === 'auto' ? 'auto_routed' : 'user_selected', false);
+  }
+
+  /** Usage rows store `auto` as well; only the three real tiers can be stepped up from. */
+  static asResolvedMode(mode: string | null | undefined): ResolvedMarvinMode | null {
+    return mode === 'fast' || mode === 'regular' || mode === 'smart' ? mode : null;
+  }
+
+  private static pushbackIn(
+    text: string,
+    replyingTo: MarvinRouteArgs['replyingTo'],
+  ): boolean {
+    if (MarvinRoutingService.PUSHBACK_PATTERNS.some((re) => re.test(text))) return true;
+    if (!replyingTo?.fromMarv) return false;
+    return MarvinRoutingService.PUSHBACK_TO_MARV_PATTERNS.some((re) => re.test(text));
+  }
+
+  /**
+   * One tier above the model that just failed, and at least one above the tier this
+   * turn would otherwise use. Smart is the ceiling. Already-Smart answers keep their
+   * original reason (crisis, user selection) instead of being relabeled.
+   */
+  private applyPushback(
+    result: MarvinRouteResult,
+    pushback: boolean,
+    prior: ResolvedMarvinMode | null | undefined,
+  ): MarvinRouteResult {
+    if (!pushback || result.mode === 'smart') return result;
+    const rank: Record<ResolvedMarvinMode, number> = { fast: 0, regular: 1, smart: 2 };
+    const above = (mode: ResolvedMarvinMode): ResolvedMarvinMode => (mode === 'fast' ? 'regular' : 'smart');
+    const failedAt = prior && rank[prior] > rank[result.mode] ? prior : result.mode;
+    const mode = above(failedAt);
+    if (rank[mode] <= rank[result.mode]) return result;
+    return { ...result, mode, reason: 'user_pushback' };
   }
 
   /**

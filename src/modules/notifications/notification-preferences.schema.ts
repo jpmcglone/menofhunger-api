@@ -20,6 +20,7 @@ export const preferencesPatchSchema = z
     emailInstantHighSignal: z.boolean().optional(),
     emailStreakReminder: z.boolean().optional(),
     emailFollowedArticle: z.boolean().optional(),
+    emailOnboarding: z.boolean().optional(),
     emailNewsletter: z.boolean().optional(),
     inAppFollowOnline: z.boolean().optional(),
   })

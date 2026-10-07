@@ -59,10 +59,9 @@ export type BillingMeDto = {
   /** Whether the one-time referral bonus has been granted to this user. */
   referralBonusGranted: boolean;
   /**
-   * True when the viewer was recruited by someone who is currently a paying subscriber,
-   * meaning their first Premium payment will earn them a free second month.
-   * False when there is no recruiter, the recruiter is not paying, or the bonus has
-   * already been granted.
+   * True when the viewer was recruited and the bonus has not been granted yet,
+   * meaning verifying their account will earn them a free month.
+   * False when there is no recruiter or the bonus has already been granted.
    */
   recruitBonusEligible: boolean;
 };

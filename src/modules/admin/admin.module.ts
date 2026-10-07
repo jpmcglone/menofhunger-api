@@ -50,6 +50,8 @@ import { AdminDailyContentController } from "./admin-daily-content.controller";
 import { AdminEmailSamplesController } from "./admin-email-samples.controller";
 import { EmailModule } from "../email/email.module";
 import { AdminDailyDigestCron } from "./admin-digest-email.cron";
+import { AdminVerificationSlaCron } from "./admin-verification-sla.cron";
+import { AdminNewMemberPostsCron } from "./admin-new-member-posts.cron";
 import { AdminAnalyticsController } from "./admin-analytics.controller";
 import { AdminBillingController } from "./admin-billing.controller";
 import { AdminReferralController } from "./admin-referral.controller";
@@ -154,6 +156,8 @@ import { AdminOperationsController } from "./admin-operations.controller";
     AdminImageReviewService,
     AdminHashtagsService,
     AdminDailyDigestCron,
+    AdminVerificationSlaCron,
+    AdminNewMemberPostsCron,
     AdminAnalyticsBriefService,
     AdminIntroBriefService,
     AdminIntroBriefCron,

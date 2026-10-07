@@ -1,13 +1,18 @@
 import { BillingSideEffectsHandler } from './billing-side-effects.handler';
 
-function makeHandler(overrides: { prisma?: any; notifications?: any; billing?: any; sideEffects?: any } = {}) {
+function makeHandler(overrides: { prisma?: any; notifications?: any; billing?: any; sideEffects?: any; referral?: any } = {}) {
   const prisma = overrides.prisma ?? {
     user: {
       findUnique: jest.fn(),
+      findMany: jest.fn(async () => [
+        { id: 'recruit1', username: 'newman', name: 'New Man' },
+        { id: 'recruiter1', username: 'john', name: null },
+      ]),
     },
   };
   const notifications = overrides.notifications ?? {
     upsertPremiumStatusNotification: jest.fn(async () => undefined),
+    create: jest.fn(async () => undefined),
   };
   const billing = overrides.billing ?? {
     syncGrantTrialToSubscription: jest.fn(async () => undefined),
@@ -15,9 +20,10 @@ function makeHandler(overrides: { prisma?: any; notifications?: any; billing?: a
   const sideEffects = overrides.sideEffects ?? {
     dispatch: jest.fn(),
   };
+  const referral = overrides.referral ?? { onMemberVerified: jest.fn(async () => undefined) };
   const registry = { register: jest.fn() } as any;
-  const handler = new BillingSideEffectsHandler(prisma, notifications, registry, billing, sideEffects);
-  return { handler, prisma, notifications, billing, sideEffects, registry };
+  const handler = new BillingSideEffectsHandler(prisma, notifications, registry, billing, sideEffects, referral);
+  return { handler, prisma, notifications, billing, sideEffects, registry, referral };
 }
 
 afterEach(() => {
@@ -138,5 +144,27 @@ describe('BillingSideEffectsHandler — referral.bonus.granted', () => {
     expect(billing.syncGrantTrialToSubscription).toHaveBeenCalledWith('recruiter1');
     expect(billing.syncGrantTrialToSubscription).toHaveBeenCalledWith('recruit1');
     expect(billing.syncGrantTrialToSubscription).toHaveBeenCalledTimes(2);
+  });
+
+  it('notifies both the recruiter and the recruit', async () => {
+    const { handler, notifications } = makeHandler();
+
+    await triggerHandler(handler, { recruitId: 'recruit1', recruiterId: 'recruiter1' });
+
+    const calls = notifications.create.mock.calls.map((c: any) => c[0]);
+    expect(calls).toHaveLength(2);
+    expect(calls.find((c: any) => c.recipientUserId === 'recruiter1').title).toContain('New Man verified');
+    expect(calls.find((c: any) => c.recipientUserId === 'recruit1').body).toContain('@john');
+  });
+});
+
+describe('BillingSideEffectsHandler — referral.verified', () => {
+  it('registers and delegates to ReferralService.onMemberVerified', async () => {
+    const { handler, registry, referral } = makeHandler();
+    handler.onModuleInit();
+    expect(registry.register).toHaveBeenCalledWith('referral.verified', expect.any(Function));
+
+    await (handler as any).onReferralVerified({ userId: 'u1' });
+    expect(referral.onMemberVerified).toHaveBeenCalledWith('u1');
   });
 });

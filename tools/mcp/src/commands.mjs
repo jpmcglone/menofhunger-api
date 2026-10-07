@@ -10,6 +10,8 @@ export const aliases = {
   briefing: ['founder_briefing'],
   analytics: ['analytics'],
   referrals: ['referral_analytics'],
+  signups: ['signup_sources'],
+  'new-member-posts': ['new_member_posts'],
   feedback: ['feedback'],
   reports: ['reports'],
   queues: ['queue_health'],
@@ -142,6 +144,8 @@ Optional global command: npm install --global ./tools/mcp, then moh <command>
   content --unanswered --limit 20     Public posts needing a response
   content --q "leadership"            Public content research, up to a 31-day window
   referrals                          Referral metrics
+  signups --days 7                   Signups and verified by source and campaign
+  new-member-posts --newMembersDays 7  New members' posts still waiting for a reply
   newsletters [ID]                   Newsletter summaries or one existing draft
   newsletter-draft --input FILE      Create a live admin newsletter draft (does not send)
   definitions                        Metric windows and interpretation

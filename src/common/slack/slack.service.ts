@@ -219,6 +219,38 @@ export class SlackService {
     ]);
   }
 
+  notifyVerificationSlaBreached({ count, oldestHours }: { count: number; oldestHours: number }): void {
+    const ts = this.formatTime(new Date());
+    const reviewLink = this.link(`/admin/verification`, 'Review Requests →');
+    const label = count === 1 ? '1 verification request has' : `${count} verification requests have`;
+
+    void this.send(':hourglass_flowing_sand: Verification requests overdue', [
+      this.section(
+        `:hourglass_flowing_sand: *${label} waited over 24 hours* (oldest ${oldestHours}h)`,
+        this.button('Review Requests', `/admin/verification`),
+      ),
+      this.contextBlock(reviewLink, ts),
+    ]);
+  }
+
+  notifyNewMemberPostsWaiting({
+    posts,
+  }: {
+    posts: Array<{ id: string; username: string | null; waitingMinutes: number; snippet: string }>;
+  }): void {
+    const ts = this.formatTime(new Date());
+    const lines = posts
+      .slice(0, 8)
+      .map((p) => `• ${this.link(`/p/${p.id}`, p.username ? `@${p.username}` : 'new member')} (${Math.floor(p.waitingMinutes / 60)}h): ${this.truncate(p.snippet, 100)}`)
+      .join('\n');
+    const label = posts.length === 1 ? '1 new member post has' : `${posts.length} new member posts have`;
+
+    void this.send(':wave: New members waiting for a reply', [
+      this.section(`:wave: *${label} no replies yet*\n${lines}`),
+      this.contextBlock(ts),
+    ]);
+  }
+
   notifyFeedbackSubmitted({ category, subject, details, email, userId }: SlackFeedbackPayload): void {
     const ts = this.formatTime(new Date());
     const snippet = this.truncate(details, 300);

@@ -16,6 +16,17 @@ import type { CommunityGroupPreviewDto } from './community-group.dto';
 /** PostMedia from Prisma already has thumbnailR2Key, durationSeconds, width, height, deletedAt. */
 export type PostMediaWithOptional = PostMedia;
 
+export const NEW_MEMBER_DAYS = 7;
+
+/** True for a person account that joined within `NEW_MEMBER_DAYS`; needs `createdAt` on the row. */
+export function isNewMemberAuthor(
+  user: { createdAt?: Date | null; isBot?: boolean | null; isOrganization?: boolean | null },
+  now: Date = new Date(),
+): boolean {
+  if (!user.createdAt || user.isBot || user.isOrganization) return false;
+  return now.getTime() - user.createdAt.getTime() < NEW_MEMBER_DAYS * 24 * 60 * 60 * 1000;
+}
+
 export type PostAuthorDto = {
   id: string;
   username: string | null;
@@ -27,6 +38,8 @@ export type PostAuthorDto = {
   avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
   orgAffiliations: Array<{ id: string; username: string | null; name: string | null; avatarUrl: string | null }>;
   isBot?: boolean;
+  /** Joined within the last NEW_MEMBER_DAYS days. Omitted otherwise so older payloads stay small. */
+  isNewMember?: boolean;
   /** When true, author is banned; id/username/name/avatar are redacted. */
   authorBanned?: boolean;
 };
@@ -240,6 +253,7 @@ export type PostAuthorRow = {
   avatarUpdatedAt: Date | null;
   bannedAt: Date | null;
   isBot?: boolean | null;
+  createdAt?: Date | null;
   orgMemberships?: Array<{
     org: { id: string; username: string | null; name: string | null; avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null; avatarUpdatedAt: Date | null };
   }>;
@@ -556,6 +570,7 @@ export function toPostDto(
           }), avatarVideo: toAvatarVideoDto(m.org, publicAssetBaseUrl),
         })),
         ...(post.user.isBot ? { isBot: true } : {}),
+        ...(isNewMemberAuthor(post.user) ? { isNewMember: true } : {}),
       },
       viewerCanAccess: false,
     };
@@ -692,6 +707,7 @@ export function toPostDto(
         }), avatarVideo: toAvatarVideoDto(m.org, publicAssetBaseUrl),
       })),
       ...(post.user.isBot ? { isBot: true } : {}),
+        ...(isNewMemberAuthor(post.user) ? { isNewMember: true } : {}),
     },
   };
 }
@@ -740,5 +756,6 @@ export function toPostAuthorDtoFromFeedRow(
       }), avatarVideo: toAvatarVideoDto(m.org, publicAssetBaseUrl),
     })),
     ...(post.user.isBot ? { isBot: true } : {}),
+        ...(isNewMemberAuthor(post.user) ? { isNewMember: true } : {}),
   };
 }

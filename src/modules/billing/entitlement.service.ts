@@ -211,8 +211,9 @@ export class EntitlementService {
    *
    * Called after: webhook syncs, grant creation/revocation.
    *
-   * Grants with `requiresActiveSubscription = true` (referral grants) only count when
-   * the user has an active Stripe subscription. Admin grants always apply.
+   * Grants with `requiresActiveSubscription = true` only count when the user has an
+   * active Stripe subscription. Referral and admin grants are written with `false`, so
+   * they apply on their own.
    */
   async recomputeAndApply(userId: string): Promise<EntitlementResult> {
     const now = new Date();

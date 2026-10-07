@@ -206,6 +206,7 @@ export class MarvinPrivateReplyProcessor {
         replyTo: {
           select: {
             body: true,
+            senderId: true,
             media: mediaSelect,
           },
         },
@@ -274,12 +275,32 @@ export class MarvinPrivateReplyProcessor {
 
     // 5. Routing decision.
     const text = msg.body ?? '';
+    const botId = this.identity.cachedMarvUserId();
+    const earlier = msg.replyTo
+      ? { body: msg.replyTo.body, senderId: msg.replyTo.senderId }
+      : await this.prisma.message.findFirst({
+          where: { conversationId, deletedForAll: false, NOT: { id: messageId } },
+          orderBy: { createdAt: 'desc' },
+          select: { body: true, senderId: true },
+        });
+    const fromMarv = Boolean(botId && earlier?.senderId === botId);
+    let priorEffectiveMode: ResolvedMarvinMode | null = null;
+    if (fromMarv) {
+      const prior = await this.prisma.marvinUsageEvent.findFirst({
+        where: { source: 'private_session', sourceId: conversationId, userId: requestingUserId, errorCode: null },
+        orderBy: { createdAt: 'desc' },
+        select: { effectiveMode: true },
+      });
+      priorEffectiveMode = MarvinRoutingService.asResolvedMode(prior?.effectiveMode);
+    }
     const routed = await this.routing.resolve({
       requested: requestedMode,
       source: 'private_session',
       estimatedInputTokens: this.routing.estimateTokens(text),
       text,
       webSearchEnabled: this.appConfig.marvOpenAI().webSearchEnabled,
+      replyingTo: earlier ? { text: earlier.body ?? '', fromMarv } : null,
+      priorEffectiveMode,
     });
     const effectiveMode: ResolvedMarvinMode = routed.mode;
     this.logger.log(

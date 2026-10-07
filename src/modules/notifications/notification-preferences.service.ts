@@ -61,6 +61,7 @@ export class NotificationPreferencesService {
       patch.emailInstantHighSignal !== undefined ||
       patch.emailStreakReminder !== undefined ||
       patch.emailFollowedArticle !== undefined ||
+      patch.emailOnboarding !== undefined ||
       patch.emailNewsletter !== undefined;
 
     let effectivePatch = patch;
@@ -77,6 +78,7 @@ export class NotificationPreferencesService {
         delete effectivePatch.emailInstantHighSignal;
         delete effectivePatch.emailStreakReminder;
         delete effectivePatch.emailFollowedArticle;
+        delete effectivePatch.emailOnboarding;
         delete effectivePatch.emailNewsletter;
       }
     }
@@ -109,6 +111,7 @@ export class NotificationPreferencesService {
     emailInstantHighSignal: boolean;
     emailStreakReminder: boolean;
     emailFollowedArticle: boolean;
+    emailOnboarding: boolean;
     emailNewsletter: boolean;
     inAppFollowOnline?: boolean;
   }): NotificationPreferencesDto {
@@ -131,6 +134,7 @@ export class NotificationPreferencesService {
       emailInstantHighSignal: Boolean(prefs.emailInstantHighSignal),
       emailStreakReminder: Boolean(prefs.emailStreakReminder),
       emailFollowedArticle: Boolean(prefs.emailFollowedArticle),
+      emailOnboarding: Boolean(prefs.emailOnboarding),
       emailNewsletter: prefs.emailNewsletter !== false,
       inAppFollowOnline: prefs.inAppFollowOnline !== false,
     };

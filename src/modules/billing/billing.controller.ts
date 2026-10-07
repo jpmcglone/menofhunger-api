@@ -1,4 +1,5 @@
-import { BadRequestException, Body, Controller, Delete, Get, Headers, Post, Put, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Headers, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import type { Request } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
@@ -101,6 +102,15 @@ export class BillingController {
   ): Promise<{ data: { referralCode: string } }> {
     const parsed = setReferralCodeSchema.parse(body);
     return { data: await this.referral.setReferralCode(userId, parsed.code) };
+  }
+
+  /** Public: who a referral code belongs to, for the /bring-one-man landing page. */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Get('referral/inviter/:code')
+  async getInviter(
+    @Param('code') code: string,
+  ): Promise<{ data: { username: string | null; name: string | null; avatarUrl: string | null } }> {
+    return { data: await this.referral.lookupPublicInviter(code) };
   }
 
   @UseGuards(AuthGuard, PersonAccountGuard)

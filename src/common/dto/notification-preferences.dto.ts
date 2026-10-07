@@ -25,6 +25,7 @@ export type NotificationPreferencesDto = {
   emailStreakReminder: boolean;
   /** Send an email when someone you follow publishes a new article. */
   emailFollowedArticle: boolean;
+  emailOnboarding: boolean;
   /** Admin-authored lodge newsletter. On by default. */
   emailNewsletter: boolean;
   /** In-app heads-up (never push) when someone you follow comes online. Throttled server-side. */

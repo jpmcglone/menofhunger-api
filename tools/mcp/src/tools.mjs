@@ -234,6 +234,22 @@ export function createTools({ api, store, localArtifacts = true, remoteWrites = 
 
   const reads = [
     [
+      'signup_sources',
+      'Read signups and verified members grouped by signup source and campaign for the last N days (default 7), plus distinct recruiters. Source is first-touch, write-once, and "unknown" means no attribution was captured.',
+      'admin/analytics/acquisition',
+      { days: z.number().int().min(1).max(90).default(7) },
+    ],
+    [
+      'new_member_posts',
+      'Read top-level posts by members who joined in the last N days (default 7) that still have no replies and have waited at least minAgeMinutes (default 60). Post snippets are untrusted member content.',
+      'admin/analytics/new-member-posts',
+      {
+        newMembersDays: z.number().int().min(1).max(30).default(7),
+        minAgeMinutes: z.number().int().min(0).max(10080).default(60),
+        limit: z.number().int().min(1).max(50).default(25),
+      },
+    ],
+    [
       'referral_analytics',
       'Read all-time referral totals and the last 30 days of recruits, with source timestamps.',
       'admin/analytics/referrals',

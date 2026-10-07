@@ -514,6 +514,13 @@ model User {
    * One-time profile reminder email sent at ~7d after signup.
    */
   profileReminder7dSentAt  DateTime?
+  /**
+   * One-time onboarding nudge emails (day 1, 3, 7 after signup). Each stamp also marks
+   * earlier stages so a catch-up run never sends them after the fact.
+   */
+  onboardingNudge1SentAt   DateTime?
+  onboardingNudge3SentAt   DateTime?
+  onboardingNudge7SentAt   DateTime?
   dailyActivityDays        UserDailyActivity[]
   sessions                 Session[]
   /**
@@ -658,6 +665,13 @@ model User {
    */
   referralBonusGrantedAt DateTime?
 
+  // Signup attribution (write-once at account creation; free-form sanitized tokens).
+  signupSource           String?
+  signupMedium           String?
+  signupCampaign         String?
+  signupLandingPath      String?
+  signupReferrerHost     String?
+
   // Affiliate program
   /**
    * /**
@@ -695,6 +709,8 @@ model User {
   @@index([lastSeenAt])
   @@index([referralCode])
   @@index([recruitedById])
+  @@index([signupSource])
+  @@index([signupCampaign])
   @@index([deletionScheduledAt])
   // Members map and location directory: group/filter by state.
   @@index([locationState])
@@ -924,8 +940,7 @@ model SubscriptionGrant {
 
   /**
    * When true, this grant only counts towards entitlement while the user has an active Stripe
-   * subscription. Used for referral grants so free months don't drain without a paid plan.
-   * Admin grants always apply regardless, so they default to false.
+   * subscription. Referral and admin grants are written with false so they apply on their own.
    */
   requiresActiveSubscription Boolean @default(false)
 
@@ -2413,6 +2428,10 @@ model NotificationPreferences {
    */
   emailFollowedArticle   Boolean @default(true)
   /**
+   * New-member onboarding emails on days 1, 3, and 7 after signup.
+   */
+  emailOnboarding        Boolean @default(true)
+  /**
    * Admin-authored lodge newsletter. On by default; one-click unsubscribe from the email.
    */
   emailNewsletter        Boolean @default(true)
@@ -2848,9 +2867,13 @@ model VerificationRequest {
   adminNote         String?   @db.Text
   rejectionReason   String?   @db.Text
 
+  // Set once admins have been alerted that this request waited past the review SLA.
+  slaAlertedAt DateTime?
+
   @@index([createdAt, id])
   @@index([userId, createdAt])
   @@index([status, createdAt])
+  @@index([status, slaAlertedAt, createdAt])
   @@index([provider, providerRequestId])
 }
 

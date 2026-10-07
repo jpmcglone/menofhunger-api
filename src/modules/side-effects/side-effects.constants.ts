@@ -337,9 +337,17 @@ export interface SideEffectPayloads {
     userId: string;
   };
   /**
-   * Referral bonus was granted — one-time, once per recruit's first payment.
+   * A member is verified and may be owed referral rewards: ensures they have an invite code
+   * and grants the one-time two-sided bonus when they were recruited. Idempotent.
+   */
+  "referral.verified": {
+    userId: string;
+  };
+  /**
+   * Referral bonus was granted — one-time, when the recruit becomes verified.
    * Handler calls syncGrantTrialToSubscription for both parties so any
-   * active Stripe subscriptions defer their next charge to absorb the free month.
+   * active Stripe subscriptions defer their next charge to absorb the free month,
+   * and notifies both men.
    * Payload uses IDs only (no mutable state snapshots).
    */
   "referral.bonus.granted": {

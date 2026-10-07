@@ -3,6 +3,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { SiteConfigService } from '../site-config/site-config.service';
 import type { SideEffectPayloads } from '../side-effects/side-effects.constants';
 import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { UserVerificationService } from './user-verification.service';
 
 /**
@@ -19,6 +20,7 @@ export class VerificationSideEffectsHandler implements OnModuleInit {
     private readonly siteConfig: SiteConfigService,
     private readonly notifications: NotificationsService,
     private readonly registry: SideEffectsRegistry,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   onModuleInit(): void {
@@ -34,6 +36,8 @@ export class VerificationSideEffectsHandler implements OnModuleInit {
       title: "You're verified",
       body: 'Your account is now verified. Welcome.',
     });
+    // Billing owns referral rewards and invite codes; hand off by event to avoid a module cycle.
+    this.sideEffects.dispatch('referral.verified', { userId: payload.userId });
   }
 
   private async onAutoVerify(payload: SideEffectPayloads['user.auto-verify']): Promise<void> {

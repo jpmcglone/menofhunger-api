@@ -145,15 +145,10 @@ export class AppleIapService {
 
     await this.entitlement.recomputeAndApply(userId);
 
-    // Mirror the Stripe path: trigger the one-time referral bonus when this user's
-    // Apple subscription first becomes active.  maybeGrantReferralBonus is idempotent
-    // via referralBonusGrantedAt, so calling it on every active transaction is safe.
+    // Mirror the Stripe path: the referral month is granted on verification; a paid
+    // subscription only records the affiliate premium milestone (idempotent).
     if (isActive && txn.environment === Environment.PRODUCTION) {
-      try {
-        await this.referral.maybeGrantReferralBonus(userId);
-      } catch (err) {
-        this.logger.warn(`[apple-iap] Failed to grant referral bonus for user ${userId}: ${err}`);
-      }
+      await this.referral.recordPremiumMilestone(userId);
     }
 
     return this.billing.getMe(userId);
@@ -253,13 +248,8 @@ export class AppleIapService {
     await this.entitlement.recomputeAndApply(user.id);
     this.logger.log(`[apple-iap] Recomputed entitlement for user ${user.id} after ${notificationType ?? 'notification'}`);
 
-    // Trigger one-time referral bonus on active subscription events (idempotent).
     if (status === 'active' && txn.environment === Environment.PRODUCTION) {
-      try {
-        await this.referral.maybeGrantReferralBonus(user.id);
-      } catch (err) {
-        this.logger.warn(`[apple-iap] Failed to grant referral bonus for user ${user.id}: ${err}`);
-      }
+      await this.referral.recordPremiumMilestone(user.id);
     }
   }
 
