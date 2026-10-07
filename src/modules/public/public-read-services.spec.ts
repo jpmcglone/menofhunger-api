@@ -2,10 +2,10 @@
 import { NotFoundException } from '@nestjs/common';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import { PostsFeedQueryService } from '../posts/posts-feed-query.service';
+import { PostsFeedListingsService } from '../posts/posts-feed-listings.service';
 import { PublicProfilesService } from '../users/public-profiles.service';
 
-describe('PostsFeedQueryService.getPublicById', () => {
+describe('PostsFeedListingsService.getPublicById', () => {
   function makeService(candidate: Record<string, unknown> | null) {
     const findFirst = jest.fn(async ({ where }: { where: Record<string, unknown> }) => {
       if (!candidate) return null;
@@ -24,7 +24,7 @@ describe('PostsFeedQueryService.getPublicById', () => {
         author: { id: 'user-1', username: 'john' },
       },
     ]);
-    const service = Object.create(PostsFeedQueryService.prototype) as any;
+    const service = Object.create(PostsFeedListingsService.prototype) as any;
     service.prisma = { post: { findFirst } };
     service.composeFeedPostDtos = composeFeedPostDtos;
     return { service, findFirst, composeFeedPostDtos };

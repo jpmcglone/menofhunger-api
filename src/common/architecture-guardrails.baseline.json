@@ -14,7 +14,6 @@
     "modules/notifications/notification-query.service.ts",
     "modules/notifications/notification-writer.service.ts",
     "modules/notifications/notifications-email.cron.ts",
-    "modules/posts/posts-feed-query.service.ts",
     "modules/posts/posts-mutation.service.ts",
     "modules/posts/posts.controller.ts",
     "modules/search/search.service.ts"

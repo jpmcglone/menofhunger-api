@@ -1,6 +1,6 @@
 import type { Response } from 'express';
 import { PostsController } from './posts.controller';
-import { PostsFeedQueryService } from './posts-feed-query.service';
+import { PostsFeedMediaService } from './posts-feed-media.service';
 
 describe('quote feed viewer state and access', () => {
   it('uses the shared post composer, preserving every viewer action and embedded post', async () => {
@@ -26,13 +26,15 @@ describe('quote feed viewer state and access', () => {
       prisma,
       viewerContextService: { getViewer: jest.fn().mockResolvedValue(null) },
       enrichment: { allowedVisibilitiesForViewer: jest.fn().mockReturnValue(['public']) },
-      assertReadableCommunityGroupPost: jest.fn(),
-      filterPostsByCommunityGroupAccess: jest.fn().mockResolvedValue([quotes[0]]),
+      access: {
+        assertReadableCommunityGroupPost: jest.fn(),
+        filterPostsByCommunityGroupAccess: jest.fn().mockResolvedValue([quotes[0]]),
+      },
     };
-    const result = await PostsFeedQueryService.prototype.listQuotes.call(service, { viewerUserId: null, postId: 'original', limit: 20, cursor: null });
+    const result = await PostsFeedMediaService.prototype.listQuotes.call(service, { viewerUserId: null, postId: 'original', limit: 20, cursor: null });
     expect(prisma.post.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'original', deletedAt: null, isDraft: false } }));
     expect(prisma.post.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ isDraft: false, deletedAt: null }) }));
-    expect(service.filterPostsByCommunityGroupAccess).toHaveBeenCalledWith({ viewerUserId: null, viewer: null, posts: quotes });
+    expect(service.access.filterPostsByCommunityGroupAccess).toHaveBeenCalledWith({ viewerUserId: null, viewer: null, posts: quotes });
     expect(result.posts).toEqual([quotes[0]]);
   });
 });

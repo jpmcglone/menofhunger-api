@@ -21,6 +21,13 @@ import { PostsEngagementService } from './posts-engagement.service';
 import { PostsRankingService } from './posts-ranking.service';
 import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
 import { PostsFeedQueryService } from './posts-feed-query.service';
+import { PostsFeedAccessService } from './posts-feed-access.service';
+import { PostsFeedListingsService } from './posts-feed-listings.service';
+import { PostsFeedForYouService } from './posts-feed-for-you.service';
+import { PostsFeedPopularService } from './posts-feed-popular.service';
+import { PostsFeedFeaturedService } from './posts-feed-featured.service';
+import { PostsFeedLookupService } from './posts-feed-lookup.service';
+import { PostsFeedMediaService } from './posts-feed-media.service';
 import { PostsDiscoverMoreService } from './posts-discover-more.service';
 import { PostsMutationService } from './posts-mutation.service';
 import { PostsSideEffectsHandler } from './posts-side-effects.handler';
@@ -40,6 +47,13 @@ import { ScheduledPostsPublishCron } from './scheduled-posts-publish.cron';
     PostsEngagementService,
     PostsRankingService,
     PostsViewerEnrichmentService,
+    PostsFeedAccessService,
+    PostsFeedListingsService,
+    PostsFeedForYouService,
+    PostsFeedPopularService,
+    PostsFeedFeaturedService,
+    PostsFeedLookupService,
+    PostsFeedMediaService,
     PostsFeedQueryService,
     PostsDiscoverMoreService,
     PostsMutationService,

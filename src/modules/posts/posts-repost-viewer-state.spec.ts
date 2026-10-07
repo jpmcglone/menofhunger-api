@@ -220,7 +220,11 @@ describe('buildAttachParentChain — embedded-post viewer state (Phase 1)', () =
 
 describe('allPostIds includes embedded post IDs (source guardrail)', () => {
   const feedQuerySource = require('node:fs').readFileSync(
-    require('node:path').join(__dirname, 'posts-feed-query.service.ts'),
+    require('node:path').join(__dirname, 'posts-feed-listings.service.ts'),
+    'utf8',
+  );
+  const lookupSource = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, 'posts-feed-lookup.service.ts'),
     'utf8',
   );
   const controllerSource = require('node:fs').readFileSync(
@@ -264,15 +268,15 @@ describe('allPostIds includes embedded post IDs (source guardrail)', () => {
   });
 
   it('comments and thread-participants use a shell access check, not full getById', () => {
-    const commentsStart = feedQuerySource.indexOf('async listComments(');
-    const commentsEnd = feedQuerySource.indexOf('async getThreadParticipants(');
-    const comments = feedQuerySource.slice(commentsStart, commentsEnd);
+    const commentsStart = lookupSource.indexOf('async listComments(');
+    const commentsEnd = lookupSource.indexOf('async getThreadParticipants(');
+    const comments = lookupSource.slice(commentsStart, commentsEnd);
     expect(comments).toContain('requireReadablePostShell');
     expect(comments).not.toContain('this.getById(');
 
-    const participants = feedQuerySource.slice(
+    const participants = lookupSource.slice(
       commentsEnd,
-      feedQuerySource.indexOf('async getById('),
+      lookupSource.indexOf('async getById('),
     );
     expect(participants).toContain('requireReadablePostShell');
     expect(participants).toContain('RedisKeys.threadParticipants');
