@@ -1,7 +1,7 @@
 import { EmbeddingsService } from '../embeddings/embeddings.service';
 import { BadRequestException, ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import type { PostVisibility, VerifiedStatus } from '@prisma/client';
+import type { PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FollowsService } from '../follows/follows.service';
 import { PostsService } from '../posts/posts.service';
@@ -9,200 +9,53 @@ import { ArticlesRankingService } from '../articles/articles-ranking.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { JevTopicsService } from '../typesafe/jev-topics.service';
-import { queryToTopicValues } from '../../common/topics/topic-utils';
-import { HASHTAG_IN_TEXT_DISPLAY_RE, parseHashtagsFromText } from '../../common/hashtags/hashtag-regex';
-import { CASHTAG_IN_TEXT_DISPLAY_RE, parseCashtagCandidatesFromText } from '../../common/cashtags/cashtag-regex';
 import { TickerService } from '../cashtags/ticker.service';
-import type { UserListRelationship } from '../../common/dto/user.dto';
 import type { CashtagResultDto } from '../../common/dto';
-import { POST_BASE_INCLUDE, POST_LIST_INCLUDE } from '../../common/prisma-includes/post.include';
-import { buildPostVisibilityWhere } from '../../common/posts/post-visibility';
 import { excludeBoardOnlyWhere } from '../posts/posts-query-builders';
-import { articleAuthorInclude } from '../../common/dto/article.dto';
 import { toCommunityGroupShellDto, type CommunityGroupShellDto } from '../../common/dto/community-group.dto';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
-/**
- * Search scoring (higher = better). Used for ranking only; tie-breaks: relationship (users), createdAt (posts).
- * Post search: combines text relevance + popularity score (boost + bookmark + comments, time-decayed).
- *
- * Users (profiles):
- * - Exact username: 100 | Exact display name: 95
- * - Username starts with query: 85
- * - All query words in name (order-independent): 88 | All words in username: 83
- * - Display name starts with full query: 80
- * - Username contains: 70 | Each query word is a prefix of a name-word ("ch gr"→"Chris Griffith"): 76
- * - Display name contains: 65
- * - Bio contains full query (phrase): 60 | Bio contains all query words: 50 | Bio contains any word: 40
- *
- * Posts (mixed feed):
- * - Post body contains full query (phrase): 90 | Body contains all query words: 75
- * - Author exact username: 65 | Author exact display name: 60
- * - Body contains any query word: 45 | Author username contains any word: 35 | Author display name contains any word: 30
- */
-const USER_SCORE = {
-  exactUsername: 100,
-  exactName: 95,
-  usernameStartsWith: 85,
-  /** All query words (≥ 2 chars each) appear anywhere in the display name — word-order-independent. */
-  nameAllWords: 88,
-  /** All query words appear anywhere in the username. */
-  usernameAllWords: 83,
-  nameStartsWith: 80,
-  usernameContains: 70,
-  /** Each query word is a prefix of at least one word in the display name (e.g. "ch gr" → "Chris Griffith"). */
-  nameWordPrefixes: 76,
-  nameContains: 65,
-  bioPhrase: 60,
-  bioAllWords: 50,
-  bioAnyWord: 40,
-} as const;
+import { searchUsersOn } from './search-users.query';
+import { searchPostsOn } from './search-posts.query';
+import {
+  ARTICLE_SCORE,
+  SEARCH_ARTICLE_INCLUDE,
+  SEARCH_POST_INCLUDE,
+  extractQuotedPhrases,
+  queryToWords,
+  type SearchArticleBaseRow,
+  type SearchArticleRow,
+  type SearchPostRow,
+  type SearchUserRow,
+  type Viewer,
+} from './search.shared';
 
-/** A post search returning fewer rows than this is thin enough to try topic matching. */
-const TOPIC_RESCUE_BELOW = 3;
-/** Meaning-based matches fill in when wording alone finds fewer than this many posts. */
-const SEMANTIC_RESCUE_BELOW = 10;
-/** Cosine distance cutoff for a post to count as about the query. Tuned on live data. */
-const SEMANTIC_MAX_DISTANCE = 0.66;
-
-const POST_SCORE = {
-  hashtagMatch: 110,
-  bodyPhrase: 90,
-  bodyAllWords: 75,
-  topicMatch: 70,
-  broadTopicMatch: 95,
-  authorExactUsername: 65,
-  authorExactName: 60,
-  bodyAnyWord: 45,
-  authorUsernameAnyWord: 35,
-  authorNameAnyWord: 30,
-  semanticBase: 40,
-  semanticSpan: 20,
-} as const;
-
-const ARTICLE_SCORE = {
-  tagExact: 120,     // tag slug exactly matches query (e.g. ?q=stoicism → tag "stoicism")
-  tagStartsWith: 105, // tag slug starts with query
-  titleExact: 110,
-  titlePhrase: 100,
-  titleAllWords: 90,
-  excerptPhrase: 80,
-  excerptAllWords: 70,
-  authorExactUsername: 65,
-  authorExactName: 60,
-  titleAnyWord: 50,
-  excerptAnyWord: 40,
-  authorUsernameAnyWord: 35,
-  authorNameAnyWord: 30,
-} as const;
-
-type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean; premiumPlus?: boolean; siteAdmin?: boolean } | null;
-
-// Same shape as the feed so Board, article, fitness, and poll posts render fully in results and bookmarks.
-const SEARCH_POST_INCLUDE = POST_LIST_INCLUDE;
-const SEARCH_ARTICLE_INCLUDE = {
-  author: { select: articleAuthorInclude },
-  reactions: true,
-  tags: { select: { tag: true, label: true }, orderBy: { createdAt: 'asc' as const } },
-} as const;
-
-type SearchPostRow = Prisma.PostGetPayload<{
-  include: typeof SEARCH_POST_INCLUDE;
-}>;
-type SearchArticleBaseRow = Prisma.ArticleGetPayload<{
-  include: typeof SEARCH_ARTICLE_INCLUDE;
-}>;
-export type SearchArticleRow = SearchArticleBaseRow & { viewerCanAccess: boolean };
-
-export type SearchUserRow = {
-  id: string;
-  createdAt: Date;
-  username: string | null;
-  name: string | null;
-  premium: boolean;
-  premiumPlus: boolean;
-  isOrganization: boolean;
-  accountKind?: 'person' | 'page';
-  verifiedStatus: VerifiedStatus;
-  avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
-  avatarUpdatedAt: Date | null;
-  relationship: UserListRelationship;
-  orgMemberships: Array<{ org: { id: string; username: string | null; name: string | null; avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null; avatarUpdatedAt: Date | null } }>;
-};
-
-/** Unique, non-empty words from query (lowercase). Used for fuzzy author + body matching (e.g. "john steve" → @john or @steve or body). */
-function queryToWords(q: string): string[] {
-  const trimmed = (q ?? '').trim().toLowerCase();
-  if (!trimmed) return [];
-  const words = trimmed.split(/\s+/).filter((w) => w.length > 0);
-  return [...new Set(words)];
-}
-
-/**
- * Build a prefix-aware `to_tsquery` string from sanitized words.
- * Each word gets a `:*` suffix so partial words match longer lexemes:
- *   ["chris", "grif"] → "chris:* & grif:*"
- *   which matches "Chris Griffith" because `griffith` starts with `grif`.
- * Words are stripped to `[a-z0-9]` only to prevent tsquery injection.
- * Returns null when no words survive sanitization.
- */
-function buildPrefixTsQuery(ws: string[]): string | null {
-  const safe = ws
-    .map((w) => w.replace(/[^a-z0-9]/g, ''))
-    .filter((w) => w.length >= 1);
-  if (!safe.length) return null;
-  return safe.map((w) => `${w}:*`).join(' & ');
-}
-
-function splitSearchQuery(q: string): { hashtags: string[]; cashtags: string[]; text: string } {
-  const raw = (q ?? '').toString();
-  const hashtags = parseHashtagsFromText(raw);
-  const cashtags = parseCashtagCandidatesFromText(raw);
-  if (!hashtags.length && !cashtags.length) return { hashtags: [], cashtags: [], text: raw.trim() };
-  let text = raw;
-  if (hashtags.length) text = text.replace(new RegExp(HASHTAG_IN_TEXT_DISPLAY_RE.source, 'g'), ' ');
-  if (cashtags.length) text = text.replace(new RegExp(CASHTAG_IN_TEXT_DISPLAY_RE.source, 'g'), ' ');
-  text = text.replace(/\s+/g, ' ').trim();
-  return { hashtags, cashtags, text };
-}
-
-function extractQuotedPhrases(q: string): string[] {
-  const raw = (q ?? '').toString();
-  if (!raw.includes('"')) return [];
-  const out: string[] = [];
-  const re = /"([^"]+)"/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(raw))) {
-    const phrase = (m[1] ?? '').trim();
-    if (phrase) out.push(phrase);
-  }
-  return [...new Set(out)];
-}
+export type { SearchArticleRow, SearchUserRow } from './search.shared';
 
 @Injectable()
 export class SearchService {
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly postsRead: PostsReadService,
-    private readonly follows: FollowsService,
-    private readonly posts: PostsService,
-    private readonly articlesRanking: ArticlesRankingService,
-    private readonly viewerContext: ViewerContextService,
-    private readonly ticker: TickerService,
-    @Optional() private readonly jevTopics?: JevTopicsService,
-    @Optional() private readonly embeddings?: EmbeddingsService,
+    readonly prisma: PrismaService,
+    readonly postsRead: PostsReadService,
+    readonly follows: FollowsService,
+    readonly posts: PostsService,
+    readonly articlesRanking: ArticlesRankingService,
+    readonly viewerContext: ViewerContextService,
+    readonly ticker: TickerService,
+    @Optional() readonly jevTopics?: JevTopicsService,
+    @Optional() readonly embeddings?: EmbeddingsService,
   ) {}
 
-  private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
+  allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
     return this.viewerContext.allowedPostVisibilities(viewer as any);
   }
 
   /** Post search scope: readable groups only, and never Board-only rows (the Board has its own search). */
-  private readableGroupPostWhere(viewer: Viewer): Prisma.PostWhereInput {
+  readableGroupPostWhere(viewer: Viewer): Prisma.PostWhereInput {
     return { AND: [excludeBoardOnlyWhere(), this.readableGroupScopeWhere(viewer)] };
   }
 
-  private readableGroupScopeWhere(viewer: Viewer): Prisma.PostWhereInput {
+  readableGroupScopeWhere(viewer: Viewer): Prisma.PostWhereInput {
     const viewerUserId = (viewer?.id ?? '').trim();
     if (!viewerUserId) return { communityGroupId: null };
 
@@ -229,11 +82,11 @@ export class SearchService {
     return { OR: [{ communityGroupId: null }, ...groupAccess] };
   }
 
-  private readableGroupPostSql(viewer: Viewer): Prisma.Sql {
+  readableGroupPostSql(viewer: Viewer): Prisma.Sql {
     return Prisma.sql`AND p."boardOnly" = false ${this.readableGroupScopeSql(viewer)}`;
   }
 
-  private readableGroupScopeSql(viewer: Viewer): Prisma.Sql {
+  readableGroupScopeSql(viewer: Viewer): Prisma.Sql {
     const viewerUserId = (viewer?.id ?? '').trim();
     if (!viewerUserId) return Prisma.sql`AND p."communityGroupId" IS NULL`;
 
@@ -299,314 +152,9 @@ export class SearchService {
     cursor: string | null;
     viewerUserId: string | null;
   }): Promise<{ users: SearchUserRow[]; nextCursor: string | null }> {
-    const { text: qText } = splitSearchQuery(params.q ?? '');
-    // Strip leading @ so typing "@john" is equivalent to "john" (usernames don't include @).
-    const q = (qText ?? '').trim().replace(/^@+/, '');
-    if (!q) return { users: [], nextCursor: null };
-    const limit = Math.max(1, Math.min(50, params.limit || 30));
-    const cursor = params.cursor ?? null;
-    const viewerUserId = params.viewerUserId ?? null;
-    const qLower = q.toLowerCase();
-    const words = queryToWords(q);
-
-    // Exclude users that have a block relationship with the viewer (either direction).
-    const blockedIds: Set<string> = viewerUserId
-      ? await (async () => {
-          const rows = await this.prisma.userBlock.findMany({
-            where: { OR: [{ blockerId: viewerUserId }, { blockedId: viewerUserId }] },
-            select: { blockerId: true, blockedId: true },
-          });
-          const s = new Set<string>();
-          for (const r of rows) s.add(r.blockerId === viewerUserId ? r.blockedId : r.blockerId);
-          return s;
-        })()
-      : new Set<string>();
-
-    const fetchSize = Math.min(limit * 5, 50);
-    type RawUser = {
-      id: string;
-      createdAt: Date;
-      username: string | null;
-      name: string | null;
-      bio: string | null;
-      premium: boolean;
-      premiumPlus: boolean;
-      isOrganization: boolean;
-      accountKind?: 'person' | 'page';
-      verifiedStatus: VerifiedStatus;
-      avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
-      avatarUpdatedAt: Date | null;
-      lastOnlineAt: Date | null;
-    };
-
-    let raw: RawUser[] = [];
-
-    // FTS scales better than ILIKE but has two important caveats:
-    //   1. websearch_to_tsquery drops single-char tokens ("g" in "Chris G") so initials never match.
-    //   2. websearch_to_tsquery matches whole lexemes only — "grif" never matches "griffith".
-    // We use to_tsquery with :* prefix operators instead, which fixes both problems.
-    // Short words (< 2 chars) still fall back to ILIKE so "chris g" uses substring matching.
-    const useFts = q.length >= 4 && words.length >= 2 && words.every((w) => w.length >= 2);
-    const tsqString = useFts ? buildPrefixTsQuery(words) : null;
-
-    if (tsqString) {
-      const cursorRow =
-        cursor
-          ? await this.prisma.user.findUnique({ where: { id: cursor }, select: { id: true, createdAt: true } })
-          : null;
-
-      raw = await this.prisma.$queryRaw<RawUser[]>(Prisma.sql`
-        WITH q AS (SELECT to_tsquery('english', ${tsqString}) AS tsq)
-        SELECT
-          u."id",
-          u."createdAt",
-          u."username",
-          u."name",
-          u."bio",
-          u."premium",
-          u."premiumPlus",
-          u."isOrganization",
-          u."accountKind",
-          u."verifiedStatus",
-          u."avatarKey", u."avatarVideoKey", u."avatarVideoDurationMs",
-          u."avatarUpdatedAt",
-          u."lastOnlineAt"
-        FROM "User" u, q
-        WHERE
-          (u."usernameIsSet" = true OR u."name" IS NOT NULL)
-          AND u."bannedAt" IS NULL
-          ${
-            blockedIds.size > 0
-              ? Prisma.sql`AND u."id" NOT IN (${Prisma.join([...blockedIds].map((id) => Prisma.sql`${id}`))})`
-              : Prisma.sql``
-          }
-          AND to_tsvector(
-            'english',
-            COALESCE(u."username", '') || ' ' || COALESCE(u."name", '') || ' ' || COALESCE(u."bio", '')
-          ) @@ q.tsq
-          ${
-            cursorRow
-              ? Prisma.sql`AND (
-                  u."createdAt" < ${cursorRow.createdAt}
-                  OR (u."createdAt" = ${cursorRow.createdAt} AND u."id" < ${cursorRow.id})
-                )`
-              : Prisma.sql``
-          }
-        ORDER BY u."createdAt" DESC, u."id" DESC
-        LIMIT ${fetchSize + 1}
-      `);
-    } else {
-      const cursorWhere = await createdAtIdCursorWhere({
-        cursor,
-        lookup: async (id) => await this.prisma.user.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
-      });
-
-      // Words that are long enough to be meaningful for substring matching.
-      const meaningfulWords = words.filter((w) => w.length >= 2);
-
-      const orConditions: any[] = [
-        { username: { contains: q, mode: 'insensitive' as const } },
-        { name: { contains: q, mode: 'insensitive' as const } },
-        { bio: { not: null, contains: q, mode: 'insensitive' as const } },
-      ];
-      // Each individual word as its own condition (e.g. "chris" or "griffith" alone).
-      for (const w of words) {
-        if (w === qLower) continue;
-        orConditions.push({ username: { contains: w, mode: 'insensitive' as const } });
-        orConditions.push({ name: { contains: w, mode: 'insensitive' as const } });
-        orConditions.push({ bio: { not: null, contains: w, mode: 'insensitive' as const } });
-      }
-      // All meaningful words must appear somewhere in name/username (word-order-independent).
-      // This catches "Griffith Chris" matching "Chris Griffith" and similar reversed queries.
-      if (meaningfulWords.length >= 2) {
-        orConditions.push({
-          AND: meaningfulWords.map((w) => ({ name: { contains: w, mode: 'insensitive' as const } })),
-        });
-        orConditions.push({
-          AND: meaningfulWords.map((w) => ({ username: { contains: w, mode: 'insensitive' as const } })),
-        });
-      }
-      const matchClause = { OR: orConditions };
-
-      // For users without a set username, also match on name alone — including multi-word.
-      const nameOnlyConditions: any[] = [{ name: { contains: q, mode: 'insensitive' as const } }];
-      if (meaningfulWords.length >= 2) {
-        nameOnlyConditions.push({
-          AND: meaningfulWords.map((w) => ({ name: { contains: w, mode: 'insensitive' as const } })),
-        });
-      }
-      const nameOnlyMatch: Prisma.UserWhereInput = {
-        AND: [
-          { name: { not: null } },
-          { OR: nameOnlyConditions },
-        ],
-      };
-
-      const blockExclude: Prisma.UserWhereInput =
-        blockedIds.size > 0 ? { id: { notIn: [...blockedIds] } } : {};
-
-      const whereWithCursor: Prisma.UserWhereInput = cursorWhere
-        ? {
-            AND: [
-              cursorWhere,
-              { bannedAt: null },
-              blockExclude,
-              {
-                OR: [
-                  { usernameIsSet: true, ...matchClause },
-                  nameOnlyMatch,
-                ],
-              },
-            ],
-          }
-        : {
-            AND: [
-              { bannedAt: null },
-              blockExclude,
-              {
-                OR: [
-                  { usernameIsSet: true, ...matchClause },
-                  nameOnlyMatch,
-                ],
-              },
-            ],
-          };
-
-      raw = await this.prisma.user.findMany({
-        where: whereWithCursor,
-        select: {
-          id: true,
-          createdAt: true,
-          username: true,
-          name: true,
-          bio: true,
-          premium: true,
-          premiumPlus: true,
-          isOrganization: true,
-          accountKind: true,
-          verifiedStatus: true,
-          avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
-          avatarUpdatedAt: true,
-          lastOnlineAt: true,
-        },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take: fetchSize + 1,
-      });
-    }
-
-    const userIds = raw.map((u) => u.id);
-    const [rel, orgMembershipRows] = await Promise.all([
-      this.follows.batchRelationshipForUserIds({ viewerUserId, userIds }),
-      userIds.length > 0
-        ? this.prisma.userOrgMembership.findMany({
-            where: { userId: { in: userIds } },
-            select: {
-              userId: true,
-              org: { select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true } },
-            },
-            orderBy: { createdAt: 'asc' },
-          })
-        : Promise.resolve([]),
-    ]);
-    type OrgMembershipRow = (typeof orgMembershipRows)[number];
-    const orgsByUserId = new Map<string, OrgMembershipRow[]>();
-    for (const row of orgMembershipRows) {
-      if (!orgsByUserId.has(row.userId)) orgsByUserId.set(row.userId, []);
-      orgsByUserId.get(row.userId)!.push(row);
-    }
-
-    function userScore(u: (typeof raw)[0]): number {
-      const un = (u.username ?? '').trim().toLowerCase();
-      const nm = (u.name ?? '').trim().toLowerCase();
-      const bio = (u.bio ?? '').trim().toLowerCase();
-
-      // Decimal sub-sort within each tier: how much of the matched field the query "covers".
-      // Keeps tiers intact (integer part) while surfacing closer matches first.
-      // e.g. typing "joe" — "joe_s" scores 85.79, "joe_black12345" scores 85.21.
-      const ratio = (fieldLen: number) =>
-        fieldLen > 0 ? Math.min(qLower.length / fieldLen, 1) * 0.99 : 0;
-
-      if (un === qLower) return USER_SCORE.exactUsername;
-      if (nm === qLower) return USER_SCORE.exactName;
-      if (un && un.startsWith(qLower)) return USER_SCORE.usernameStartsWith + ratio(un.length);
-
-      // Multi-word: all query words (≥ 2 chars) appear anywhere in name/username.
-      // Beats nameStartsWith because it's word-order-independent and more specific for
-      // queries like "Chris Griffith" or "Griffith Chris".
-      const mw = words.filter((w) => w.length >= 2);
-      if (mw.length >= 2 && nm && mw.every((w) => nm.includes(w))) return USER_SCORE.nameAllWords + ratio(nm.length);
-      if (mw.length >= 2 && un && mw.every((w) => un.includes(w))) return USER_SCORE.usernameAllWords + ratio(un.length);
-
-      if (nm && nm.startsWith(qLower)) return USER_SCORE.nameStartsWith + ratio(nm.length);
-      if (un && un.includes(qLower)) return USER_SCORE.usernameContains + ratio(un.length);
-
-      // Multi-word: each query word is a prefix of at least one word in the display name.
-      // Handles "ch gr" → "Chris Griffith", "jo sm" → "John Smith".
-      if (mw.length >= 2 && nm) {
-        const nmTokens = nm.split(/\s+/).filter(Boolean);
-        if (mw.every((qw) => nmTokens.some((nw) => nw.startsWith(qw)))) {
-          return USER_SCORE.nameWordPrefixes + ratio(nm.length);
-        }
-      }
-
-      if (nm && nm.includes(qLower)) return USER_SCORE.nameContains + ratio(nm.length);
-      if (bio && bio.includes(qLower)) return USER_SCORE.bioPhrase + ratio(bio.length);
-      if (words.length > 0 && words.every((w) => bio.includes(w))) return USER_SCORE.bioAllWords;
-      if (words.some((w) => bio.includes(w))) return USER_SCORE.bioAnyWord;
-      return 0;
-    }
-    // Relationship rank: mutuals first, then people who follow you, then people you follow, then strangers.
-    const relRank = (id: string) => {
-      const vf = rel.viewerFollows.has(id);
-      const fv = rel.followsViewer.has(id);
-      if (vf && fv) return 0; // mutual
-      if (fv) return 1;       // follows you (but you don't follow them)
-      if (vf) return 2;       // you follow them (but they don't follow you)
-      return 3;               // no relationship
-    };
-
-    // Within each rel group, sort by most recently online (nulls last).
-    const onlineMs = (u: (typeof raw)[0]) => u.lastOnlineAt?.getTime() ?? 0;
-
-    const sorted = [...raw].sort((a, b) => {
-      const sa = userScore(a);
-      const sb = userScore(b);
-      if (sa !== sb) return sb - sa;
-      const ra = relRank(a.id);
-      const rb = relRank(b.id);
-      if (ra !== rb) return ra - rb;
-      const oa = onlineMs(a);
-      const ob = onlineMs(b);
-      if (oa !== ob) return ob - oa;
-      return b.id.localeCompare(a.id);
-    });
-
-    const slice = sorted.slice(0, limit);
-    const nextCursor = raw.length > fetchSize ? raw[fetchSize]?.id ?? null : null;
-
-    const users: SearchUserRow[] = slice.map((u) => ({
-      id: u.id,
-      createdAt: u.createdAt,
-      username: u.username,
-      name: u.name,
-      premium: u.premium,
-      premiumPlus: u.premiumPlus,
-      isOrganization: Boolean(u.isOrganization),
-      accountKind: u.accountKind ?? 'person',
-      verifiedStatus: u.verifiedStatus,
-      avatarKey: u.avatarKey, avatarVideoKey: u.avatarVideoKey, avatarVideoDurationMs: u.avatarVideoDurationMs,
-      avatarUpdatedAt: u.avatarUpdatedAt,
-      orgMemberships: orgsByUserId.get(u.id) ?? [],
-      relationship: {
-        viewerFollowsUser: rel.viewerFollows.has(u.id),
-        userFollowsViewer: rel.followsViewer.has(u.id),
-        viewerPostNotificationsEnabled: rel.viewerBellEnabled.has(u.id),
-        viewerNotificationPreference: rel.viewerNotificationPreferences?.get(u.id) ?? 'off',
-      },
-    }));
-
-    return { users, nextCursor };
+    return searchUsersOn(this, params);
   }
+
 
   async searchHashtags(params: {
     q: string;
@@ -707,7 +255,7 @@ export class SearchService {
   }
 
   /** Broad match: body or author username/name (phrase + each word) so "john steve" matches @john, @steve, or body. */
-  private postSearchMatchWhere(q: string, words: string[]): object {
+  postSearchMatchWhere(q: string, words: string[]): object {
     const trimmed = (q ?? '').trim();
     if (!trimmed) return {};
     const orConditions: any[] = [
@@ -947,7 +495,7 @@ export class SearchService {
     return { articles, nextCursor };
   }
 
-  private async fetchHashtagFallbackTextPosts(params: {
+  async fetchHashtagFallbackTextPosts(params: {
     viewer: Viewer;
     allowed: PostVisibility[];
     visibilityWhere: Prisma.PostWhereInput;
@@ -1060,397 +608,9 @@ export class SearchService {
   }
 
   async searchPosts(params: { viewerUserId: string | null; q: string; limit: number; cursor: string | null; kind?: 'regular' | 'checkin' | null }) {
-    const rawQ = (params.q ?? '').trim();
-    if (!rawQ) return { posts: [], nextCursor: null };
-    const limit = Math.max(1, Math.min(50, params.limit || 30));
-    const cursor = params.cursor ?? null;
-    const kind = params.kind ?? null;
-    const { hashtags, cashtags: cashtagCandidates, text: qText } = splitSearchQuery(rawQ);
-    const tagsText = hashtags.join(' ').trim();
-    const qFtsExpanded = (qText ? `${qText} ${tagsText}` : tagsText).trim(); // preserve quotes for websearch_to_tsquery
-    const qMatchBase = qText.replace(/"/g, ' ').replace(/\s+/g, ' ').trim();
-    const qMatchExpanded = (qMatchBase ? `${qMatchBase} ${tagsText}` : tagsText).trim();
-    if (!qMatchExpanded && hashtags.length === 0 && cashtagCandidates.length === 0) return { posts: [], nextCursor: null };
-    const phrases = extractQuotedPhrases(qText);
-    const phraseLowers = phrases.map((p) => p.toLowerCase());
-    const words = queryToWords(qMatchExpanded);
-    const qLower = qMatchExpanded.toLowerCase();
-    let topicValues = queryToTopicValues(qMatchExpanded);
-
-    const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
-    const allowed = this.allowedVisibilitiesForViewer(viewer);
-    const readableGroupPostWhere = this.readableGroupPostWhere(viewer);
-
-    // Never include onlyMe posts in search results (even for the viewer).
-    const visibilityWhere = buildPostVisibilityWhere({ viewerUserId: viewer?.id ?? null, allowed });
-    // Always exclude flat reposts from search; their content is redundant with the original post.
-    const kindWhere: Prisma.PostWhereInput = kind ? ({ kind } as Prisma.PostWhereInput) : { kind: { not: 'repost' } };
-
-    const cursorRaw = (cursor ?? '').trim();
-    const cursorIsOffset = cursorRaw ? /^\d+$/.test(cursorRaw) : false;
-    const offset = cursorIsOffset ? Math.max(0, parseInt(cursorRaw, 10)) : 0;
-    const cursorIsTextPhase = cursorRaw.startsWith('t:');
-    const cursorPostId =
-      cursorRaw && !cursorIsOffset
-        ? ((cursorIsTextPhase ? cursorRaw.slice(2) : (cursorRaw.startsWith('p:') ? cursorRaw.slice(2) : cursorRaw)).trim() || null)
-        : null;
-
-    const hashtagWhere: Prisma.PostWhereInput =
-      hashtags.length > 0 ? ({ hashtags: { hasSome: hashtags } } as Prisma.PostWhereInput) : {};
-
-    // Fast path: cashtag-only search (e.g. "$SPY").
-    // Match both the cashtags[] array column AND the literal $SYMBOL in body so
-    // posts created before the ticker set was warm (empty cashtags[]) still surface.
-    const isCashtagOnly = cashtagCandidates.length > 0 && hashtags.length === 0 && !qMatchBase;
-    if (isCashtagOnly) {
-      const cashtagBodyOr: Prisma.PostWhereInput = {
-        OR: [
-          { cashtags: { hasSome: cashtagCandidates } } as Prisma.PostWhereInput,
-          ...cashtagCandidates.map((sym) => ({
-            body: { contains: `$${sym}`, mode: 'insensitive' as const },
-          })),
-        ],
-      };
-
-      const cursorWhere = await createdAtIdCursorWhere({
-        cursor: (cursor ?? '').trim() || null,
-        lookup: async (id) =>
-          await this.postsRead.read.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
-      });
-
-      const rows = await this.postsRead.read.findMany({
-        where: {
-          AND: [
-            { deletedAt: null },
-            readableGroupPostWhere,
-            visibilityWhere,
-            kindWhere,
-            cashtagBodyOr,
-            ...(cursorWhere ? [cursorWhere] : []),
-          ],
-        },
-        include: SEARCH_POST_INCLUDE,
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take: limit + 1,
-      });
-
-      const slice = rows.slice(0, limit);
-      const next = slice[slice.length - 1]?.id ?? null;
-      const nextCursor = rows.length > limit && next ? `p:${next}` : null;
-      return { posts: slice, nextCursor };
-    }
-
-    // Fast path: hashtag-only search should be cheap and index-backed.
-    const isHashtagOnly = hashtags.length > 0 && !qMatchBase;
-    if (isHashtagOnly) {
-      // Support legacy offset cursor (numeric) but prefer createdAt/id cursor for scalability.
-      if (cursorIsOffset) {
-        const rows = await this.postsRead.read.findMany({
-          where: {
-            AND: [{ deletedAt: null }, readableGroupPostWhere, visibilityWhere, kindWhere, hashtagWhere],
-          },
-          include: {
-            user: POST_BASE_INCLUDE.user,
-            media: { orderBy: { position: 'asc' } },
-            mentions: {
-              include: {
-                user: {
-                  select: POST_BASE_INCLUDE.mentions.include.user.select,
-                },
-              },
-            },
-          },
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-          skip: offset,
-          take: limit + 1,
-        });
-        const slice = rows.slice(0, limit);
-        const next = slice[slice.length - 1]?.id ?? null;
-        const nextCursor = rows.length > limit && next ? `p:${next}` : null;
-        return { posts: slice, nextCursor };
-      }
-
-      // Phase 1: hashtag matches (cursor = `p:<postId>`). Phase 2: text matches (`t:<postId>`) excluding hashtag matches.
-      if (!cursorIsTextPhase) {
-        const cursorWhere = await createdAtIdCursorWhere({
-          cursor: cursorPostId,
-          lookup: async (id) =>
-            await this.postsRead.read.findUnique({
-              where: { id },
-              select: { id: true, createdAt: true },
-            }),
-        });
-
-        const rows = await this.postsRead.read.findMany({
-          where: {
-            AND: [
-              { deletedAt: null },
-              readableGroupPostWhere,
-              visibilityWhere,
-              kindWhere,
-              hashtagWhere,
-              ...(cursorWhere ? [cursorWhere] : []),
-            ],
-          },
-          include: SEARCH_POST_INCLUDE,
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-          take: limit + 1,
-        });
-
-        // If we still have more hashtag matches, don't show text matches yet (hashtag posts should dominate).
-        if (rows.length > limit) {
-          const slice = rows.slice(0, limit);
-          const next = slice[slice.length - 1]?.id ?? null;
-          const nextCursor = next ? `p:${next}` : null;
-          return { posts: slice, nextCursor };
-        }
-
-        // Hashtag matches are exhausted (or fewer than a page): fill with text matches for the tag words.
-        const hashtagSlice = rows.slice(0, limit);
-        const remaining = Math.max(0, limit - hashtagSlice.length);
-        if (remaining === 0) {
-          const probe = await this.fetchHashtagFallbackTextPosts({
-            viewer,
-            allowed,
-            visibilityWhere,
-            hashtags,
-            queryFts: tagsText,
-            queryMatch: tagsText,
-            limit: 1,
-            cursorPostId: null,
-          });
-          return { posts: hashtagSlice, nextCursor: probe.posts.length > 0 ? 't:' : null };
-        }
-
-        const textRes = await this.fetchHashtagFallbackTextPosts({
-          viewer,
-          allowed,
-          visibilityWhere,
-          hashtags,
-          queryFts: tagsText,
-          queryMatch: tagsText,
-          limit: remaining,
-          cursorPostId: null,
-        });
-
-        const combined = [...hashtagSlice, ...textRes.posts];
-        const nextCursor = textRes.nextCursor ? `t:${textRes.nextCursor}` : null;
-        return { posts: combined, nextCursor };
-      }
-
-      // Phase 2: text-only fallback.
-      const textRes = await this.fetchHashtagFallbackTextPosts({
-        viewer,
-        allowed,
-        visibilityWhere,
-        hashtags,
-        queryFts: tagsText,
-        queryMatch: tagsText,
-        limit,
-        cursorPostId,
-      });
-      const nextCursor = textRes.nextCursor ? `t:${textRes.nextCursor}` : null;
-      return { posts: textRes.posts, nextCursor };
-    }
-
-    const fetchSize = Math.min(200, limit * 10);
-    const useFts = qMatchExpanded.length >= 3;
-    let raw: SearchPostRow[] = [];
-
-    if (useFts) {
-      const allowedSql = allowed.map((v) => Prisma.sql`${v}::"PostVisibility"`);
-      const visibilitySql = viewer?.id
-        ? Prisma.sql`AND p."visibility" IN (${Prisma.join(allowedSql)})`
-        : Prisma.sql`AND p."visibility" = 'public'`;
-      const readableGroupPostSql = this.readableGroupPostSql(viewer);
-
-      const topicsSql =
-        topicValues.length > 0
-          ? Prisma.sql`OR (p."topics" && ARRAY[${Prisma.join(topicValues.map((t) => Prisma.sql`${t}`))}]::text[])`
-          : Prisma.sql``;
-
-      const hashtagOrSql =
-        hashtags.length > 0
-          ? Prisma.sql`OR (p."hashtags" && ARRAY[${Prisma.join(hashtags.map((t) => Prisma.sql`${t}`))}]::text[])`
-          : Prisma.sql``;
-
-      const ids = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-        WITH q AS (SELECT websearch_to_tsquery('english', ${qFtsExpanded}) AS tsq)
-        SELECT p."id" as "id"
-        FROM "Post" p
-        JOIN "User" u ON u."id" = p."userId"
-        CROSS JOIN q
-        WHERE
-          p."deletedAt" IS NULL
-          ${readableGroupPostSql}
-          ${visibilitySql}
-          AND (
-            to_tsvector('english', p."body") @@ q.tsq
-            OR (
-              u."usernameIsSet" = true
-              AND to_tsvector(
-                'english',
-                COALESCE(u."username", '') || ' ' || COALESCE(u."name", '') || ' ' || COALESCE(u."bio", '')
-              ) @@ q.tsq
-            )
-            ${topicsSql}
-            ${hashtagOrSql}
-          )
-        ORDER BY p."createdAt" DESC, p."id" DESC
-        LIMIT ${fetchSize}
-      `);
-
-      const postIds = ids.map((r) => r.id);
-      raw = postIds.length
-        ? await this.postsRead.read.findMany({
-            where: { id: { in: postIds } },
-            include: SEARCH_POST_INCLUDE,
-          })
-        : [];
-    } else {
-      const matchWhere = this.postSearchMatchWhere(qMatchExpanded, words);
-      const topicWhere: Prisma.PostWhereInput =
-        topicValues.length > 0 ? ({ topics: { hasSome: topicValues } } as Prisma.PostWhereInput) : {};
-      const baseWhere: Prisma.PostWhereInput =
-        hashtags.length > 0
-          ? {
-              AND: [
-                { deletedAt: null },
-                readableGroupPostWhere,
-                visibilityWhere,
-                kindWhere,
-                {
-                  OR: [
-                    hashtagWhere,
-                    ...(topicValues.length > 0 ? [topicWhere] : []),
-                    matchWhere,
-                  ],
-                },
-              ],
-            }
-          : {
-              AND: [
-                { deletedAt: null },
-                readableGroupPostWhere,
-                visibilityWhere,
-                kindWhere,
-                topicValues.length > 0 ? ({ OR: [matchWhere, topicWhere] } as Prisma.PostWhereInput) : matchWhere,
-              ],
-            };
-
-      raw = await this.postsRead.read.findMany({
-        where: baseWhere,
-        include: SEARCH_POST_INCLUDE,
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take: fetchSize,
-      });
-    }
-
-    // Few hits and no topic recognised: let Jev map the wording to a topic ("gym" -> fitness) and add those posts.
-    // Same visibility filters as above, and topics exist only on public, ungrouped posts.
-    if (raw.length < TOPIC_RESCUE_BELOW && topicValues.length === 0 && hashtags.length === 0 && phrases.length === 0 && words.length > 0 && qMatchBase.length >= 3) {
-      const rescued = await this.jevTopics?.topicsFor(qMatchBase, 'search query').catch(() => null);
-      if (rescued?.length) {
-        const extra = await this.postsRead.read.findMany({
-          where: { AND: [{ deletedAt: null }, readableGroupPostWhere, visibilityWhere, kindWhere, { topics: { hasSome: rescued } }] },
-          include: SEARCH_POST_INCLUDE,
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-          take: fetchSize,
-        });
-        const seen = new Set(raw.map((p) => p.id));
-        raw = [...raw, ...extra.filter((p) => !seen.has(p.id))];
-        topicValues = rescued;
-      }
-    }
-
-    // Still thin: add posts whose meaning is close to the query. The SQL carries the same visibility and
-    // group-readability filters as the keyword search, so a vector never surfaces a post the viewer cannot read.
-    const semanticById = new Map<string, number>();
-    if (this.embeddings && raw.length < SEMANTIC_RESCUE_BELOW && hashtags.length === 0 && phrases.length === 0 && qMatchBase.length >= 3) {
-      const vector = await this.embeddings.embedQuery(qMatchBase);
-      if (vector) {
-        const allowedSql = allowed.map((v) => Prisma.sql`${v}::"PostVisibility"`);
-        const visibilitySql = viewer?.id
-          ? Prisma.sql`AND p."visibility" IN (${Prisma.join(allowedSql)})`
-          : Prisma.sql`AND p."visibility" = 'public'`;
-        const kindSql = kind ? Prisma.sql`AND p."kind" = ${kind}::"PostKind"` : Prisma.sql`AND p."kind" <> 'repost'`;
-        const near = await this.embeddings
-          .nearestPosts(vector, {
-            limit: fetchSize,
-            maxDistance: SEMANTIC_MAX_DISTANCE,
-            where: Prisma.sql`${this.readableGroupPostSql(viewer)} ${visibilitySql} ${kindSql}`,
-          })
-          .catch(() => []);
-        if (near.length) {
-          for (const row of near) semanticById.set(row.id, 1 - row.distance / SEMANTIC_MAX_DISTANCE);
-          const have = new Set(raw.map((p) => p.id));
-          const missing = near.map((r) => r.id).filter((id) => !have.has(id));
-          if (missing.length) {
-            const extra = await this.postsRead.read.findMany({ where: { id: { in: missing } }, include: SEARCH_POST_INCLUDE });
-            raw = [...raw, ...extra];
-          }
-        }
-      }
-    }
-
-    const postIds = raw.map((p) => p.id);
-    await this.posts.ensureBoostScoresFresh(postIds);
-    const popularityByPostId = await this.posts.computeScoresForPostIds(postIds);
-
-    function postScore(p: (typeof raw)[0]): number {
-      const body = (p.body ?? '').trim().toLowerCase();
-      const un = (p.user?.username ?? '').trim().toLowerCase();
-      const nm = (p.user?.name ?? '').trim().toLowerCase();
-      let score = 0;
-      if (hashtags.length > 0) {
-        const tags = Array.isArray((p as any).hashtags) ? ((p as any).hashtags as string[]) : [];
-        if (tags.some((t) => hashtags.includes(String(t)))) score = Math.max(score, POST_SCORE.hashtagMatch);
-      }
-      if (phraseLowers.length > 0) {
-        if (phraseLowers.some((ph) => body.includes(ph))) score = Math.max(score, POST_SCORE.bodyPhrase);
-      } else if (qLower && body.includes(qLower)) {
-        score = Math.max(score, POST_SCORE.bodyPhrase);
-      }
-      if (words.length > 0 && words.every((w) => body.includes(w))) score = Math.max(score, POST_SCORE.bodyAllWords);
-      if (topicValues.length > 0) {
-        const topics = Array.isArray((p as any).topics) ? ((p as any).topics as string[]) : [];
-        if (topics.some((t) => topicValues.includes(String(t)))) {
-          // A broad subject query should favor posts about that subject over incidental wording.
-          const topicScore = words.length === 1 && phraseLowers.length === 0
-            ? POST_SCORE.broadTopicMatch : POST_SCORE.topicMatch;
-          score = Math.max(score, topicScore);
-        }
-      }
-      if (un === qLower) score = Math.max(score, POST_SCORE.authorExactUsername);
-      if (nm === qLower) score = Math.max(score, POST_SCORE.authorExactName);
-      if (words.some((w) => body.includes(w))) score = Math.max(score, POST_SCORE.bodyAnyWord);
-      if (words.some((w) => un.includes(w))) score = Math.max(score, POST_SCORE.authorUsernameAnyWord);
-      if (words.some((w) => nm.includes(w))) score = Math.max(score, POST_SCORE.authorNameAnyWord);
-      const closeness = semanticById.get(p.id);
-      if (closeness !== undefined) score = Math.max(score, POST_SCORE.semanticBase + closeness * POST_SCORE.semanticSpan);
-      return score;
-    }
-
-    const sorted = [...raw].sort((a, b) => {
-      const relA = postScore(a);
-      const relB = postScore(b);
-      // For equally relevant broad-topic hits, surface current conversations first.
-      if (relA === POST_SCORE.broadTopicMatch && relB === POST_SCORE.broadTopicMatch) {
-        const recentFirst = b.createdAt.getTime() - a.createdAt.getTime();
-        if (recentFirst) return recentFirst;
-      }
-      const popA = popularityByPostId.get(a.id) ?? 0;
-      const popB = popularityByPostId.get(b.id) ?? 0;
-      const scoreA = relA * 10 + Math.log10(1 + popA);
-      const scoreB = relB * 10 + Math.log10(1 + popB);
-      if (scoreA !== scoreB) return scoreB - scoreA;
-      return b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id);
-    });
-
-    const slice = sorted.slice(offset, offset + limit);
-    const nextCursor = offset + limit < sorted.length ? String(offset + limit) : null;
-    return { posts: slice, nextCursor };
+    return searchPostsOn(this, params);
   }
+
 
   async searchCommunityGroups(params: {
     viewerUserId: string | null;

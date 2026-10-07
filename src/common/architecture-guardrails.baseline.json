@@ -11,8 +11,7 @@
     "modules/groups/groups.service.ts",
     "modules/notifications/notification-push.service.ts",
     "modules/notifications/notification-query.service.ts",
-    "modules/posts/posts.controller.ts",
-    "modules/search/search.service.ts"
+    "modules/posts/posts.controller.ts"
   ],
   "duplicateEscapeHtml": [],
   "duplicateSlugify": []
