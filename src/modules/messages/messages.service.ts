@@ -50,6 +50,7 @@ import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { CallSessionStore } from '../calls/call-session.store';
 import type { MessageCallDto } from '../../common/dto/call.dto';
+import { MESSAGE_PARTICIPANT_USER_SELECT } from '../../common/prisma-selects/user.select';
 
 /** What the calls service needs to authorize a start/join without re-querying per field. */
 export type CallConversationContext = {
@@ -311,19 +312,7 @@ export class MessagesService {
           participants: {
             include: {
               user: {
-                select: {
-                  id: true,
-                  username: true,
-                  name: true,
-                  premium: true,
-                  premiumPlus: true,
-                  isOrganization: true,
-                  verifiedStatus: true,
-                  avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
-                  avatarUpdatedAt: true,
-                  bannedAt: true,
-                  isBot: true,
-                },
+                select: MESSAGE_PARTICIPANT_USER_SELECT,
               },
             },
           },
@@ -730,19 +719,7 @@ export class MessagesService {
         participants: {
           include: {
             user: {
-              select: {
-                id: true,
-                username: true,
-                name: true,
-                premium: true,
-                premiumPlus: true,
-                isOrganization: true,
-                verifiedStatus: true,
-                avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
-                avatarUpdatedAt: true,
-                bannedAt: true,
-                isBot: true,
-              },
+              select: MESSAGE_PARTICIPANT_USER_SELECT,
             },
           },
         },
@@ -842,19 +819,7 @@ export class MessagesService {
     const participantInclude = {
       include: {
         user: {
-          select: {
-            id: true,
-            username: true,
-            name: true,
-            premium: true,
-            premiumPlus: true,
-            isOrganization: true,
-            verifiedStatus: true,
-            avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
-            avatarUpdatedAt: true,
-            bannedAt: true,
-            isBot: true,
-          },
+          select: MESSAGE_PARTICIPANT_USER_SELECT,
         },
       },
     };

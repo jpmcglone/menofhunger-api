@@ -1,12 +1,13 @@
 import {
+  BOARD_TAG_MAX_LENGTH,
   boardRangeStart,
   decodeOffsetCursor,
   encodeOffsetCursor,
   normalizeBoardTags,
   normalizeBoardUrl,
-  slugifyBoardTag,
 } from "./board.utils";
 import { gatedBoardTitle } from "../../common/dto/post.dto";
+import { slugifyBoardTag } from '../../common/text/slugify';
 
 describe("board utils", () => {
   it("normalizes links for duplicate detection and strips tracking params", () => {
@@ -28,8 +29,8 @@ describe("board utils", () => {
   });
 
   it("slugifies tags and dedupes them", () => {
-    expect(slugifyBoardTag("#Show HN")).toBe("show-hn");
-    expect(slugifyBoardTag("a")).toBeNull();
+    expect(slugifyBoardTag("#Show HN", BOARD_TAG_MAX_LENGTH)).toBe("show-hn");
+    expect(slugifyBoardTag("a", BOARD_TAG_MAX_LENGTH)).toBeNull();
     expect(normalizeBoardTags(["Ask", "ask", "#hiring", "!!"])).toEqual([
       "ask",
       "hiring",

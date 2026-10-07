@@ -14,15 +14,13 @@ import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
 import { CacheService } from '../redis/cache.service';
 import { CacheTtl } from '../redis/cache-ttl';
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
 const listTopicsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 
-const listTopicPostsSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
-});
+const listTopicPostsSchema = cursorPageQuerySchema();
 
 const listFollowedSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),

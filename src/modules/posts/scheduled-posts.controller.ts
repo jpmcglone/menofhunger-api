@@ -4,6 +4,7 @@ import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUserId } from '../users/users.decorator';
 import { ScheduledPostsService } from './scheduled-posts.service';
 import type { PostVisibility } from '@prisma/client';
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
 const mediaUploadSchema = z.object({
   source: z.literal('upload'),
@@ -72,10 +73,7 @@ const updateSchema = z.object({
   community_group_id: z.string().trim().nullish(),
 });
 
-const listSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
-});
+const listSchema = cursorPageQuerySchema();
 
 @UseGuards(AuthGuard)
 @Controller('posts/scheduled')

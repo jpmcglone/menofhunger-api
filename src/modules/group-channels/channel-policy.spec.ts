@@ -1,4 +1,5 @@
-import { channelCapabilities, assertChannelSend, assertChannelUpdate, normalizeChannelIcon, normalizeChannelName, normalizeChannelDisplayName, slugifyChannelName } from './channel-policy';
+import { channelCapabilities, assertChannelSend, assertChannelUpdate, normalizeChannelIcon, normalizeChannelName, normalizeChannelDisplayName } from './channel-policy';
+import { slugifyChannelName } from '../../common/text/slugify';
 
 describe('channel permissions', () => {
   const discussion = { archivedAt: null, defaultPurpose: null, privacy: 'normal', name: 'general' };

@@ -32,16 +32,6 @@
     "modules/posts/posts.controller.ts",
     "modules/search/search.service.ts"
   ],
-  "duplicateEscapeHtml": [
-    "common/text/escape-html.ts"
-  ],
-  "duplicateSlugify": [
-    "modules/articles/articles.service.ts",
-    "modules/board/board.utils.ts",
-    "modules/bookmarks/bookmarks.service.ts",
-    "modules/crew/crew.utils.ts",
-    "modules/group-channels/channel-policy.ts",
-    "modules/groups/groups.service.ts",
-    "modules/taxonomy/taxonomy.service.ts"
-  ]
+  "duplicateEscapeHtml": [],
+  "duplicateSlugify": []
 }

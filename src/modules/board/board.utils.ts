@@ -1,3 +1,5 @@
+import { slugifyBoardTag } from '../../common/text/slugify';
+
 export const BOARD_TITLE_MIN = 3;
 export const BOARD_TITLE_MAX = 80;
 export const BOARD_MAX_TAGS = 3;
@@ -56,25 +58,12 @@ export function normalizeBoardUrl(
 }
 
 /** Lowercase slug for a Board tag (`#Show HN` → `show-hn`). Returns null when nothing usable remains. */
-export function slugifyBoardTag(raw: string | null | undefined): string | null {
-  const slug = (raw ?? "")
-    .trim()
-    .replace(/^#+/, "")
-    .toLowerCase()
-    .replace(/[\s_]+/g, "-")
-    .replace(/[^a-z0-9-]/g, "")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, BOARD_TAG_MAX_LENGTH);
-  return slug.length >= 2 ? slug : null;
-}
-
 export function normalizeBoardTags(
   raw: readonly string[] | null | undefined,
 ): string[] {
   const out: string[] = [];
   for (const t of raw ?? []) {
-    const slug = slugifyBoardTag(t);
+    const slug = slugifyBoardTag(t, BOARD_TAG_MAX_LENGTH);
     if (slug && !out.includes(slug)) out.push(slug);
   }
   return out;

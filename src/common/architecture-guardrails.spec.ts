@@ -14,6 +14,8 @@ import { join, relative, sep } from 'node:path';
 const SRC = join(__dirname, '..');
 const BASELINE_PATH = join(__dirname, 'architecture-guardrails.baseline.json');
 const MAX_FILE_LINES = 1200;
+/** The shared helpers themselves are the one allowed definition. */
+const CANONICAL_TEXT_HELPERS = new Set(['common/text/escape-html.ts', 'common/text/slugify.ts']);
 
 function walk(dir: string, acc: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -45,8 +47,10 @@ function computeOffenders(): RuleResults {
       postTableOutsidePosts.add(path);
     }
     if (src.split('\n').length > MAX_FILE_LINES) oversized.push(path);
-    if (/function escapeHtml\b|const escapeHtml\b/.test(src)) escapeHtmlDefs.push(path);
-    if (/function slugify\w*\(|const slugify\w*\s*=/.test(src)) slugifyDefs.push(path);
+    if (!CANONICAL_TEXT_HELPERS.has(path)) {
+      if (/function escapeHtml\b|const escapeHtml\b/.test(src)) escapeHtmlDefs.push(path);
+      if (/function slugify\w*\(|const slugify\w*\s*=/.test(src)) slugifyDefs.push(path);
+    }
   }
 
   return {

@@ -10,6 +10,7 @@ import { PublicProfilesService } from "./public-profiles.service";
 import { PosthogService } from "../../common/posthog/posthog.service";
 import { totalUserArticlesWhere, totalUserBoardPoints, totalUserPostsWhere } from "../../common/content-counts";
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { MENTION_USER_SELECT } from '../../common/prisma-selects/user.select';
 
 const PREVIEW_BATCH_MAX = 50;
 const previewBatchSchema = z.object({
@@ -109,14 +110,7 @@ export class UsersPublicProfileService {
         username: { in: requested, mode: "insensitive" },
         bannedAt: null,
       },
-      select: {
-        id: true,
-        username: true,
-        premium: true,
-        premiumPlus: true,
-        isOrganization: true,
-        verifiedStatus: true,
-      },
+      select: MENTION_USER_SELECT,
     });
 
     const byLowerUsername = new Map<string, (typeof rows)[number]>();

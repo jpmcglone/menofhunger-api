@@ -24,6 +24,7 @@ import { CrewInvitesService } from './crew-invites.service';
 import { CrewWallService } from './crew-wall.service';
 import { CrewTransferService } from './crew-transfer.service';
 import { UserLookupService } from '../user-lookup/user-lookup.service';
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
 const updateCrewSchema = z.object({
   name: z.string().trim().max(80).nullish(),
@@ -75,10 +76,7 @@ const sendWallMessageSchema = z
     message: 'Message must have a body or media.',
   });
 
-const listWallSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
-});
+const listWallSchema = cursorPageQuerySchema();
 
 const transferSchema = z.object({
   newOwnerUserId: z.string().trim().min(1),

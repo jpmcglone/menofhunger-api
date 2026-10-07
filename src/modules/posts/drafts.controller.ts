@@ -7,6 +7,7 @@ import { CurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { PostsService } from './posts.service';
 import { toPostDto } from './post.dto';
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
 const draftMediaUploadSchema = z.object({
   source: z.literal('upload'),
@@ -34,10 +35,7 @@ const draftMediaSchema = z.discriminatedUnion('source', [
 
 type DraftMediaItem = z.infer<typeof draftMediaSchema>;
 
-const listSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
-});
+const listSchema = cursorPageQuerySchema();
 
 const createSchema = z.object({
   body: z.string().trim().max(1000).optional(),

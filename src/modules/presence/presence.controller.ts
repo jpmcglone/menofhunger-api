@@ -27,13 +27,11 @@ import { RedisKeys } from '../redis/redis-keys';
 import { PostsService } from '../posts/posts.service';
 import { AccountSwitchService } from '../auth/account-switch.service';
 import { CallSessionStore } from '../calls/call-session.store';
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
 const ONLINE_LIST_CACHE_TTL_MS = 10_000;
 
-const recentSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
-});
+const recentSchema = cursorPageQuerySchema();
 
 const onlinePageSchema = z.object({
   includeSelf: z.string().optional(),

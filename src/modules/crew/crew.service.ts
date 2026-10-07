@@ -22,7 +22,8 @@ import {
   type CrewPrivateDto,
   type CrewPublicDto,
 } from '../../common/dto/crew.dto';
-import { ensureUniqueCrewSlug, slugifyBase } from './crew.utils';
+import { ensureUniqueCrewSlug } from './crew.utils';
+import { slugifyCrewHandle } from '../../common/text/slugify';
 
 type UserRow = Prisma.UserGetPayload<{ select: typeof USER_LIST_SELECT }>;
 type MemberRow = CrewMember & { user: UserRow };
@@ -320,8 +321,8 @@ export class CrewService {
       const prev = crew.name;
       data.name = normalizedNext;
       // If the name changed meaningfully, regen the slug (and record the old one).
-      const prevSlugBase = slugifyBase(prev ?? 'crew');
-      const nextSlugBase = slugifyBase(normalizedNext ?? 'crew');
+      const prevSlugBase = slugifyCrewHandle(prev ?? 'crew');
+      const nextSlugBase = slugifyCrewHandle(normalizedNext ?? 'crew');
       if (nextSlugBase !== prevSlugBase) {
         const nextSlug = await ensureUniqueCrewSlug(this.prisma, nextSlugBase, {
           excludeCrewId: crew.id,

@@ -29,6 +29,7 @@ import { UploadsService } from "../uploads/uploads.service";
 import { UserVerificationService } from "../verification/user-verification.service";
 import { PagesService } from "../pages/pages.service";
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
 const paginatedSearchSchema = z.object({
   q: z.string().optional(),
@@ -71,10 +72,7 @@ const usernameParamSchema = z.object({
   username: z.string().trim().min(1),
 });
 
-const recentListSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-  cursor: z.string().optional(),
-});
+const recentListSchema = cursorPageQuerySchema(100);
 
 @Injectable()
 export class AdminUsersService {

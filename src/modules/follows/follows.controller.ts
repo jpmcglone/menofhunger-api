@@ -8,11 +8,9 @@ import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { FollowsService } from './follows.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { setReadCache } from '../../common/http-cache';
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
-const listSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
-});
+const listSchema = cursorPageQuerySchema();
 
 const recommendationsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),

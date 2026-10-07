@@ -18,7 +18,8 @@ import {
   type CrewInviteDto,
 } from '../../common/dto/crew.dto';
 import { CrewService } from './crew.service';
-import { ensureUniqueCrewSlug, slugifyBase } from './crew.utils';
+import { ensureUniqueCrewSlug } from './crew.utils';
+import { slugifyCrewHandle } from '../../common/text/slugify';
 
 const INVITE_INCLUDE = {
   crew: {
@@ -471,7 +472,7 @@ export class CrewInvitesService {
     const now = new Date();
     const seedName = (invite.crewNameOnAccept ?? '').trim();
     const namedCrew = seedName.length > 0;
-    const slug = await ensureUniqueCrewSlug(this.prisma, slugifyBase(namedCrew ? seedName : ''));
+    const slug = await ensureUniqueCrewSlug(this.prisma, slugifyCrewHandle(namedCrew ? seedName : ''));
     let createdCrewId = '';
     try {
       createdCrewId = await this.prisma.$transaction(async (tx) => {

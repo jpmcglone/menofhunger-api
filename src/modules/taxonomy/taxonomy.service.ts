@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { slugifyTopic } from '../../common/text/slugify';
 type SearchTaxonomyParams = {
   q: string;
   limit: number;
@@ -24,17 +25,6 @@ function normalizeInput(raw: string): string {
     .replace(/[^a-z0-9\s_-]/g, '')
     .replace(/[_\s]+/g, ' ')
     .replace(/\s+/g, ' ')
-    .slice(0, 80);
-}
-
-function slugify(raw: string): string {
-  return (raw ?? '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '')
     .slice(0, 80);
 }
 
@@ -141,7 +131,7 @@ export class TaxonomyService {
   }
 
   async getBySlug(slugRaw: string): Promise<TaxonomySearchResult | null> {
-    const slug = slugify(slugRaw);
+    const slug = slugifyTopic(slugRaw);
     if (!slug) return null;
     const row = await this.prisma.taxonomyTerm.findUnique({
       where: { slug },
@@ -161,7 +151,7 @@ export class TaxonomyService {
   async backfillAndSync(): Promise<{ terms: number; aliases: number; edges: number; metricsUpdated: number }> {
     // 1) Seed canonical topics + subtopics from static topic options.
     const topicRows = TOPIC_OPTIONS.map((opt) => ({
-      slug: slugify(opt.value),
+      slug: slugifyTopic(opt.value),
       label: opt.label,
       kind: 'topic' as const,
       status: 'active' as const,
@@ -202,7 +192,7 @@ export class TaxonomyService {
       if (!preferredLabelByTag.has(row.tag)) preferredLabelByTag.set(row.tag, row.label);
     }
     for (const row of articleTags) {
-      const slug = slugify(row.tag);
+      const slug = slugifyTopic(row.tag);
       if (!slug) continue;
       const label = (preferredLabelByTag.get(row.tag) ?? row.tag).trim();
       const term = await this.prisma.taxonomyTerm.upsert({
@@ -233,7 +223,7 @@ export class TaxonomyService {
       })).map((t) => t.slug),
     );
     for (const h of hashtags) {
-      const slug = slugify(h.tag);
+      const slug = slugifyTopic(h.tag);
       if (!slug) continue;
       if (!knownTermSlugs.has(slug)) continue;
       const term = await this.prisma.taxonomyTerm.findUnique({ where: { slug }, select: { id: true } });

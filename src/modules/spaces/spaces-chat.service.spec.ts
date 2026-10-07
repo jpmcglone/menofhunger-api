@@ -85,7 +85,7 @@ describe('SpacesChatService.appendSystemMessage', () => {
     });
     const msg = leave();
     expect(msg?.body).toBe('@ocaptain has left the chat');
-    const snap = (svc as any).bySpace.get(SPACE_ID).messages as Array<{ kind: string; body: string }>;
+    const snap = (svc as any).store.messages(SPACE_ID) as Array<{ kind: string; body: string }>;
     const systemBodies = snap.filter((m) => m.kind === 'system').map((m) => m.body);
     expect(systemBodies).toEqual([
       '@ocaptain has joined the chat',

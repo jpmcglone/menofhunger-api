@@ -7,6 +7,7 @@ import { CurrentUserId, IsImpersonating } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { ALLOWED_REACTIONS } from '../../common/constants/reactions';
 import { MessagesService, type MessageMediaInput } from './messages.service';
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
 const listConversationsSchema = z.object({
   tab: z.enum(['primary', 'requests']).optional(),
@@ -19,10 +20,7 @@ const searchConversationsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 
-const listMessagesSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
-});
+const listMessagesSchema = cursorPageQuerySchema();
 
 const messageMediaSchema = z.discriminatedUnion('source', [
   z.object({

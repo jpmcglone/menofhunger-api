@@ -5,7 +5,8 @@ import type { GroupChannelDto, GroupChannelViewerPayloadDto } from '../../common
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { ChannelAccessService } from './channel-access.service';
-import { DEFAULT_CHANNELS, assertChannelUpdate, defaultChannelIcon, channelCapabilities, isChannelLeader, normalizeChannelIcon, normalizeChannelName, normalizeChannelDisplayName, slugifyChannelName } from './channel-policy';
+import { DEFAULT_CHANNELS, assertChannelUpdate, defaultChannelIcon, channelCapabilities, isChannelLeader, normalizeChannelIcon, normalizeChannelName, normalizeChannelDisplayName } from './channel-policy';
+import { slugifyChannelName } from '../../common/text/slugify';
 import { lockChannelGroup } from './channel-lifecycle';
 import { provisionDefaultChannels } from './channel-provisioning';
 import { personalChannelMessageWhere } from './channel-attention-policy';

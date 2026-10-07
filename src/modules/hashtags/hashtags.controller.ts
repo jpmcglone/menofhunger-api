@@ -1,15 +1,12 @@
 import { Controller, Get, Query, Res, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
 import type { Response } from 'express';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { OptionalCurrentUserId } from '../users/users.decorator';
 import { setReadCache } from '../../common/http-cache';
 import { HashtagsService } from './hashtags.service';
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
-const trendingSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
-});
+const trendingSchema = cursorPageQuerySchema();
 
 @UseGuards(OptionalAuthGuard)
 @Controller('hashtags')

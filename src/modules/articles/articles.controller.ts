@@ -24,6 +24,7 @@ import {
 } from "../../common/throttling/rate-limit.resolver";
 import { ArticlesService } from "./articles.service";
 import { queryBoolean } from "../../common/validation/query-boolean";
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
 const visibilitySchema = z.enum(["public", "verifiedOnly", "premiumOnly"]);
 
@@ -83,10 +84,7 @@ const draftsListSchema = z.object({
     .optional(),
 });
 
-const commentListSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
-});
+const commentListSchema = cursorPageQuerySchema();
 
 const commentCreateSchema = z.object({
   body: z.string().trim().min(1).max(1000),

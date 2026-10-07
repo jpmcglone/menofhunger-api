@@ -36,6 +36,8 @@ import { parseMentionsFromBody } from '../../common/mentions/mention-regex';
 import type { PostVisibility } from '@prisma/client';
 import { LOGGED_IN_VIEW_WEIGHT } from '../views/view-tracking.utils';
 import { easternDayKey } from '../../common/time/eastern-day-key';
+import { slugifyArticleTitle } from '../../common/text/slugify';
+import { MENTION_USER_SELECT } from '../../common/prisma-selects/user.select';
 
 const VERIFIED_ARTICLES_PER_DAY = 1;
 
@@ -50,16 +52,6 @@ function normalizeCommentBody(raw: string): string {
     .join('\n')
     .trim()
     .replace(/\n{3,}/g, '\n\n');
-}
-
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s-]/g, '')
-    .replace(/[\s_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .substring(0, 80);
 }
 
 /** Normalize a tag to a stable slug key (lowercase, alphanumeric + hyphens). */
@@ -113,7 +105,7 @@ export class ArticlesService {
   }
 
   private async resolveSlug(title: string, excludeId?: string): Promise<string> {
-    const base = slugify(title) || 'article';
+    const base = slugifyArticleTitle(title) || 'article';
     let slug = base;
     let attempt = 0;
     while (true) {
@@ -1403,7 +1395,7 @@ export class ArticlesService {
           },
         },
         media: true,
-        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, isOrganization: true } } } },
+        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
         article: { include: { author: { select: articleAuthorInclude } } },
       },
     });

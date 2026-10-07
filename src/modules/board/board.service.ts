@@ -48,6 +48,7 @@ import {
   BOARD_DUPLICATE_WINDOW_DAYS,
   BOARD_MAX_TAGS,
   BOARD_SEED_TAGS,
+  BOARD_TAG_MAX_LENGTH,
   BOARD_THREADS_PER_HOUR,
   BOARD_TITLE_MAX,
   BOARD_TITLE_MIN,
@@ -56,11 +57,11 @@ import {
   encodeOffsetCursor,
   normalizeBoardTags,
   normalizeBoardUrl,
-  slugifyBoardTag,
   type BoardRange,
 } from "./board.utils";
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { slugifyBoardTag } from '../../common/text/slugify';
 type ThreadRow = Prisma.PostGetPayload<{ include: typeof POST_LIST_INCLUDE }>;
 type CommentRow = Prisma.PostGetPayload<{ include: typeof POST_BASE_INCLUDE }>;
 
@@ -1182,7 +1183,7 @@ export class BoardService implements OnModuleInit {
   }
 
   async listTags(q: string | null, limit: number): Promise<BoardTagDto[]> {
-    const prefix = slugifyBoardTag(q ?? "") ?? "";
+    const prefix = slugifyBoardTag(q ?? "", BOARD_TAG_MAX_LENGTH) ?? "";
     const rows = await this.prisma.boardTag.findMany({
       where: prefix
         ? { slug: { startsWith: prefix } }

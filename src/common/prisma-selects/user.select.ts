@@ -39,6 +39,23 @@ export const USER_LIST_SELECT = {
   },
 } as const;
 
+/** Message thread participants: list fields without org affiliations or account kind. */
+export const MESSAGE_PARTICIPANT_USER_SELECT = {
+  id: true,
+  username: true,
+  name: true,
+  premium: true,
+  premiumPlus: true,
+  isOrganization: true,
+  verifiedStatus: true,
+  avatarKey: true,
+  avatarVideoKey: true,
+  avatarVideoDurationMs: true,
+  avatarUpdatedAt: true,
+  bannedAt: true,
+  isBot: true,
+} as const;
+
 /**
  * Mention payloads are rendered inline; keep this minimal but include tier fields.
  */

@@ -10,19 +10,10 @@ import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { slugifyCollectionName } from '../../common/text/slugify';
 const COLLECTIONS_CACHE_TTL_SECONDS = 60;
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean };
-
-function slugifyCollectionName(name: string): string {
-  return (name ?? '')
-    .toString()
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .replace(/-{2,}/g, '-');
-}
 
 const RESERVED_COLLECTION_SLUGS = new Set<string>(['unorganized']);
 

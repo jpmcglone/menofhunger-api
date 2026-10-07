@@ -29,6 +29,7 @@ import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { slugifyHandle } from '../../common/text/slugify';
 const FEATURED_CACHE_TTL_SECONDS = 120;
 
 /**
@@ -107,15 +108,6 @@ function scoreGroupAgainstQuery(
   if (words.some((w) => rules.includes(w))) s = Math.max(s, 20);
   if (s === 0) s = 10;
   return s;
-}
-
-function slugifyBase(name: string): string {
-  return (name ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 72);
 }
 
 @Injectable()
@@ -372,7 +364,7 @@ export class GroupsService {
     if (!name) throw new BadRequestException('Name is required.');
     if (!description) throw new BadRequestException('Description is required.');
     if (name.length > 120) throw new BadRequestException('Name is too long.');
-    const slug = await this.ensureUniqueSlug(slugifyBase(name));
+    const slug = await this.ensureUniqueSlug(slugifyHandle(name));
 
     const g = await this.prisma.$transaction(async (tx) => {
       const created = await tx.communityGroup.create({

@@ -23,6 +23,7 @@ import { toPostDto } from '../posts/post.dto';
 import { vo2maxShareSnapshot } from './fitness-share-snapshot';
 import { stravaRawIsComplete } from './fitness-strava.service';
 import type { Prisma } from '@prisma/client';
+import { MENTION_USER_SELECT } from '../../common/prisma-selects/user.select';
 
 const MANUAL_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 /** Re-fetch recent Strava activities so a late upload after lastSyncAt is not skipped. */
@@ -757,7 +758,7 @@ export class FitnessService {
           },
         },
         media: true,
-        mentions: { include: { user: { select: { id: true, username: true, verifiedStatus: true, premium: true, premiumPlus: true, isOrganization: true } } } },
+        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
         fitnessShare: true,
       },
     });

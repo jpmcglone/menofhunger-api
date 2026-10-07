@@ -52,10 +52,6 @@ export function normalizeChannelDisplayName(value: string | null | undefined): s
 }
 
 /** A handle suggestion for a title, used when only a display name is supplied. */
-export function slugifyChannelName(value: string) {
-  return value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
-}
-
 /** One emoji (including flags, skin tones and ZWJ sequences) or null for the default "#". */
 export function normalizeChannelIcon(value: string | null | undefined): string | null {
   const icon = value?.trim();
