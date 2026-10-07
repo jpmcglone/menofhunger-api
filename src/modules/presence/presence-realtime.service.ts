@@ -4,6 +4,7 @@ import type { Server } from 'socket.io';
 import { PresenceService } from './presence.service';
 import { PresenceRedisStateService } from './presence-redis-state.service';
 import { WsEventNames } from '../../common/dto';
+import { channelRoom } from './gateway/gateway-rooms';
 import type {
   MembersMapChangedPayloadDto,
   PresenceFollowedOnlinePayloadDto,
@@ -27,6 +28,7 @@ import type {
   PostsCommentAddedPayloadDto,
   PostsCommentDeletedPayloadDto,
   PostsTypingPayloadDto,
+  GroupChannelTypingPayloadDto,
   UsersMeUpdatedPayloadDto,
   NotificationsDeletedPayloadDto,
   NotificationsNavUnreadPayloadDto,
@@ -426,6 +428,12 @@ export class PresenceRealtimeService {
     const pid = (postId ?? '').trim();
     if (!pid) return;
     this.emitToRoom(`post:${pid}`, WsEventNames.postsTyping, payload);
+  }
+
+  /** Server-originated typing indicator for a channel (Marv composing a reply). */
+  emitGroupChannelTyping(payload: GroupChannelTypingPayloadDto): void {
+    if (!payload.channelId) return;
+    this.emitToRoom(channelRoom(payload.channelId), WsEventNames.groupChannelsTyping, payload);
   }
 
   /** Delete hint pushed to post room subscribers when a reply is soft-deleted. */

@@ -114,6 +114,21 @@ export type MarvOpenAIConfig = {
   astraModel: string;
 };
 
+export type TypeSafeConfig = {
+  apiKey: string;
+  /** Alias such as `jev-latest`, or a pinned version such as `jev-1.13.0`. */
+  model: string;
+  timeoutMs: number;
+  /** Marv tier, web-search and crisis signals. Rules remain the fallback and the crisis floor. */
+  routingEnabled: boolean;
+  /** Skip paid Marv replies to public mentions that need no answer (thanks, amen, lol). */
+  replyGateEnabled: boolean;
+  /** Recognize untagged posts that speak to Marv (a reply to him, or his name without an @). */
+  addressingEnabled: boolean;
+  /** First-pass category, urgency and escalation hints for admin delegated moderation runs. */
+  triageEnabled: boolean;
+};
+
 export type MarvCreditConfig = {
   monthlyCredits: number;
   maxCredits: number;
@@ -934,6 +949,23 @@ export class AppConfigService {
     const phone =
       this.config.get<string>("MARV_PHONE")?.trim() || "+10000000001";
     return { enabled, userId, username, displayName, bio, phone };
+  }
+
+  /** True when the variable has a non-blank value. Reports presence only, never the value. */
+  envIsSet(name: string): boolean {
+    return Boolean(this.config.get<string>(name)?.toString().trim());
+  }
+
+  typeSafe(): TypeSafeConfig {
+    return {
+      apiKey: this.config.get<string>("TYPESAFE_API_KEY")?.trim() ?? "",
+      model: this.config.get<string>("TYPESAFE_MODEL")?.trim() || "jev-latest",
+      timeoutMs: this.readPositiveInt("TYPESAFE_TIMEOUT_MS", 10_000),
+      routingEnabled: this.readBool("TYPESAFE_ROUTING_ENABLED", true),
+      replyGateEnabled: this.readBool("TYPESAFE_REPLY_GATE_ENABLED", true),
+      addressingEnabled: this.readBool("TYPESAFE_ADDRESSING_ENABLED", true),
+      triageEnabled: this.readBool("TYPESAFE_TRIAGE_ENABLED", true),
+    };
   }
 
   marvOpenAI(): MarvOpenAIConfig {

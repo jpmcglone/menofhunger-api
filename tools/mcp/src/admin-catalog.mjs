@@ -24,7 +24,7 @@ export const adminCapabilities = [
   { id: 'affiliates', section: 'AI & Monetization', title: 'Referral Pilot', path: '/admin/affiliates', icon: 'tabler:coins', summary: 'Pilot membership, accrued earnings, and payout settlement', tools: ['admin_workspace', 'referral_analytics'], ios: 'web' },
   { id: 'crews', section: 'More tools', title: 'Crews', path: null, icon: 'tabler:users-group', summary: 'API supports crew inspection, ownership transfer, and disbanding; no admin editor yet', tools: ['admin_workspace'], ios: 'assistant' },
   { id: 'contextual-admin', section: 'More tools', title: 'Post and group controls', path: null, icon: 'tabler:shield', summary: 'Post editing and ranking details, group settings, pins and moderators, and crew settings live on the relevant post, group, or crew screens', tools: [], ios: 'contextual' },
-  { id: 'diagnostics', section: 'More tools', title: 'Deployment diagnostics', path: null, icon: 'tabler:heartbeat', summary: 'Admin-only health configuration is available through the API; deployment changes require infrastructure access', tools: [], ios: 'unavailable' },
+  { id: 'diagnostics', section: 'Platform', title: 'Service status', path: '/admin/services', icon: 'tabler:heartbeat', summary: 'Green, yellow, or red status for every connected service, with missing settings and what falls back', tools: [], ios: 'web' },
   { id: 'local-artifacts', section: 'More tools', title: 'Local drafts and decisions', path: null, icon: 'tabler:notes', summary: 'CLI and desktop MCP files stay on your computer; hosted MARV cannot read them', tools: ['record_decision', 'save_draft', 'list_decisions', 'list_drafts'], ios: 'unavailable' },
 ];
 

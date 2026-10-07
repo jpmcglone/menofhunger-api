@@ -23,6 +23,7 @@ function makeProcessor(opts?: {
   alreadyClaimedIdempotency?: boolean;
   aiText?: string;
   aiConfigured?: boolean;
+  jev?: any;
 }) {
   const claimedKeys = new Set<string>();
   if (opts?.alreadyClaimedIdempotency) claimedKeys.add('any');
@@ -247,6 +248,7 @@ function makeProcessor(opts?: {
     threadContext,
     linkMetadata,
     presenceRealtime,
+    opts?.jev,
   );
 
   return {
@@ -268,6 +270,78 @@ function makeProcessor(opts?: {
   };
 }
 
+describe('MarvinPublicReplyProcessor reply gate', () => {
+  const payload = { postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester' };
+  const jevWith = (probability: number | null, available = true) => ({
+    replyGateAvailable: jest.fn(() => available),
+    replyExpectedProbability: jest.fn(async () => probability),
+  });
+  const withBody = async (m: ReturnType<typeof makeProcessor>, over: Record<string, unknown>) => {
+    const post = await m.prisma.post.findFirst();
+    m.prisma.post.findFirst.mockResolvedValue({ ...post, ...over });
+  };
+
+  it('skips quietly, spending nothing, when Jev is sure no reply is expected', async () => {
+    const jev = jevWith(0.01);
+    const m = makeProcessor({ jev });
+    await withBody(m, { body: 'thanks @marv' });
+    await m.processor.process(payload);
+    expect(m.routing.resolve).not.toHaveBeenCalled();
+    expect(m.credits.reserve).not.toHaveBeenCalled();
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
+    expect(m.usage.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: 'no_reply_needed', creditsSpent: 0 }),
+    );
+  });
+
+  it('replies as usual when Jev is unsure', async () => {
+    const m = makeProcessor({ jev: jevWith(0.4) });
+    await withBody(m, { body: 'ok @marv' });
+    await m.processor.process(payload);
+    expect(m.posts.createMarvReply).toHaveBeenCalled();
+  });
+
+  it('replies as usual when Jev is unavailable or returns nothing', async () => {
+    for (const jev of [jevWith(0.01, false), jevWith(null)]) {
+      const m = makeProcessor({ jev });
+      await withBody(m, { body: 'thanks @marv' });
+      await m.processor.process(payload);
+      expect(m.posts.createMarvReply).toHaveBeenCalled();
+    }
+  });
+
+  it('never asks Jev for questions, media, or long messages', async () => {
+    const cases = [
+      { body: 'thanks @marv?' },
+      { body: 'thanks @marv', media: [{ id: 'm-1' }] },
+      { body: `@marv ${'a'.repeat(300)}` },
+    ];
+    for (const over of cases) {
+      const jev = jevWith(0.01);
+      const m = makeProcessor({ jev });
+      await withBody(m, over);
+      await m.processor.process(payload);
+      expect(jev.replyExpectedProbability).not.toHaveBeenCalled();
+      expect(m.posts.createMarvReply).toHaveBeenCalled();
+    }
+  });
+
+  it('shows Jev the message being replied to and whether Marv wrote it', async () => {
+    const jev = jevWith(0.5);
+    const m = makeProcessor({ jev });
+    await withBody(m, { body: 'yes please @marv', parentId: 'p-0' });
+    m.identity.cachedMarvUserId = jest.fn(() => 'marv-id');
+    m.prisma.post.findFirst
+      .mockResolvedValueOnce({ ...(await m.prisma.post.findFirst()), body: 'yes please @marv', parentId: 'p-0' })
+      .mockResolvedValueOnce({ body: 'Want me to draft it?', user: { id: 'marv-id' } });
+    await m.processor.process(payload);
+    expect(jev.replyExpectedProbability).toHaveBeenCalledWith({
+      text: 'yes please @marv',
+      previous: { text: 'Want me to draft it?', fromMarv: true },
+    });
+  });
+});
+
 describe('MarvinPublicReplyProcessor', () => {
   it.each(['Is this sufficient @benwisdom?', 'Thanks', 'email@marv.com'])('ignores queued posts without a current body mention: %s', async (body) => {
     const m = makeProcessor();
@@ -277,6 +351,20 @@ describe('MarvinPublicReplyProcessor', () => {
     expect(m.routing.resolve).not.toHaveBeenCalled();
     expect(m.credits.reserve).not.toHaveBeenCalled();
     expect(m.posts.createMarvReply).not.toHaveBeenCalled();
+  });
+
+  it('answers an untagged post only when it was recognized as addressed to Marv', async () => {
+    const m = makeProcessor();
+    const post = await m.prisma.post.findFirst();
+    m.prisma.post.findFirst.mockResolvedValue({ ...post, body: 'can you tell me what that website is about' });
+    await m.processor.process({ postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester' });
+    expect(m.posts.createMarvReply).not.toHaveBeenCalled();
+
+    const m2 = makeProcessor();
+    const post2 = await m2.prisma.post.findFirst();
+    m2.prisma.post.findFirst.mockResolvedValue({ ...post2, body: 'can you tell me what that website is about' });
+    await m2.processor.process({ postId: 'p-1', rootPostId: 'r-1', requestingUserId: 'u-requester', addressedBy: 'jev' });
+    expect(m2.posts.createMarvReply).toHaveBeenCalled();
   });
 
   it.each([MARV_NO_REPLY, ` ${MARV_NO_REPLY}\n`, `That question is for Ben. ${MARV_NO_REPLY}`])('silently refunds a request addressed to another member: %j', async (aiText) => {

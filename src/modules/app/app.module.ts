@@ -66,6 +66,7 @@ import { GroupsModule } from '../groups/groups.module';
 import { CrewModule } from '../crew/crew.module';
 import { LandingModule } from '../landing/landing.module';
 import { AiUtilityModule } from '../ai/ai-utility.module';
+import { TypeSafeModule } from '../typesafe/typesafe.module';
 import { MarvinIdentityModule } from '../marvin/marvin-identity.module';
 import { MarvinModule } from '../marvin/marvin.module';
 import { ExploreModule } from '../explore/explore.module';
@@ -163,6 +164,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     LandingModule,
     CoinsModule,
     AiUtilityModule,
+    TypeSafeModule,
     MarvinIdentityModule,
     MarvinModule,
     ExploreModule,

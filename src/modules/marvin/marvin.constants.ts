@@ -62,6 +62,8 @@ export const MARV_ERROR_CODES = {
   messageFailed: 'message_failed',
   userBanned: 'user_banned',
   aiConsentRequired: 'ai_consent_required',
+  /** Jev judged the mention a thanks or reaction that expects no answer; nothing was charged. */
+  noReplyNeeded: 'no_reply_needed',
 } as const;
 
 export type MarvErrorCode = (typeof MARV_ERROR_CODES)[keyof typeof MARV_ERROR_CODES];

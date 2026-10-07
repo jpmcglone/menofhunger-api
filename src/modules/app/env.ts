@@ -544,6 +544,24 @@ export const envSchema = z
       z.string().optional().default("+10000000001"),
     ),
 
+    // TypeSafe AI (Jev): typed decisions with calibrated probabilities. Unset disables it.
+    TYPESAFE_API_KEY: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    TYPESAFE_MODEL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional().default("jev-latest"),
+    ),
+    TYPESAFE_TIMEOUT_MS: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.coerce.number().int().positive().optional(),
+    ),
+    TYPESAFE_ROUTING_ENABLED: z.enum(["true", "false"]).default("true"),
+    TYPESAFE_REPLY_GATE_ENABLED: z.enum(["true", "false"]).default("true"),
+    TYPESAFE_ADDRESSING_ENABLED: z.enum(["true", "false"]).default("true"),
+    TYPESAFE_TRIAGE_ENABLED: z.enum(["true", "false"]).default("true"),
+
     // OpenAI Responses API. Member Marv personality lives in code
     // (`marvin-system-prompt.ts`) and is sent as `instructions`. Need an API key.
     OPENAI_API_KEY: z.preprocess(

@@ -1,8 +1,53 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import type { MarvinSource } from '@prisma/client';
+import { MarvinJevService, type JevRoutingSignals } from './marvin-jev.service';
 
 /** Resolved mode — always one of the three real tiers, never 'auto'. */
 export type ResolvedMarvinMode = 'fast' | 'regular' | 'smart';
+
+export type MarvinRouteArgs = {
+  /**
+   * The user's requested tier. `'auto'` means "let the router decide from scratch" —
+   * routing starts from fast and upgrades based on content signals.
+   */
+  requested: 'auto' | 'fast' | 'regular' | 'smart';
+  source: MarvinSource;
+  /** Approximate prompt length (rough char/4 heuristic is fine — we don't tokenize here). */
+  estimatedInputTokens: number;
+  /** The user's prompt + (optionally) a thread snippet — matched against sensitive-topic regex. */
+  text: string;
+  /** Number of distinct authors the model will need to reason about (multi-user threads). */
+  distinctAuthors?: number;
+  /** When true, web search is available at Regular/Smart; time-sensitive queries upgrade Fast→Regular. */
+  webSearchEnabled?: boolean;
+};
+
+export type MarvinRouteResult = {
+  mode: ResolvedMarvinMode;
+  /** A trailing `+jev` means Jev changed the outcome compared with the rules alone. */
+  reason: string;
+  crisisDetected: boolean;
+  webSearchDemanded: boolean;
+  /** `jev` when Jev answered this request, `rules` when only the built-in rules ran. */
+  engine: 'jev' | 'rules';
+};
+
+type RouteSignals = {
+  crisis: boolean;
+  sensitive: boolean;
+  explicitSearch: boolean;
+  webSearchSignal: boolean;
+  /** Content-derived upgrade, only ever set from Jev. */
+  complexity: 'moderate' | 'complex' | null;
+};
+
+/** Crisis is deliberately over-triggered: a missed signal costs far more than an extra Smart reply. */
+const JEV_CRISIS_THRESHOLD = 0.35;
+/** Outside this band Jev overrides the keyword rules; inside it Jev is unsure and the rules decide. */
+const JEV_CONFIDENT_HIGH = 0.8;
+const JEV_CONFIDENT_LOW = 0.2;
+const JEV_MODERATE_CONFIDENCE = 0.7;
+const JEV_COMPLEX_CONFIDENCE = 0.8;
 
 /**
  * Picks the effective Marv model tier (Fast / Regular / Smart) for a single request.
@@ -16,6 +61,10 @@ export type ResolvedMarvinMode = 'fast' | 'regular' | 'smart';
  */
 @Injectable()
 export class MarvinRoutingService {
+  private readonly logger = new Logger(MarvinRoutingService.name);
+
+  constructor(@Optional() private readonly jev?: MarvinJevService) {}
+
   /** Threshold above which we pick at least Regular. */
   static readonly REGULAR_TOKEN_THRESHOLD = 2_000;
   /** Threshold above which we pick Smart. */
@@ -94,72 +143,119 @@ export class MarvinRoutingService {
    * Resolve the effective mode given the user's selection plus the request shape.
    * Returns both the effective mode and a short human-readable reason (logged + stored
    * in `MarvinUsageEvent.routingReason` for analytics).
+   *
+   * Jev reads the message when available; keyword rules remain the fallback when it is off,
+   * slow, or unsure, and they stay a floor for crisis detection.
    */
-  resolve(args: {
-    /**
-     * The user's requested tier. `'auto'` means "let the router decide from scratch" —
-     * routing starts from fast and upgrades based on content signals.
-     */
-    requested: 'auto' | 'fast' | 'regular' | 'smart';
-    source: MarvinSource;
-    /** Approximate prompt length (rough char/4 heuristic is fine — we don't tokenize here). */
-    estimatedInputTokens: number;
-    /** The user's prompt + (optionally) a thread snippet — matched against sensitive-topic regex. */
-    text: string;
-    /** Number of distinct authors the model will need to reason about (multi-user threads). */
-    distinctAuthors?: number;
-    /** When true, web search is available at Regular/Smart; time-sensitive queries upgrade Fast→Regular. */
-    webSearchEnabled?: boolean;
-  }): { mode: ResolvedMarvinMode; reason: string; crisisDetected: boolean; webSearchDemanded: boolean } {
-    const text = args.text ?? '';
-    const distinctAuthors = Math.max(0, args.distinctAuthors ?? 0);
+  async resolve(args: MarvinRouteArgs): Promise<MarvinRouteResult> {
+    const rules = this.resolveRules(args);
+    const jev = this.jev;
+    if (!jev || !jev.routingAvailable()) return rules;
 
-    const crisisDetected = MarvinRoutingService.CRISIS_PATTERNS.some((re) => re.test(text));
-    const sensitiveDetected = MarvinRoutingService.SMART_TOPIC_PATTERNS.some((re) => re.test(text));
+    const signals = await jev.routingSignals({
+      text: args.text ?? '',
+      webSearchEnabled: Boolean(args.webSearchEnabled),
+    });
+    if (!signals) return rules;
+
+    const merged = this.decide(args, this.mergeSignals(this.ruleSignals(args), signals));
+    const changed =
+      merged.mode !== rules.mode ||
+      merged.crisisDetected !== rules.crisisDetected ||
+      merged.webSearchDemanded !== rules.webSearchDemanded;
+    if (changed) {
+      this.logger.log(`[marv-routing] jev changed outcome rules=${rules.mode}/${rules.reason} jev=${merged.mode}/${merged.reason}`);
+    }
+    return { ...merged, reason: changed ? `${merged.reason}+jev` : merged.reason, engine: 'jev' };
+  }
+
+  /** Keyword-only routing. Deterministic; used as the fallback and the baseline Jev is compared with. */
+  resolveRules(args: MarvinRouteArgs): MarvinRouteResult {
+    return this.decide(args, this.ruleSignals(args));
+  }
+
+  private ruleSignals(args: MarvinRouteArgs): RouteSignals {
+    const text = args.text ?? '';
     const explicitSearch = args.webSearchEnabled
       ? MarvinRoutingService.EXPLICIT_SEARCH_PATTERNS.some((re) => re.test(text))
       : false;
-    const webSearchSignal = args.webSearchEnabled && !explicitSearch
-      ? MarvinRoutingService.WEB_SEARCH_PATTERNS.some((re) => re.test(text))
-      : false;
+    return {
+      crisis: MarvinRoutingService.CRISIS_PATTERNS.some((re) => re.test(text)),
+      sensitive: MarvinRoutingService.SMART_TOPIC_PATTERNS.some((re) => re.test(text)),
+      explicitSearch,
+      webSearchSignal: args.webSearchEnabled && !explicitSearch
+        ? MarvinRoutingService.WEB_SEARCH_PATTERNS.some((re) => re.test(text))
+        : false,
+      complexity: null,
+    };
+  }
+
+  private mergeSignals(rules: RouteSignals, jev: JevRoutingSignals): RouteSignals {
+    // Where Jev is confident it wins; in the uncertain middle the keyword rules decide.
+    const confident = (p: number | null, fallback: boolean): boolean => {
+      if (p === null) return fallback;
+      if (p >= JEV_CONFIDENT_HIGH) return true;
+      if (p <= JEV_CONFIDENT_LOW) return false;
+      return fallback;
+    };
+    const explicitSearch = confident(jev.explicitSearch, rules.explicitSearch);
+    const liveInfo = confident(jev.liveInfo, rules.webSearchSignal || rules.explicitSearch);
+    const complexity =
+      jev.complexity.level === 'complex' && jev.complexity.confidence >= JEV_COMPLEX_CONFIDENCE ? 'complex'
+        : jev.complexity.level === 'moderate' && jev.complexity.confidence >= JEV_MODERATE_CONFIDENCE ? 'moderate'
+          : null;
+    return {
+      // Never lose a keyword hit for crisis; Jev can only add to it.
+      crisis: rules.crisis || jev.crisis >= JEV_CRISIS_THRESHOLD,
+      sensitive: confident(jev.sensitive, rules.sensitive),
+      explicitSearch,
+      webSearchSignal: !explicitSearch && liveInfo,
+      complexity,
+    };
+  }
+
+  private decide(args: MarvinRouteArgs, signals: RouteSignals): MarvinRouteResult {
+    const distinctAuthors = Math.max(0, args.distinctAuthors ?? 0);
+    const { crisis: crisisDetected, sensitive: sensitiveDetected, explicitSearch, webSearchSignal } = signals;
+    const done = (
+      mode: ResolvedMarvinMode,
+      reason: string,
+      webSearchDemanded: boolean,
+    ): MarvinRouteResult => ({ mode, reason, crisisDetected, webSearchDemanded, engine: 'rules' });
 
     // 'auto' is treated as a routing hint to start from 'fast' and upgrade as needed —
     // same as if the user picked fast but with full upgrade eligibility.
     const baseMode: 'fast' | 'regular' | 'smart' = args.requested === 'auto' ? 'fast' : args.requested;
 
     // Smart never gets downgraded.
-    if (baseMode === 'smart') {
-      return { mode: 'smart', reason: 'user_selected_smart', crisisDetected, webSearchDemanded: explicitSearch };
-    }
+    if (baseMode === 'smart') return done('smart', 'user_selected_smart', explicitSearch);
 
     // Hard upgrades.
-    if (crisisDetected) return { mode: 'smart', reason: 'crisis_keywords', crisisDetected, webSearchDemanded: false };
-    if (sensitiveDetected) return { mode: 'smart', reason: 'sensitive_topic', crisisDetected, webSearchDemanded: false };
+    if (crisisDetected) return done('smart', 'crisis_keywords', false);
+    if (sensitiveDetected) return done('smart', 'sensitive_topic', false);
     if (args.estimatedInputTokens >= MarvinRoutingService.SMART_TOKEN_THRESHOLD) {
-      return { mode: 'smart', reason: 'long_context', crisisDetected, webSearchDemanded: explicitSearch };
+      return done('smart', 'long_context', explicitSearch);
     }
-    if (distinctAuthors >= 4) {
-      return { mode: 'smart', reason: 'multi_user_thread', crisisDetected, webSearchDemanded: explicitSearch };
-    }
+    if (distinctAuthors >= 4) return done('smart', 'multi_user_thread', explicitSearch);
+    if (signals.complexity === 'complex') return done('smart', 'complex_request', explicitSearch);
 
     // Soft upgrades Fast → Regular.
     if (baseMode === 'fast') {
       // Explicit search demand: upgrade so web search is available AND inject must-search instruction.
-      if (explicitSearch) return { mode: 'regular', reason: 'explicit_search_demand', crisisDetected, webSearchDemanded: true };
+      if (explicitSearch) return done('regular', 'explicit_search_demand', true);
       // Implicit time-sensitive signal: upgrade so web search is available to the model.
-      if (webSearchSignal) return { mode: 'regular', reason: 'web_search_signal', crisisDetected, webSearchDemanded: false };
+      if (webSearchSignal) return done('regular', 'web_search_signal', false);
       // Non-trivial context length.
       if (args.estimatedInputTokens >= MarvinRoutingService.REGULAR_TOKEN_THRESHOLD) {
-        return { mode: 'regular', reason: 'medium_context', crisisDetected, webSearchDemanded: false };
+        return done('regular', 'medium_context', false);
       }
+      if (signals.complexity === 'moderate') return done('regular', 'moderate_request', false);
     }
 
     // Explicit search demand at Regular/Smart: stay at requested mode, mark demanded.
-    if (explicitSearch) {
-      return { mode: baseMode, reason: 'explicit_search_demand', crisisDetected, webSearchDemanded: true };
-    }
+    if (explicitSearch) return done(baseMode, 'explicit_search_demand', true);
 
-    return { mode: baseMode, reason: args.requested === 'auto' ? 'auto_routed' : 'user_selected', crisisDetected, webSearchDemanded: false };
+    return done(baseMode, args.requested === 'auto' ? 'auto_routed' : 'user_selected', false);
   }
 
   /**
@@ -168,9 +264,10 @@ export class MarvinRoutingService {
    */
   static shouldElevateReasoning(routed: { reason: string; crisisDetected: boolean }): boolean {
     if (routed.crisisDetected) return true;
-    return routed.reason === 'crisis_keywords'
-      || routed.reason === 'long_context'
-      || routed.reason === 'multi_user_thread';
+    const reason = routed.reason.replace(/\+jev$/, '');
+    return reason === 'crisis_keywords'
+      || reason === 'long_context'
+      || reason === 'multi_user_thread';
   }
 
   /** Cheap char→token approximation. ~4 chars/token works well enough for routing decisions. */

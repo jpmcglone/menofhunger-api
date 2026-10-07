@@ -16,7 +16,7 @@ const homes = {
   'admin-intro-brief': 'intros', 'admin-jobs': 'jobs', 'admin-mcp-connections': 'users',
   'admin-newsletters': 'newsletters',
   'admin-operations': 'assistant', 'admin-pages': 'users', 'admin-push': 'push',
-  'admin-referral': 'affiliates', 'admin-reports': 'reports', 'admin-search': 'search',
+  'admin-referral': 'affiliates', 'admin-reports': 'reports', 'admin-search': 'search', 'admin-services': 'diagnostics',
   'admin-partners': 'diagnostics', 'admin-site-config': 'site-settings', 'admin-users': 'users',
   'admin-verification': 'verification', marvin: 'marv', taxonomy: 'jobs', health: 'diagnostics', metrics: 'analytics',
 };

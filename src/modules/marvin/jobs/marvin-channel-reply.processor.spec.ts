@@ -7,18 +7,19 @@ function setup() {
     marvinUserSettings: { findUnique: jest.fn().mockResolvedValue({ aiConsentAt: new Date(), aiConsentVersion: 2 }) },
     marvinIdempotencyKey: { create: jest.fn(), deleteMany: jest.fn() }, message: { findUnique: jest.fn().mockResolvedValue(null) },
   };
-  const config = { groupChannels: () => ({ marvEnabled: true }), marvLimits: () => ({ privateMaxPer10Minutes: 10, privateMaxPerUserPerDay: 100 }) };
+  const config = { groupChannels: () => ({ marvEnabled: true }), marvBot: () => ({ username: 'marv' }), marvLimits: () => ({ privateMaxPer10Minutes: 10, privateMaxPerUserPerDay: 100 }) };
   const authorized = { grant: { botId: 'marv', invitation: 'one' }, channel: { conversationId: 'conversation' }, trigger: { body: '@marv help' } };
-  const scope = { authorize: jest.fn().mockResolvedValue(authorized), retrieve: jest.fn().mockResolvedValue([]), validateEvidence: jest.fn().mockResolvedValue(authorized) };
+  const scope = { addressing: jest.fn().mockResolvedValue(null), authorize: jest.fn().mockResolvedValue(authorized), retrieve: jest.fn().mockResolvedValue([]), validateEvidence: jest.fn().mockResolvedValue(authorized) };
   const credits = { resolveCreditOwnerId: jest.fn().mockResolvedValue('owner'), costForMode: () => 2, threadContextSurcharge: (count: number) => count,
     reserve: jest.fn(), settle: jest.fn().mockResolvedValue({}), refund: jest.fn().mockResolvedValue({}) };
   const usage = { countRecent: jest.fn().mockResolvedValue(0), recordEvent: jest.fn(), emitCreditsUpdated: jest.fn() };
   const routing = { resolve: () => ({ mode: 'fast', reason: 'auto' }), estimateTokens: () => 5 };
   const ai = { respond: jest.fn(async (_request: { signal: AbortSignal }) => ({ text: 'An answer.' })) };
   const messages = { broadcast: jest.fn() }, effects = { dispatch: jest.fn() };
-  const processor = new MarvinChannelReplyProcessor(db as never, config as never, scope as never, {} as never, messages as never, {} as never, effects as never, credits as never, routing as never, ai as never, usage as never);
+  const presence = { emitGroupChannelTyping: jest.fn() };
+  const processor = new MarvinChannelReplyProcessor(db as never, config as never, scope as never, {} as never, messages as never, {} as never, effects as never, credits as never, routing as never, ai as never, usage as never, presence as never);
   const deliver = jest.spyOn(processor as never, 'deliver' as never).mockResolvedValue({ id: 'reply', created: true } as never);
-  return { processor, db, scope, credits, ai, deliver, effects, usage };
+  return { processor, db, scope, credits, ai, deliver, effects, usage, presence };
 }
 describe('MARV channel generation lifecycle', () => {
   beforeEach(() => jest.useFakeTimers());
@@ -53,5 +54,25 @@ describe('MARV channel generation lifecycle', () => {
   it('does not regenerate or charge an already delivered trigger', async () => {
     const { processor, db, credits } = setup(); db.message.findUnique.mockResolvedValue({ id: 'reply' } as never);
     await processor.process(input); expect(credits.reserve).not.toHaveBeenCalled();
+  });
+  it('shows Marv typing in the channel while generating, then clears it', async () => {
+    const { processor, presence } = setup(); await processor.process(input);
+    const calls = presence.emitGroupChannelTyping.mock.calls.map(([payload]) => payload);
+    expect(calls[0]).toMatchObject({ groupId: 'group', channelId: 'channel', typing: true, user: { id: 'marv', username: 'marv' } });
+    expect(calls[calls.length - 1]).toMatchObject({ typing: false });
+  });
+  it('replies to an untagged message only when Jev vouches for it, and carries that through', async () => {
+    const { processor, scope, ai } = setup();
+    scope.authorize.mockRejectedValueOnce(new NotFoundException());
+    scope.addressing.mockResolvedValue('jev');
+    await processor.process(input);
+    expect(scope.authorize).toHaveBeenLastCalledWith(expect.objectContaining({ addressedBy: 'jev' }));
+    expect(ai.respond).toHaveBeenCalled();
+  });
+  it('ignores an untagged message Jev does not vouch for, and shows no typing', async () => {
+    const { processor, scope, ai, presence } = setup();
+    scope.authorize.mockRejectedValueOnce(new NotFoundException());
+    await processor.process(input);
+    expect(ai.respond).not.toHaveBeenCalled(); expect(presence.emitGroupChannelTyping).not.toHaveBeenCalled();
   });
 });

@@ -197,7 +197,7 @@ export class MarvinCatchUpService {
       const openAICfg = this.appConfig.marvOpenAI();
       const creditCfg = this.appConfig.marvCredits();
       const contextText = this.contextPlainText(context);
-      const routed = this.routing.resolve({
+      const routed = await this.routing.resolve({
         requested: requestedMode,
         source: 'catch_up',
         estimatedInputTokens: this.routing.estimateTokens(contextText),

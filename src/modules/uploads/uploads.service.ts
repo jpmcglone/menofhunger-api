@@ -3,7 +3,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { imageSize } from 'image-size';
-import sharp from 'sharp';
+import sharp, { type Metadata as SharpMetadata } from 'sharp';
 import { ImageProcessingGate } from './image-processing-gate';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -198,7 +198,7 @@ export class UploadsService {
     const buf = await streamToBuffer(body, maxBytes);
 
     // Check if EXIF orientation requires normalization.
-    let meta: sharp.Metadata;
+    let meta: SharpMetadata;
     try {
       meta = await sharp(buf, { failOn: 'none' }).metadata();
     } catch {

@@ -274,7 +274,7 @@ export class MarvinPrivateReplyProcessor {
 
     // 5. Routing decision.
     const text = msg.body ?? '';
-    const routed = this.routing.resolve({
+    const routed = await this.routing.resolve({
       requested: requestedMode,
       source: 'private_session',
       estimatedInputTokens: this.routing.estimateTokens(text),

@@ -4,6 +4,9 @@ import { DelegationPolicyService } from "./delegation/delegation-policy.service"
 import { DelegationActionsService } from "./delegation/delegation-actions.service";
 import { DelegationEvidenceService } from "./delegation/delegation-evidence.service";
 import { DelegationRunnerService } from "./delegation/delegation-runner.service";
+import { DelegationTriageService } from "./delegation/delegation-triage.service";
+import { AdminServicesController } from "./admin-services.controller";
+import { AdminServiceStatusService } from "./admin-service-status.service";
 import { DelegationCron } from "./delegation/delegation.cron";
 import { DelegationController } from "./delegation/delegation.controller";
 import { BookmarksModule } from "../bookmarks/bookmarks.module";
@@ -109,6 +112,7 @@ import { AdminOperationsController } from "./admin-operations.controller";
     AdminAvatarVideoController,
     AdminAssistantController,
     AdminOperationsController,
+    AdminServicesController,
     AdminUsersController,
     AdminSiteConfigController,
     AdminImageReviewController,
@@ -141,8 +145,10 @@ import { AdminOperationsController } from "./admin-operations.controller";
     DelegationActionsService,
     DelegationEvidenceService,
     DelegationRunnerService,
+    DelegationTriageService,
     DelegationCron,
     AdminEngagementService,
+    AdminServiceStatusService,
     AdminAssistantService,
     AdminGuard,
     AdminImageReviewService,

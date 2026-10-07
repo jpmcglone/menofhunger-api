@@ -5,7 +5,7 @@ describe('MarvinRoutingService', () => {
 
   describe('Smart never gets downgraded', () => {
     it('keeps smart even on trivial questions', () => {
-      const r = svc.resolve({
+      const r = svc.resolveRules({
         requested: 'smart',
         source: 'public_thread',
         estimatedInputTokens: 5,
@@ -26,7 +26,7 @@ describe('MarvinRoutingService', () => {
     ];
     for (const text of phrases) {
       it(`upgrades fast → smart and flags crisis for "${text}"`, () => {
-        const r = svc.resolve({
+        const r = svc.resolveRules({
           requested: 'fast',
           source: 'private_session',
           estimatedInputTokens: 10,
@@ -49,7 +49,7 @@ describe('MarvinRoutingService', () => {
     ];
     for (const c of cases) {
       it(`upgrades for "${c.text}"`, () => {
-        const r = svc.resolve({
+        const r = svc.resolveRules({
           requested: 'fast',
           source: 'public_thread',
           estimatedInputTokens: 100,
@@ -63,7 +63,7 @@ describe('MarvinRoutingService', () => {
 
   describe('Long context auto-upgrades to smart', () => {
     it('promotes fast → smart at the SMART_TOKEN_THRESHOLD', () => {
-      const r = svc.resolve({
+      const r = svc.resolveRules({
         requested: 'fast',
         source: 'public_thread',
         estimatedInputTokens: MarvinRoutingService.SMART_TOKEN_THRESHOLD,
@@ -76,7 +76,7 @@ describe('MarvinRoutingService', () => {
 
   describe('Multi-user threads upgrade to smart', () => {
     it('flags multi_user_thread when distinctAuthors >= 4', () => {
-      const r = svc.resolve({
+      const r = svc.resolveRules({
         requested: 'fast',
         source: 'public_thread',
         estimatedInputTokens: 100,
@@ -90,7 +90,7 @@ describe('MarvinRoutingService', () => {
 
   describe('Soft fast → regular upgrade for medium context', () => {
     it('promotes fast → regular at REGULAR_TOKEN_THRESHOLD', () => {
-      const r = svc.resolve({
+      const r = svc.resolveRules({
         requested: 'fast',
         source: 'public_thread',
         estimatedInputTokens: MarvinRoutingService.REGULAR_TOKEN_THRESHOLD,
@@ -101,7 +101,7 @@ describe('MarvinRoutingService', () => {
     });
 
     it('keeps fast for short non-sensitive questions', () => {
-      const r = svc.resolve({
+      const r = svc.resolveRules({
         requested: 'fast',
         source: 'public_thread',
         estimatedInputTokens: 50,
@@ -123,7 +123,7 @@ describe('MarvinRoutingService', () => {
     ];
     for (const text of timeSensitivePhrases) {
       it(`upgrades fast → regular for "${text}" when webSearchEnabled`, () => {
-        const r = svc.resolve({
+        const r = svc.resolveRules({
           requested: 'fast',
           source: 'private_session',
           estimatedInputTokens: 20,
@@ -136,7 +136,7 @@ describe('MarvinRoutingService', () => {
       });
 
       it(`keeps fast for "${text}" when webSearchEnabled=false`, () => {
-        const r = svc.resolve({
+        const r = svc.resolveRules({
           requested: 'fast',
           source: 'private_session',
           estimatedInputTokens: 20,
@@ -149,7 +149,7 @@ describe('MarvinRoutingService', () => {
     }
 
     it('does not upgrade regular → smart on an implicit web search signal alone', () => {
-      const r = svc.resolve({
+      const r = svc.resolveRules({
         requested: 'regular',
         source: 'private_session',
         estimatedInputTokens: 20,
@@ -170,7 +170,7 @@ describe('MarvinRoutingService', () => {
     ];
     for (const text of explicitPhrases) {
       it(`sets webSearchDemanded=true and upgrades fast → regular for "${text}"`, () => {
-        const r = svc.resolve({
+        const r = svc.resolveRules({
           requested: 'fast',
           source: 'private_session',
           estimatedInputTokens: 20,
@@ -183,7 +183,7 @@ describe('MarvinRoutingService', () => {
       });
 
       it(`keeps fast and webSearchDemanded=false for "${text}" when webSearchEnabled=false`, () => {
-        const r = svc.resolve({
+        const r = svc.resolveRules({
           requested: 'fast',
           source: 'private_session',
           estimatedInputTokens: 20,
@@ -196,7 +196,7 @@ describe('MarvinRoutingService', () => {
     }
 
     it('keeps regular at regular with webSearchDemanded=true for explicit demand', () => {
-      const r = svc.resolve({
+      const r = svc.resolveRules({
         requested: 'regular',
         source: 'private_session',
         estimatedInputTokens: 20,
@@ -210,7 +210,7 @@ describe('MarvinRoutingService', () => {
 
   describe('Auto mode routes from fast upward', () => {
     it('routes to fast for a trivial query', () => {
-      const r = svc.resolve({
+      const r = svc.resolveRules({
         requested: 'auto',
         source: 'private_session',
         estimatedInputTokens: 10,
@@ -221,7 +221,7 @@ describe('MarvinRoutingService', () => {
     });
 
     it('upgrades to regular on a web-search signal', () => {
-      const r = svc.resolve({
+      const r = svc.resolveRules({
         requested: 'auto',
         source: 'private_session',
         estimatedInputTokens: 10,
@@ -232,7 +232,7 @@ describe('MarvinRoutingService', () => {
     });
 
     it('upgrades to smart on a crisis signal', () => {
-      const r = svc.resolve({
+      const r = svc.resolveRules({
         requested: 'auto',
         source: 'private_session',
         estimatedInputTokens: 10,

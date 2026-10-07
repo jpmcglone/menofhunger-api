@@ -1,4 +1,4 @@
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common';
 import { BOARD_THREAD_PREVIEW_INCLUDE } from '../../common/prisma-includes/post.include';
 import type { Prisma } from '@prisma/client';
 import type { CommunityGroupJoinPolicy, PostVisibility } from '@prisma/client';
@@ -12,6 +12,7 @@ import { JOBS } from '../jobs/jobs.constants';
 import { JobsService } from '../jobs/jobs.service';
 import { PostsTopicsClassifyService } from './posts-topics-classify.service';
 import { LinkMetadataService } from '../link-metadata/link-metadata.service';
+import { MarvinAddressingService, isAddressedToMarv } from '../marvin/services/marvin-addressing.service';
 import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
@@ -86,6 +87,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     private readonly registry: SideEffectsRegistry,
     private readonly sideEffects: SideEffectsService,
     private readonly topicsClassify: PostsTopicsClassifyService,
+    @Optional() private readonly marvAddressing?: MarvinAddressingService,
   ) {}
 
   onModuleInit(): void {
@@ -1015,9 +1017,13 @@ export class PostsSideEffectsHandler implements OnModuleInit {
             (args.addedMentionIds && !args.addedMentionIds.includes(resolvedMarvId))) return;
       }
 
+      let addressedByJev = false;
       if (!mentionsMarv) {
-        this.logger.log(`[marv] mention-detect post=${post.id} skip reason=no_mention`);
-        return;
+        addressedByJev = post.kind !== 'board' && (await this.isUntaggedAddressToMarv(post, actorUserId, resolvedMarvId));
+        if (!addressedByJev) {
+          this.logger.log(`[marv] mention-detect post=${post.id} skip reason=no_mention`);
+          return;
+        }
       }
 
       const actorIsMarv = Boolean(resolvedMarvId && actorUserId === resolvedMarvId);
@@ -1066,6 +1072,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
             requestedMode: requestedMarvMode,
             bodySnippet,
             visibility,
+            ...(addressedByJev ? { addressedBy: 'jev' as const } : {}),
           },
           {
             // Stable job id per post so a retried side-effect job doesn't enqueue Marv twice.
@@ -1090,6 +1097,43 @@ export class PostsSideEffectsHandler implements OnModuleInit {
         `[marv] mention-detection during side-effects failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * An untagged post still summons Marv when Jev is confident the author is speaking to him: a reply
+   * to one of his posts, or his name without an @. Anything unsure, slow, or unavailable stays unsummoned.
+   */
+  private async isUntaggedAddressToMarv(post: PostWithRelations, actorUserId: string, marvId: string | null): Promise<boolean> {
+    const addressing = this.marvAddressing;
+    if (!addressing?.available() || !post.body?.trim()) return false;
+    if (actorUserId === marvId) return false;
+
+    const parent = post.parentId
+      ? await this.prisma.post.findFirst({
+          where: { id: post.parentId, deletedAt: null },
+          select: { body: true, userId: true, user: { select: { username: true, name: true } } },
+        })
+      : null;
+    const parentIsMarv = Boolean(parent && marvId && parent.userId === marvId);
+    if (!MarvinAddressingService.isCandidate(post.body, parentIsMarv)) return false;
+
+    // A person named Marv in this conversation: the parent's author, or someone @-tagged here.
+    const otherMarvs = [
+      ...(parent?.user && !parentIsMarv ? [parent.user] : []),
+      ...(post.mentions ?? []).filter((m) => m.user.id !== marvId).map((m) => m.user),
+    ]
+      .filter((u) => MarvinAddressingService.namedLikeMarv(u))
+      .map((u) => u.username ?? '');
+
+    const probability = await addressing.addressedToMarvProbability({
+      text: post.body,
+      otherMarvs,
+      parent: parent
+        ? { text: parent.body ?? '', authorIsMarv: parentIsMarv, authorIsSpeaker: parent.userId === actorUserId }
+        : null,
+    });
+    this.logger.log(`[marv] addressing post=${post.id} parentIsMarv=${parentIsMarv} p=${probability ?? 'n/a'}`);
+    return isAddressedToMarv(probability, otherMarvs);
   }
 
   /** First "Marv is replying" pulse as soon as the job is queued. */

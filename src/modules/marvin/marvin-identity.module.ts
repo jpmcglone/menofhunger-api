@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { AppConfigModule } from '../app/app-config.module';
+import { MarvinAddressingService } from './services/marvin-addressing.service';
 import { MarvinBotIdentityService } from './services/marvin-bot-identity.service';
 
 /**
@@ -20,7 +21,7 @@ import { MarvinBotIdentityService } from './services/marvin-bot-identity.service
 @Global()
 @Module({
   imports: [AppConfigModule],
-  providers: [MarvinBotIdentityService],
-  exports: [MarvinBotIdentityService],
+  providers: [MarvinBotIdentityService, MarvinAddressingService],
+  exports: [MarvinBotIdentityService, MarvinAddressingService],
 })
 export class MarvinIdentityModule {}

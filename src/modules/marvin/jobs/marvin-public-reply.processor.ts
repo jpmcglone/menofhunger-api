@@ -2,7 +2,7 @@ import { MARV_NO_REPLY } from '../marvin-prompt-instructions';
 import { parseMentionsFromBody } from '../../../common/mentions/mention-regex';
 import { boardMarvReplyId } from '../services/board-marv-reply-id';
 import { marvinFailureReason, fitMarvinPost } from '../services/marvin-failure';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Prisma, type MarvinMode } from '@prisma/client';
 import type { ResolvedMarvinMode } from '../services/marvin-routing.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -14,6 +14,7 @@ import { MarvinCannedRepliesService } from '../services/marvin-canned-replies.se
 import { MarvinCreditService, InsufficientMarvCreditsError } from '../services/marvin-credit.service';
 import { MarvinPromptBuilderService, type MarvThreadPost } from '../services/marvin-prompt-builder.service';
 import { MarvinRoutingService } from '../services/marvin-routing.service';
+import { MarvinJevService } from '../services/marvin-jev.service';
 import { MarvinToolHandlersService } from '../services/marvin-tool-handlers.service';
 import { MarvinUsageService } from '../services/marvin-usage.service';
 import { PresenceRealtimeService } from '../../presence/presence-realtime.service';
@@ -34,6 +35,9 @@ import { fillVisionSlots } from '../services/marvin-vision-media';
  * so we heartbeat at half that to keep the indicator alive through long tool loops.
  */
 const TYPING_HEARTBEAT_MS = 3000;
+/** Jev must put the chance the author wants an answer below this before a mention goes unanswered. */
+const MENTION_NO_REPLY_THRESHOLD = 0.05;
+const MENTION_GATE_MAX_CHARS = 240;
 
 export type MarvinPublicReplyJobPayload = {
   postId: string;
@@ -45,6 +49,8 @@ export type MarvinPublicReplyJobPayload = {
   bodySnippet?: string;
   /** Visibility of the triggering post — informational; createPost mirrors parent visibility. */
   visibility?: string;
+  /** Set when an untagged post was recognized as speaking to Marv, so the @mention check is waived. */
+  addressedBy?: 'jev';
 };
 
 /**
@@ -82,7 +88,30 @@ export class MarvinPublicReplyProcessor {
     private readonly threadContext: MarvinThreadContextService,
     private readonly linkMetadata: LinkMetadataService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    @Optional() private readonly jev?: MarvinJevService,
   ) {}
+
+  /**
+   * Conservative on purpose: a question mark, media, or a long message always gets a reply, and
+   * Jev must be very sure nothing is being asked. Jev being unavailable means reply as usual.
+   */
+  private async mentionNeedsNoReply(text: string, mediaCount: number, parentId: string | null): Promise<boolean> {
+    if (!this.jev || mediaCount > 0 || text.includes('?') || text.length > MENTION_GATE_MAX_CHARS) return false;
+    if (!this.jev.replyGateAvailable()) return false;
+    // "yes please" only makes sense next to what it answers, so give Jev the message being replied to.
+    const parent = parentId
+      ? await this.prisma.post.findFirst({
+          where: { id: parentId, deletedAt: null },
+          select: { body: true, user: { select: { id: true } } },
+        })
+      : null;
+    const marvId = this.identity.cachedMarvUserId();
+    const probability = await this.jev.replyExpectedProbability({
+      text,
+      previous: parent ? { text: parent.body ?? '', fromMarv: Boolean(marvId && parent.user.id === marvId) } : null,
+    });
+    return probability !== null && probability < MENTION_NO_REPLY_THRESHOLD;
+  }
 
   async process(payload: MarvinPublicReplyJobPayload): Promise<void> {
     const startedAt = Date.now();
@@ -161,6 +190,7 @@ export class MarvinPublicReplyProcessor {
         kind: true,
         visibility: true,
         rootId: true,
+        parentId: true,
         userId: true,
         communityGroupId: true,
         communityGroup: {
@@ -194,7 +224,7 @@ export class MarvinPublicReplyProcessor {
       return;
     }
     const explicit = parseMentionsFromBody(post.body ?? '').some(name => name.toLowerCase() === cfg.username.trim().toLowerCase());
-    if (!explicit) return;
+    if (!explicit && payload.addressedBy !== 'jev') return;
     if (post.kind === 'board') {
       if (!marvUserIdForTyping || post.userId === marvUserIdForTyping ||
           !post.mentions.some(mention => mention.user.id === marvUserIdForTyping)) return;
@@ -281,9 +311,26 @@ export class MarvinPublicReplyProcessor {
       return;
     }
 
-    // 5. Routing decision (mode + crisis detection).
+    // 4b. Reply gate — a bare thanks or reaction that mentions Marv needs no paid answer.
     const text = post.body ?? '';
-    const routed = this.routing.resolve({
+    if (await this.mentionNeedsNoReply(text, post.media?.length ?? 0, post.parentId)) {
+      this.logger.log(`[marv] public-reply EXIT reason=no_reply_needed post=${postId}`);
+      await this.usage.recordEvent({
+        userId: requestingUserId,
+        source: 'public_thread',
+        sourceId: postId,
+        rootPostId,
+        requestedMode,
+        effectiveMode: requestedMode,
+        creditsSpent: 0,
+        errorCode: MARV_ERROR_CODES.noReplyNeeded,
+        latencyMs: Date.now() - startedAt,
+      });
+      return;
+    }
+
+    // 5. Routing decision (mode + crisis detection).
+    const routed = await this.routing.resolve({
       requested: requestedMode,
       source: 'public_thread',
       estimatedInputTokens: this.routing.estimateTokens(text),
