@@ -1,7 +1,7 @@
 import type { CrosspostMode } from '@prisma/client';
 import { PickaxCrosspostService } from '../pickax/pickax-crosspost.service';
 import { XCrosspostService } from '../x/x-crosspost.service';
-import { Body, Controller, Delete, ForbiddenException, Get, Headers, Logger, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Logger, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -11,6 +11,8 @@ import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { AppConfigService } from '../app/app-config.service';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { PostsService } from './posts.service';
+import { listSchema, listPostsOn } from './posts-list.query';
+import { getPostByIdOn, loadPermalinkRelatedPostsOn } from './posts-get.query';
 import { toPostDto, toPostPollDto, toPostAuthorDtoFromFeedRow } from './post.dto';
 import { buildAttachParentChain } from './posts.utils';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
@@ -42,38 +44,6 @@ function parseMarvModeHeader(raw: string | undefined): 'fast' | 'regular' | 'sma
   return null;
 }
 
-const listSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
-  visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
-  followingOnly: queryBoolean().optional(),
-  mediaOnly: queryBoolean().optional(),
-  kind: z.enum(['regular', 'checkin']).optional(),
-  /** Filter check-ins to a specific ET day (YYYY-MM-DD). Forces kind=checkin when present. */
-  checkinDayKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  /** When true, include the viewer's own posts in results (overrides home-feed self-exclusion). */
-  includeSelf: queryBoolean().optional(),
-  // Optional author filter (comma-separated user IDs). Used by Explore to show trending by recommended users.
-  authorIds: z.string().optional(),
-  // "trending" is the UI-friendly name for our half-life boost scoring feed.
-  // Keep "popular" for backwards compatibility / internal naming.
-  // "forYou" is a personalized re-rank of trending using the viewer's follow graph + view history.
-  sort: z.enum(['new', 'popular', 'trending', 'featured', 'forYou']).optional(),
-  /** Cursor-less For You pull-to-refresh: skip the 15s page-1 cache and apply refresh jitter. */
-  refresh: queryBoolean().optional(),
-  collapseByRoot: queryBoolean().optional(),
-  collapseMode: z.enum(['root', 'parent']).optional(),
-  prefer: z.enum(['reply', 'root']).optional(),
-  collapseMaxPerRoot: z.coerce.number().int().min(1).max(5).optional(),
-  /** All groups the viewer is in (members-only). Mutually exclusive with `communityGroupId` in practice. */
-  groupsHub: queryBoolean().optional(),
-  /** Single community group feed (members-only). */
-  communityGroupId: z.string().trim().min(1).max(40).optional(),
-  /** When true, return only top-level (non-reply) posts. */
-  topLevelOnly: queryBoolean().optional(),
-  /** Filter to posts whose author has a matching location state (2-letter US state code, e.g. "VA"). */
-  authorLocationState: z.string().trim().min(2).max(2).optional(),
-});
 
 const userListSchema = listSchema.extend({
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
@@ -309,18 +279,18 @@ const publishFromOnlyMeSchema = z.object({
 @ApiTags('Feed & Posts')
 @Controller('posts')
 export class PostsController {
-  private readonly logger = new Logger(PostsController.name);
+  readonly logger = new Logger(PostsController.name);
 
   constructor(
-    private readonly posts: PostsService,
-    private readonly appConfig: AppConfigService,
-    private readonly cache: CacheService,
-    private readonly cacheInvalidation: CacheInvalidationService,
+    readonly posts: PostsService,
+    readonly appConfig: AppConfigService,
+    readonly cache: CacheService,
+    readonly cacheInvalidation: CacheInvalidationService,
     private readonly pickax: PickaxCrosspostService,
     private readonly x: XCrosspostService,
   ) {}
 
-  private async communityGroupPreviewMapForIds(
+  async communityGroupPreviewMapForIds(
     viewerUserId: string | null,
     groupIds: string[],
   ): Promise<Map<string, CommunityGroupPreviewDto>> {
@@ -333,96 +303,15 @@ export class PostsController {
    * collectAncestorPostIds + getByIds — keep that here so /p/:id stays O(1)
    * round trips instead of O(depth).
    */
-  private async loadPermalinkRelatedPosts(params: {
+  async loadPermalinkRelatedPosts(params: {
     viewerUserId: string | null;
     viewerHasAdmin: boolean;
     leaf: Awaited<ReturnType<PostsService['getById']>>;
     leafGated: boolean;
-  }): Promise<{
-    chain: Array<Awaited<ReturnType<PostsService['getById']>>>;
-    gatedChainIndices: Set<number>;
-    byId: Map<string, Awaited<ReturnType<PostsService['getById']>>>;
-    repostedPostRaw: Awaited<ReturnType<PostsService['getById']>> | null;
-  }> {
-    const { viewerUserId, viewerHasAdmin, leaf, leafGated } = params;
-    const leafParentId = (leaf as { parentId?: string | null }).parentId ?? null;
-    const leafRepostedId = (leaf as { repostedPostId?: string | null }).repostedPostId ?? null;
-
-    const ancestorIds = await this.posts.collectAncestorPostIds([leafParentId, leafRepostedId]);
-    const fetched = ancestorIds.length
-      ? await this.posts.getByIds({ viewerUserId, ids: ancestorIds })
-      : [];
-
-    const byId = new Map<string, Awaited<ReturnType<PostsService['getById']>>>();
-    for (const row of fetched) {
-      const deletedAt = (row as { deletedAt?: Date | null }).deletedAt ?? null;
-      if (deletedAt && !viewerHasAdmin) continue;
-      byId.set(row.id, row);
-    }
-
-    const missingIds = ancestorIds.filter((id) => !byId.has(id));
-    const gatedIds = new Set<string>();
-    if (missingIds.length > 0) {
-      const gatedRows = await Promise.all(
-        missingIds.map((id) => this.posts.getByIdNoAccess(id).catch(() => null)),
-      );
-      for (const row of gatedRows) {
-        if (!row) continue;
-        byId.set(row.id, row);
-        gatedIds.add(row.id);
-      }
-    }
-
-    const chain: Array<Awaited<ReturnType<PostsService['getById']>>> = [leaf];
-    const gatedChainIndices = new Set<number>();
-    if (leafGated) gatedChainIndices.add(0);
-
-    let current = leaf;
-    while (current) {
-      const parentId = (current as { parentId?: string | null }).parentId ?? null;
-      if (!parentId) break;
-      const next = byId.get(parentId);
-      if (!next) break;
-      chain.push(next);
-      if (gatedIds.has(next.id)) {
-        gatedChainIndices.add(chain.length - 1);
-        break;
-      }
-      current = next;
-    }
-
-    const quotedSeeds = [
-      ...chain,
-      ...(leafRepostedId && byId.has(leafRepostedId) ? [byId.get(leafRepostedId)!] : []),
-    ];
-    const quotedPostIds = [
-      ...new Set(
-        quotedSeeds
-          .map((p) => (p as { quotedPostId?: string | null }).quotedPostId)
-          .filter((id): id is string => Boolean(id)),
-      ),
-    ].filter((id) => !byId.has(id));
-    if (quotedPostIds.length > 0) {
-      const quoted = await this.posts.getByIds({ viewerUserId, ids: quotedPostIds });
-      for (const row of quoted) byId.set(row.id, row);
-      const stillMissing = quotedPostIds.filter((id) => !byId.has(id));
-      if (stillMissing.length > 0) {
-        const gatedQuoted = await Promise.all(
-          stillMissing.map((id) => this.posts.getByIdNoAccess(id).catch(() => null)),
-        );
-        for (const row of gatedQuoted) {
-          if (row) byId.set(row.id, row);
-        }
-      }
-    }
-
-    return {
-      chain,
-      gatedChainIndices,
-      byId,
-      repostedPostRaw: leafRepostedId ? byId.get(leafRepostedId) ?? null : null,
-    };
+  }) {
+    return loadPermalinkRelatedPostsOn(this, params);
   }
+
 
   @UseGuards(OptionalAuthGuard)
   @Throttle({
@@ -437,297 +326,7 @@ export class PostsController {
     @Query() query: unknown,
     @Res({ passthrough: true }) httpRes: Response,
   ) {
-    const reqStartMs = Date.now();
-    const stageMs: Record<string, number> = {};
-    const parsed = listSchema.parse(query);
-    const viewerUserId = userId ?? null;
-    const limit = parsed.limit ?? 30;
-    const cursor = parsed.cursor ?? null;
-    const authorUserIds =
-      (parsed.authorIds ?? '')
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .slice(0, 50) || [];
-
-    // When checkinDayKey is provided, the request is scoped to a specific check-in day;
-    // force kind=checkin and disable the shared feed cache (day-scoped feeds are small/specific).
-    const checkinDayKey = parsed.checkinDayKey ?? null;
-    const effectiveKind: 'regular' | 'checkin' | null = checkinDayKey ? 'checkin' : (parsed.kind ?? null);
-    // Check-in feeds always include the viewer's own posts — no need for callers to opt in.
-    const includeSelf = effectiveKind === 'checkin' ? true : (parsed.includeSelf ?? false);
-
-    const sort = parsed.sort ?? 'new';
-    const requestedSortKind = sort === 'trending' ? 'popular' : sort;
-    // For You works for anonymous viewers too — listForYouFeed handles null viewerUserId
-    // by restricting to public posts and skipping all personalized lanes (no last-seen,
-    // no follows, no blocks). The result is a public discovery blend with For You scoring.
-    const sortKind = requestedSortKind;
-    const isForYou = sortKind === 'forYou';
-    const groupScoped = Boolean(parsed.groupsHub || parsed.communityGroupId);
-    // Media grids should be exhaustive for Newest, while Trending/For You still
-    // need distinct ordering. The media trending path includes zero-score media
-    // so it does not go empty just because older posts are no longer hot.
-    const mediaOnly = parsed.mediaOnly ?? false;
-    const mediaChronological = mediaOnly && !groupScoped && sortKind !== 'forYou' && sortKind !== 'popular';
-
-    if (groupScoped) {
-      if (!viewerUserId) throw new ForbiddenException('Sign in to view this feed.');
-      const groupSort = sortKind === 'popular' || sort === 'trending' ? 'trending' : 'new';
-      let groupIds: string[];
-      let applyPinnedHead: boolean;
-      if (parsed.communityGroupId) {
-        const gid = parsed.communityGroupId.trim();
-        await this.posts.assertCanReadCommunityGroup(viewerUserId, gid);
-        groupIds = [gid];
-        applyPinnedHead = groupSort === 'new';
-      } else {
-        groupIds = await this.posts.listActiveCommunityGroupIdsForUser(viewerUserId);
-        applyPinnedHead = false;
-      }
-      const scopedOut =
-        groupIds.length === 0
-          ? { data: [], pagination: { nextCursor: null } }
-          : await this.posts.listComposedGroupScopedFeed({
-              viewerUserId,
-              groupIds,
-              limit,
-              cursor,
-              sort: groupSort,
-              applyPinnedHead,
-              collapseByRoot: parsed.collapseByRoot ?? true,
-              collapseMode: parsed.collapseMode ?? 'root',
-              prefer: parsed.prefer ?? 'reply',
-              collapseMaxPerRoot: parsed.collapseMaxPerRoot ?? 2,
-              topLevelOnly: parsed.topLevelOnly,
-            });
-      const totalMsGroup = Date.now() - reqStartMs;
-      httpRes.setHeader('x-feed-total-ms', String(totalMsGroup));
-      setReadCache(httpRes, { viewerUserId });
-      return scopedOut;
-    }
-
-    // Anon For You applies a per-request score jitter so each refresh shows a different order —
-    // caching would freeze that order, so we skip the cache for anon For You.
-    // Authed For You page 1 is cached as a composed payload (15s) with a stampede lock.
-    // lastSeenAt refreshes bump a per-user For You version so the next refresh re-ranks.
-    const anonCache = viewerUserId == null && !isForYou;
-    const wantsForYouRefresh = isForYou && Boolean(parsed.refresh) && !cursor;
-    const authForYouFirstPageCache =
-      isForYou
-      && Boolean(viewerUserId)
-      && !cursor
-      && !wantsForYouRefresh
-      && !authorUserIds.length
-      && !effectiveKind
-      && !checkinDayKey
-      && !(parsed.mediaOnly ?? false)
-      && !(parsed.followingOnly ?? false);
-    const authFirstPageCache = !isForYou && Boolean(viewerUserId) && !cursor;
-    const authCursorCache = !isForYou
-      && Boolean(viewerUserId)
-      && Boolean(cursor)
-      && (sortKind === 'new' || sortKind === 'popular' || sortKind === 'featured')
-      && !authorUserIds.length
-      && !effectiveKind
-      && !checkinDayKey
-      && !(parsed.mediaOnly ?? false)
-      && !(parsed.followingOnly ?? false)
-      && String(cursor).trim().length <= 64;
-    const feedVer = (anonCache || authFirstPageCache || authCursorCache || authForYouFirstPageCache)
-      ? await this.cacheInvalidation.feedGlobalVersion()
-      : null;
-    const forYouUserVer = authForYouFirstPageCache && viewerUserId
-      ? await this.cacheInvalidation.forYouUserVersion(viewerUserId)
-      : null;
-    const cacheEnabled = Boolean(feedVer) && (anonCache || authFirstPageCache || authCursorCache || authForYouFirstPageCache);
-    const paramsHash = cacheEnabled
-      ? stableJsonHash({
-          endpoint: 'posts:list',
-          sort: sortKind,
-          limit,
-          cursor,
-          visibility: parsed.visibility ?? 'all',
-          followingOnly: parsed.followingOnly ?? false,
-          kind: effectiveKind,
-          checkinDayKey,
-          includeSelf,
-          mediaOnly: parsed.mediaOnly ?? false,
-          forYouUserVer,
-          topLevelOnly: parsed.topLevelOnly ?? false,
-          authorUserIds,
-          collapseByRoot: parsed.collapseByRoot ?? false,
-          collapseMode: parsed.collapseMode ?? 'root',
-          collapsePrefer: parsed.prefer ?? 'reply',
-          collapseMaxPerRoot: parsed.collapseMaxPerRoot ?? 1,
-        })
-      : null;
-    const cacheKey =
-      cacheEnabled && feedVer && paramsHash
-        ? (anonCache
-            ? RedisKeys.anonPostsList(paramsHash, feedVer)
-            : RedisKeys.authPostsList(viewerUserId!, paramsHash, feedVer))
-        : null;
-    const cacheLockKey =
-      cacheEnabled && feedVer && paramsHash
-        ? (anonCache
-            ? RedisKeys.anonPostsListLock(paramsHash, feedVer)
-            : RedisKeys.authPostsListLock(viewerUserId!, paramsHash, feedVer))
-        : '';
-    const cacheTtlSeconds = anonCache
-      ? CacheTtl.anonFeedSeconds
-      : (authForYouFirstPageCache
-          ? CacheTtl.forYouRankedPage1Seconds
-          : (authFirstPageCache ? CacheTtl.authFeedSeconds : CacheTtl.authCursorFeedSeconds));
-
-    const computeFeed = async () => {
-        const listStartMs = Date.now();
-        const result =
-          sortKind === 'forYou' && !mediaChronological
-            ? await this.posts.listForYouFeed({
-                viewerUserId,
-                limit,
-                cursor,
-                visibility: parsed.visibility ?? 'all',
-                kind: effectiveKind,
-                checkinDayKey,
-                includeSelf,
-                mediaOnly,
-                topLevelOnly: parsed.topLevelOnly ?? false,
-                authorUserIds: authorUserIds.length ? authorUserIds : null,
-                authorLocationState: parsed.authorLocationState ?? null,
-                refresh: wantsForYouRefresh,
-              })
-            : sortKind === 'featured' && !mediaChronological
-              ? await this.posts.listFeaturedFeed({
-                  viewerUserId,
-                  limit,
-                  cursor,
-                  visibility: parsed.visibility ?? 'all',
-                  followingOnly: parsed.followingOnly ?? false,
-                  kind: effectiveKind,
-                  checkinDayKey,
-                  includeSelf,
-                  mediaOnly,
-                  topLevelOnly: parsed.topLevelOnly ?? false,
-                  authorUserIds: authorUserIds.length ? authorUserIds : null,
-                  authorLocationState: parsed.authorLocationState ?? null,
-                })
-              : sortKind === 'popular' && !mediaChronological
-                ? await this.posts.listPopularFeed({
-                    viewerUserId,
-                    limit,
-                    cursor,
-                    visibility: parsed.visibility ?? 'all',
-                    followingOnly: parsed.followingOnly ?? false,
-                    kind: effectiveKind,
-                    checkinDayKey,
-                    includeSelf,
-                    mediaOnly,
-                    topLevelOnly: parsed.topLevelOnly ?? false,
-                    authorUserIds: authorUserIds.length ? authorUserIds : null,
-                    authorLocationState: parsed.authorLocationState ?? null,
-                  })
-                : await this.posts.listFeed({
-                    viewerUserId,
-                    limit,
-                    cursor,
-                    visibility: parsed.visibility ?? 'all',
-                    followingOnly: parsed.followingOnly ?? false,
-                    kind: effectiveKind,
-                    checkinDayKey,
-                    includeSelf,
-                    mediaOnly,
-                    topLevelOnly: parsed.topLevelOnly ?? false,
-                    authorUserIds: authorUserIds.length ? authorUserIds : null,
-                    authorLocationState: parsed.authorLocationState ?? null,
-                  });
-        stageMs.list = Date.now() - listStartMs;
-
-        const dedupeStartMs = Date.now();
-        const feedAuthorBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-        // Collapse multiple flat-repost rows for the same original into one surviving row
-        // and remove co-page standalone originals (the repost shell already embeds them).
-        // repostedByAuthorsByItemId / repostedByCountByItemId are attached to DTOs for
-        // "Alice and N others reposted" UI.
-        const {
-          items: dedupedPosts,
-          repostedByAuthorsByItemId,
-          repostedByCountByItemId,
-        } = collapseRepostsByCanonical(
-          result.posts,
-          (p) => toPostAuthorDtoFromFeedRow(p, feedAuthorBaseUrl),
-        );
-
-        const { items: filteredPosts, collapsedItemsByItemId } =
-          collapseFeedByRoot(dedupedPosts, {
-          collapseByRoot: parsed.collapseByRoot ?? false,
-          collapseMode: parsed.collapseMode ?? 'root',
-          prefer: parsed.prefer ?? 'reply',
-          maxPerRoot: parsed.collapseMaxPerRoot ?? 1,
-          getId: (post) => post.id,
-          getParentId: (post) => post.parentId ?? null,
-          getAuthorPreview: (post) => toPostAuthorDtoFromFeedRow(post, feedAuthorBaseUrl),
-        });
-        stageMs.dedupe = Date.now() - dedupeStartMs;
-        const dtoStartMs = Date.now();
-        const popResult = result as { scoreByPostId?: Map<string, number> };
-        const dtos = await this.posts.composeFeedPostDtos({
-          viewerUserId,
-          filteredPosts,
-          collapsedItemsByItemId,
-          scoreByPostId: popResult.scoreByPostId,
-          conversationContext: sortKind === 'forYou',
-        });
-        // Annotate collapsed repost rows so the UI can render "Alice and N others reposted".
-        for (const dto of dtos) {
-          const authors = repostedByAuthorsByItemId.get(dto.id);
-          const count = repostedByCountByItemId.get(dto.id);
-          if (authors) dto.repostedByAuthors = authors;
-          if (count) dto.repostedByCount = count;
-        }
-        const payload = {
-          data: dtos,
-          pagination: { nextCursor: result.nextCursor },
-        };
-        stageMs.dto = Date.now() - dtoStartMs;
-        return payload;
-    };
-
-    const out = cacheEnabled && cacheKey && cacheLockKey
-      ? await this.cache.getOrSetJsonWithLock<{ data: any; pagination: any }>({
-          enabled: true,
-          key: cacheKey,
-          ttlSeconds: cacheTtlSeconds,
-          lockKey: cacheLockKey,
-          lockTtlMs: 10_000,
-          lockWaitMs: 750,
-          computeAndSet: computeFeed,
-          fallback: computeFeed,
-          waitForResult: true,
-        })
-      : await computeFeed();
-
-    const totalMs = Date.now() - reqStartMs;
-    httpRes.setHeader('x-feed-total-ms', String(totalMs));
-    if (Object.keys(stageMs).length > 0) {
-      const serverTiming = Object.entries(stageMs)
-        .filter(([, ms]) => Number.isFinite(ms))
-        .map(([name, ms]) => `${name};dur=${Math.max(0, Math.round(ms))}`)
-        .join(', ');
-      if (serverTiming) httpRes.setHeader('server-timing', serverTiming);
-    }
-    const feedCacheMode = anonCache
-      ? 'anon'
-      : (authForYouFirstPageCache
-          ? 'auth_foryou'
-          : (authFirstPageCache ? 'auth_first_page' : (authCursorCache ? 'auth_cursor' : 'none')));
-    httpRes.setHeader('x-feed-cache-mode', feedCacheMode);
-    if (totalMs >= 800) {
-      this.logger.warn(`GET /posts slow request: ${totalMs}ms (sort=${sortKind}, cursor=${cursor ? 'yes' : 'no'}, mode=${feedCacheMode})`);
-    }
-    setReadCache(httpRes, { viewerUserId });
-    return out;
+    return listPostsOn(this, userId, query, httpRes);
   }
 
   @UseGuards(OptionalAuthGuard)
@@ -1017,192 +616,7 @@ export class PostsController {
     @Param('id') id: string,
     @Res({ passthrough: true }) httpRes: Response,
   ) {
-    const viewerUserId = userId ?? null;
-
-    // Try to fetch the post with normal access rules; if forbidden (tier too low),
-    // fall back to a stripped preview so /p/:id can still render the gated treatment.
-    let viewerCanAccess = true;
-    let post: Awaited<ReturnType<typeof this.posts.getById>>;
-    try {
-      post = await this.posts.getById({ viewerUserId, id });
-    } catch (e) {
-      if (e instanceof ForbiddenException) {
-        post = await this.posts.getByIdNoAccess(id);
-        viewerCanAccess = false;
-      } else {
-        throw e;
-      }
-    }
-
-    const gatedGroupId =
-      !viewerCanAccess && (post as { communityGroupId?: string | null }).communityGroupId
-        ? String((post as { communityGroupId?: string | null }).communityGroupId)
-        : null;
-    const [viewer, groupPreview] = await Promise.all([
-      this.posts.viewerContext(viewerUserId),
-      gatedGroupId
-        ? this.posts.communityGroupPreviewForGroup(gatedGroupId, viewerUserId)
-        : Promise.resolve(null),
-    ]);
-    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-
-    const { chain, gatedChainIndices, byId, repostedPostRaw } = await this.loadPermalinkRelatedPosts({
-      viewerUserId,
-      viewerHasAdmin,
-      leaf: post,
-      leafGated: !viewerCanAccess,
-    });
-
-    // Build groupPreview map for any group post in the chain (including reposted) so the
-    // permalink page can show the group context (back-strip, inline pill, nav highlight)
-    // even when the viewer can access the post. Mirrors feed-list behavior.
-    const allChainPostsForGroups: Awaited<ReturnType<typeof this.posts.getById>>[] = [
-      ...chain,
-      ...(repostedPostRaw ? [repostedPostRaw] : []),
-    ];
-    const groupIdsForPreview = Array.from(
-      new Set(
-        allChainPostsForGroups
-          .map((p) => String((p as { communityGroupId?: string | null }).communityGroupId ?? '').trim())
-          .filter((gid): gid is string => Boolean(gid)),
-      ),
-    );
-    const allPosts = [...chain, ...(repostedPostRaw ? [repostedPostRaw] : [])];
-    const postIds = allPosts.map((p) => p.id);
-
-    // Quoted posts were batched with the ancestor chain (getByIds + gated fallback).
-    const quotedPostIds = Array.from(
-      new Set(
-        allPosts
-          .map((p) => (p as { quotedPostId?: string | null }).quotedPostId)
-          .filter((qid): qid is string => Boolean(qid)),
-      ),
-    );
-    const quotedPostByIdPermalink = new Map<string, Awaited<ReturnType<typeof this.posts.getById>>>();
-    for (const qid of quotedPostIds) {
-      const qp = byId.get(qid);
-      if (qp) quotedPostByIdPermalink.set(qid, qp);
-    }
-    const [
-      groupPreviewById,
-      boosted,
-      bookmarksByPostId,
-      votedPollOptionIdByPostId,
-      repostedByPostId,
-      lastSeenAtByPostId,
-      internalByPostId,
-      scoreByPostIdGet,
-      commentedByPostId,
-    ] = await Promise.all([
-      groupIdsForPreview.length
-        ? this.communityGroupPreviewMapForIds(viewerUserId, groupIdsForPreview)
-        : Promise.resolve(new Map<string, CommunityGroupPreviewDto>()),
-      viewerUserId
-        ? this.posts.viewerBoostedPostIds({ viewerUserId, postIds })
-        : Promise.resolve(new Set<string>()),
-      viewerUserId
-        ? this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
-        : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
-      viewerUserId
-        ? this.posts.viewerVotedPollOptionIdByPostId({ viewerUserId, postIds })
-        : Promise.resolve(new Map<string, string>()),
-      viewerUserId
-        ? this.posts.viewerRepostedPostIds({ viewerUserId, postIds })
-        : Promise.resolve(new Set<string>()),
-      viewerUserId
-        ? this.posts.viewerLastSeenAtByPostId({ viewerUserId, postIds })
-        : Promise.resolve(new Map<string, Date>()),
-      viewerHasAdmin ? this.posts.ensureBoostScoresFresh(postIds) : Promise.resolve(null),
-      viewerHasAdmin ? this.posts.computeScoresForPostIds(postIds) : Promise.resolve(undefined),
-      viewerUserId
-        ? this.posts.viewerCommentedPostIds({ viewerUserId, postIds })
-        : Promise.resolve(new Set<string>()),
-    ]);
-    const viewedByPostId = new Set(lastSeenAtByPostId.keys());
-    const videoEmbedByPostId = await this.posts.videoEmbedsForPosts([
-      ...allPosts,
-      ...quotedPostByIdPermalink.values(),
-    ]);
-
-    const r2 = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const toDto = (
-      p: (typeof chain)[number],
-      opts: {
-        parent?: ReturnType<typeof toPostDto>;
-        repostedPost?: ReturnType<typeof toPostDto>;
-        isGatedRoot?: boolean;
-        groupPreview?: Awaited<ReturnType<PostsService['communityGroupPreviewForGroup']>>;
-      },
-    ) => {
-      const base = internalByPostId?.get(p.id);
-      const score = scoreByPostIdGet?.get(p.id);
-      const pWithPoll = p as { user?: { id?: string }; poll?: { creatorSkippedAt?: Date | null } };
-      const viewerCreatorSkipped =
-        Boolean(viewerUserId) &&
-        pWithPoll.user?.id === viewerUserId &&
-        Boolean(pWithPoll.poll?.creatorSkippedAt);
-      // Prefer the gated-root preview (existing behavior) but fall back to per-post
-      // group preview so accessible group posts also surface their group context.
-      const ownGroupId = String((p as { communityGroupId?: string | null }).communityGroupId ?? '').trim();
-      const ownGroupPreview = ownGroupId ? groupPreviewById.get(ownGroupId) ?? null : null;
-      const resolvedGroupPreview = opts.isGatedRoot
-        ? opts.groupPreview ?? null
-        : ownGroupPreview ?? undefined;
-      const quotedPostIdVal = (p as any).quotedPostId as string | null | undefined;
-      const quotedPostFromMap = quotedPostIdVal ? quotedPostByIdPermalink.get(quotedPostIdVal) : undefined;
-      const quotedPostDto = quotedPostFromMap
-        ? toPostDto(quotedPostFromMap as any, r2, {
-            videoEmbed: videoEmbedByPostId.get(quotedPostFromMap.id) ?? null,
-          })
-        : undefined;
-      const dto = toPostDto(p, r2, {
-        viewerHasBoosted: boosted.has(p.id),
-        viewerHasBookmarked: bookmarksByPostId.has(p.id),
-        viewerBookmarkCollectionIds: bookmarksByPostId.get(p.id)?.collectionIds ?? [],
-        viewerVotedPollOptionId: votedPollOptionIdByPostId.get(p.id) ?? null,
-        viewerHasReposted: repostedByPostId.has(p.id),
-        viewerHasCommented: commentedByPostId.has(p.id),
-        viewerHasViewed: viewedByPostId.has(p.id),
-        viewerLastSeenAt: lastSeenAtByPostId.get(p.id)?.toISOString(),
-        viewerCreatorSkipped: viewerCreatorSkipped || undefined,
-        internalOverride:
-          base || (typeof score === 'number' ? { score } : undefined)
-            ? { ...base, ...(typeof score === 'number' ? { score } : {}) }
-            : undefined,
-        repostedPost: opts.repostedPost,
-        quotedPost: quotedPostDto,
-        // Only the root (requested) post is gated; ancestors are accessible.
-        viewerCanAccess: opts.isGatedRoot ? false : undefined,
-        groupPreview: resolvedGroupPreview,
-        videoEmbed: videoEmbedByPostId.get(p.id) ?? null,
-      });
-      return opts.parent ? { ...dto, parent: opts.parent } : dto;
-    };
-
-    // Build reposted post DTO first (if this is a flat repost).
-    const repostedPostDto = repostedPostRaw ? toDto(repostedPostRaw as any, {}) : undefined;
-
-    // Build from root down: chain[chain.length-1] is root, chain[0] is leaf (the post we're viewing).
-    // A chain entry is gated when either (a) the leaf was inaccessible (!viewerCanAccess && i===0)
-    // or (b) an ancestor was fetched via getByIdNoAccess because the viewer's tier was too low.
-    const rootIdx = chain.length - 1;
-    let dto = toDto(chain[rootIdx], {
-      repostedPost: repostedPostDto,
-      isGatedRoot: gatedChainIndices.has(rootIdx),
-      groupPreview: gatedChainIndices.has(rootIdx) ? groupPreview ?? undefined : undefined,
-    });
-    for (let i = chain.length - 2; i >= 0; i--) {
-      const isGated = (!viewerCanAccess && i === 0) || gatedChainIndices.has(i);
-      dto = toDto(chain[i], { parent: dto, isGatedRoot: isGated, groupPreview: isGated ? groupPreview ?? undefined : undefined });
-    }
-    // Single-post case (no parent): the chain has only one entry, already built above.
-    if (!viewerCanAccess && chain.length === 1) {
-      // Rebuild with gated flag
-      dto = toDto(chain[0], { repostedPost: repostedPostDto, isGatedRoot: true, groupPreview });
-    }
-
-    setReadCache(httpRes, { viewerUserId });
-    return { data: dto };
+    return getPostByIdOn(this, userId, id, httpRes);
   }
 
   @UseGuards(OptionalAuthGuard)
