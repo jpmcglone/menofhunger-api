@@ -1,11 +1,6 @@
-export function escapeHtml(s: string): string {
-  return String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+import { escapeHtml } from '../../../common/text/escape-html';
+
+export { escapeHtml };
 
 /**
  * Light lodge tokens (mirrors `:root` in menofhunger-www). Used as inline

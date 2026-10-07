@@ -54,9 +54,7 @@
     "modules/users/users.controller.ts"
   ],
   "duplicateEscapeHtml": [
-    "modules/email/templates/moh-email.ts",
-    "modules/pickax/pickax-content.ts",
-    "modules/websters1828/websters1828.service.ts"
+    "common/text/escape-html.ts"
   ],
   "duplicateSlugify": [
     "modules/articles/articles.service.ts",

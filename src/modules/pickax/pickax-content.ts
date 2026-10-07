@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { escapeHtml } from '../../common/text/escape-html';
 import type { PostKind, PostMediaKind, PostMediaSource, PostVisibility } from '@prisma/client';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import {
@@ -115,9 +116,7 @@ export function articleCrosspostBlocker(article: PickaxArticleSource): string | 
   return null;
 }
 
-export function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+export { escapeHtml };
 
 function safeUrl(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;

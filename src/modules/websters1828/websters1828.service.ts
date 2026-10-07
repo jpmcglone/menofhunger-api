@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { escapeHtml } from '../../common/text/escape-html';
 import { wordContentDayKey, nextPublishBoundaryUtcMs } from '../../common/time/eastern-day-key';
 import type { WotdLikeBreakdownDto, WotdLikeToggleDto } from '../../common/dto/websters1828.dto';
 
@@ -327,14 +328,5 @@ function sanitizeDefinitionHtml(fragmentHtml: string): string {
   s = s.replace(/(<\/p>)\s*(<p>)/gi, '$1$2');
 
   return s.trim();
-}
-
-function escapeHtml(s: string): string {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
