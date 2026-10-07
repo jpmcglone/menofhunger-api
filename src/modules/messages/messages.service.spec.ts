@@ -58,10 +58,12 @@ describe('MessagesService — Marv group block (env-less identity)', () => {
       } as any,
     });
     // But the live identity service has resolved Marv via username lookup.
-    (svc as unknown as { marvIdentity: { cachedMarvUserId: jest.Mock; getMarvUserId: jest.Mock } }).marvIdentity = {
+    const marvIdentity = {
       cachedMarvUserId: jest.fn(() => 'marv-id-from-cache'),
       getMarvUserId: jest.fn(async () => 'marv-id-from-cache'),
     };
+    (svc as unknown as { marvIdentity: typeof marvIdentity }).marvIdentity = marvIdentity;
+    (svc as unknown as { support: { marvIdentity: typeof marvIdentity } }).support.marvIdentity = marvIdentity;
 
     const result = await (svc as any).lookupConversation({
       userId: 'u1',
@@ -84,10 +86,12 @@ describe('MessagesService — Marv group block (env-less identity)', () => {
         r2: jest.fn(() => null),
       } as any,
     });
-    (svc as unknown as { marvIdentity: { cachedMarvUserId: jest.Mock; getMarvUserId: jest.Mock } }).marvIdentity = {
+    const marvIdentity = {
       cachedMarvUserId: jest.fn(() => 'marv-id-from-cache'),
       getMarvUserId: jest.fn(async () => 'marv-id-from-cache'),
     };
+    (svc as unknown as { marvIdentity: typeof marvIdentity }).marvIdentity = marvIdentity;
+    (svc as unknown as { support: { marvIdentity: typeof marvIdentity } }).support.marvIdentity = marvIdentity;
 
     await expect(
       (svc as any).createConversation({
@@ -117,7 +121,7 @@ describe('MessagesService unread count batching', () => {
       } as any,
     });
 
-    const res = await (svc as any).getUnreadCounts('u1');
+    const res = await (svc as any).support.getUnreadCounts('u1');
     expect(res).toEqual({ primary: 3, requests: 7 });
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
   });
@@ -671,7 +675,7 @@ describe('MessagesService — delete conversation then talk again', () => {
       } as any,
     });
 
-    const result = await (svc as any).getConversationOrThrow({ userId: 'u1', conversationId: 'c1' });
+    const result = await (svc as any).support.getConversationOrThrow({ userId: 'u1', conversationId: 'c1' });
     expect(createMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: [
@@ -707,7 +711,7 @@ describe('MessagesService — delete conversation then talk again', () => {
       } as any,
     });
 
-    await expect((svc as any).getConversationOrThrow({ userId: 'u1', conversationId: 'c1' })).rejects.toThrow(
+    await expect((svc as any).support.getConversationOrThrow({ userId: 'u1', conversationId: 'c1' })).rejects.toThrow(
       'Conversation not found.',
     );
     expect(createMany).not.toHaveBeenCalled();
@@ -730,7 +734,7 @@ describe('MessagesService — delete conversation then talk again', () => {
       } as any,
     });
 
-    await expect((svc as any).getConversationOrThrow({ userId: 'u1', conversationId: 'g1' })).rejects.toThrow(
+    await expect((svc as any).support.getConversationOrThrow({ userId: 'u1', conversationId: 'g1' })).rejects.toThrow(
       'Conversation not found.',
     );
     expect(createMany).not.toHaveBeenCalled();
@@ -754,7 +758,7 @@ describe('Marv message consent belongs to the requesting human', () => {
       $transaction: jest.fn(async () => { throw new Error('write boundary'); }),
     };
     const { svc } = makeService({ prisma });
-    jest.spyOn(svc as any, 'getConversationOrThrow').mockResolvedValue({
+    jest.spyOn((svc as any).support, 'getConversationOrThrow').mockResolvedValue({
       type: 'direct', directKey: 'human:marv', participants: [
         { userId: 'human', status: 'accepted' }, { userId: 'marv', status: 'accepted' },
       ],

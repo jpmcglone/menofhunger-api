@@ -9,7 +9,6 @@
     "modules/board/board.service.ts",
     "modules/follows/follows.service.ts",
     "modules/groups/groups.service.ts",
-    "modules/messages/messages.service.ts",
     "modules/notifications/notification-push.service.ts",
     "modules/notifications/notification-query.service.ts",
     "modules/notifications/notifications-email.cron.ts",
