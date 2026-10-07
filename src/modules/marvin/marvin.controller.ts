@@ -10,13 +10,9 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { z } from 'zod';
-import { toAvatarVideoDto, type AvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import type { MarvinMode } from '@prisma/client';
 import { AuthGuard } from '../auth/auth.guard';
 import { AdminGuard, type AdminRequest } from '../admin/admin.guard';
 import { CurrentUserId } from '../users/users.decorator';
-import { AppConfigService } from '../app/app-config.service';
-import { PrismaService } from '../prisma/prisma.service';
 import type {
   MarvinCatchUpDto,
   MarvinContextCardDto,
@@ -25,12 +21,9 @@ import type {
   MarvinModeDto,
   MarvinUsageEventDto,
 } from '../../common/dto/marvin';
-import { MarvinCreditService, type MarvCreditSummary } from './services/marvin-credit.service';
-import { MarvinBotIdentityService } from './services/marvin-bot-identity.service';
+import { MarvinMeService, creditSummaryToDto } from './services/marvin-me.service';
 import { MarvinAdminService } from './services/marvin-admin.service';
 import { MarvinCatchUpService } from './services/marvin-catch-up.service';
-import { publicAssetUrl } from '../../common/assets/public-asset-url';
-import { AI_CONSENT_VERSION } from './services/ai-consent';
 
 const updatePreferencesSchema = z.object({
   preferredMode: z.enum(['auto', 'fast', 'regular', 'smart']).optional(),
@@ -91,10 +84,7 @@ const adminConfigPatchSchema = z.object({
 @Controller()
 export class MarvinController {
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly appConfig: AppConfigService,
-    private readonly credits: MarvinCreditService,
-    private readonly identity: MarvinBotIdentityService,
+    private readonly me: MarvinMeService,
     private readonly admin: MarvinAdminService,
     private readonly catchUpService: MarvinCatchUpService,
   ) {}
@@ -102,7 +92,7 @@ export class MarvinController {
   @UseGuards(AuthGuard)
   @Get('marvin/me')
   async getMe(@CurrentUserId() userId: string): Promise<{ data: MarvinMeDto }> {
-    return { data: await this.buildMe(userId) };
+    return { data: await this.me.buildMe(userId) };
   }
 
   @UseGuards(AuthGuard)
@@ -112,18 +102,8 @@ export class MarvinController {
     @Body() body: unknown,
   ): Promise<{ data: MarvinMeDto }> {
     const parsed = updatePreferencesSchema.parse(body ?? {});
-    if (parsed.preferredMode !== undefined || parsed.aiConsent !== undefined) {
-      const preferences = {
-        ...(parsed.preferredMode !== undefined ? { preferredMode: parsed.preferredMode as MarvinMode } : {}),
-        ...(parsed.aiConsent !== undefined ? { aiConsentAt: parsed.aiConsent ? new Date() : null, aiConsentVersion: parsed.aiConsent ? AI_CONSENT_VERSION : 0 } : {}),
-      };
-      await this.prisma.marvinUserSettings.upsert({
-        where: { userId },
-        update: preferences,
-        create: { userId, ...preferences },
-      });
-    }
-    return { data: await this.buildMe(userId) };
+    await this.me.updatePreferences(userId, parsed);
+    return { data: await this.me.buildMe(userId) };
   }
 
   /**
@@ -135,18 +115,7 @@ export class MarvinController {
   async getMyContextCard(
     @CurrentUserId() userId: string,
   ): Promise<{ data: MarvinContextCardDto | null }> {
-    const card = await this.prisma.userContextCard.findUnique({
-      where: { userId },
-      select: { cardText: true, source: true, updatedAt: true },
-    });
-    if (!card) return { data: null };
-    return {
-      data: {
-        cardText: card.cardText,
-        source: card.source,
-        updatedAt: card.updatedAt.toISOString(),
-      },
-    };
+    return { data: await this.me.getContextCard(userId) };
   }
 
   /**
@@ -343,78 +312,6 @@ export class MarvinController {
       pagination: { nextCursor: result.nextCursor },
     };
   }
-
-  // ─── Helpers ───────────────────────────────────────────────────────────────
-
-  private async buildMe(userId: string): Promise<MarvinMeDto> {
-    const cfg = this.appConfig.marvBot();
-    const [viewer, settings, summary] = await Promise.all([
-      this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { premium: true, premiumPlus: true },
-      }),
-      this.prisma.marvinUserSettings.findUnique({
-        where: { userId },
-        select: { preferredMode: true, disabledByAdmin: true, aiConsentAt: true, aiConsentVersion: true },
-      }),
-      this.credits.getSummary(userId),
-    ]);
-
-    const isPremium = Boolean(viewer?.premium || viewer?.premiumPlus);
-    const disabled = settings?.disabledByAdmin ?? false;
-    const marvUserId = await this.identity.getMarvUserId();
-
-    let marvAvatarUrl: string | null = null;
-    let marvAvatarVideo: AvatarVideoDto | null = null;
-    if (marvUserId) {
-      const marvRow = await this.prisma.user.findUnique({
-        where: { id: marvUserId },
-        select: { avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true },
-      });
-      marvAvatarUrl = publicAssetUrl({
-        publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
-        key: marvRow?.avatarKey ?? null,
-        updatedAt: marvRow?.avatarUpdatedAt ?? null,
-      });
-      marvAvatarVideo = toAvatarVideoDto(marvRow ?? {}, this.appConfig.r2()?.publicBaseUrl ?? null);
-    }
-
-    const creditCfg = this.appConfig.marvCredits();
-
-    return {
-      enabled: cfg.enabled && !disabled,
-      isPremium,
-      preferredMode: (settings?.preferredMode ?? 'auto') as MarvinModeDto,
-      aiConsentGranted: Boolean(settings?.aiConsentAt && settings.aiConsentVersion === AI_CONSENT_VERSION),
-      credits: creditSummaryToDto(summary),
-      costs: {
-        fast: creditCfg.fastCost,
-        regular: creditCfg.regularCost,
-        smart: creditCfg.smartCost,
-        webSearchSurcharge: creditCfg.webSearchCreditCost,
-        visionPerImage: creditCfg.visionCreditCostPerImage,
-        urlFetchSurcharge: creditCfg.urlFetchCreditCost,
-      },
-      marv: marvUserId
-        ? {
-            userId: marvUserId,
-            username: cfg.username,
-            displayName: cfg.displayName,
-            avatarUrl: marvAvatarUrl,
-            avatarVideo: marvAvatarVideo,
-          }
-        : null,
-    };
-  }
-}
-
-function creditSummaryToDto(summary: MarvCreditSummary): MarvinCreditSummaryDto {
-  return {
-    credits: summary.credits,
-    maxCredits: summary.maxCredits,
-    creditsPerDay: summary.creditsPerDay,
-    lastRefilledAt: summary.lastRefilledAt.toISOString(),
-  };
 }
 
 type UsageRow = Awaited<

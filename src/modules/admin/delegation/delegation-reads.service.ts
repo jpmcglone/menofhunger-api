@@ -1,8 +1,8 @@
 import { JobsStatusService } from "../../jobs/jobs-status.service";
 import { Injectable, BadRequestException } from "@nestjs/common";
 import { z } from "zod";
-import { AdminOperationsController } from "../admin-operations.controller";
-import { IntegrationAdminController } from "../../x/integration-admin.controller";
+import { AdminOperationsService } from "../admin-operations.service";
+import { IntegrationAdminService } from "../../x/integration-admin.service";
 import { AdminEngagementService } from "../admin-engagement.service";
 import { PrismaService } from "../../prisma/prisma.service";
 import { LandingService } from "../../landing/landing.service";
@@ -41,14 +41,14 @@ const allowed: Record<string, string[]> = {
   personal: [],
   news: [],
 };
-/** Reuses canonical controller reads without minting or retaining an admin session.
+/** Reuses canonical admin service reads without minting or retaining an admin session.
  * Every call rechecks the owner and workflow before invoking a read-only method. */
 @Injectable()
 export class DelegationReadsService {
   constructor(
     private readonly policy: DelegationPolicyService,
-    private readonly operations: AdminOperationsController,
-    private readonly integrations: IntegrationAdminController,
+    private readonly operations: AdminOperationsService,
+    private readonly integrations: IntegrationAdminService,
     private readonly engagement: AdminEngagementService,
     private readonly prisma: PrismaService,
     private readonly landing: LandingService,
@@ -101,10 +101,10 @@ export class DelegationReadsService {
         });
         break;
       case "integration_spending":
-        result = await this.integrations.spend({});
+        result = { data: await this.integrations.spend() };
         break;
       case "integration_operations":
-        result = await this.integrations.operations();
+        result = { data: await this.integrations.operations() };
         break;
       case "feedback": {
         const rows = await this.prisma.feedback.findMany({
@@ -151,7 +151,7 @@ export class DelegationReadsService {
         : 0,
       pending_reports: health.pendingReports,
       open_feedback: health.feedback.new + health.feedback.triaged,
-      integration_alerts: integrations.data.alerts.length,
+      integration_alerts: integrations.alerts.length,
     };
   }
 }

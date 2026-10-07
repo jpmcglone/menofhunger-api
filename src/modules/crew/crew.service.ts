@@ -104,6 +104,27 @@ export class CrewService {
     return this.toMyCrewDto(crew, viewerUserId, mem.role);
   }
 
+  /** Owner-only; silently ignores non-owners and viewers without a crew. */
+  async reorderMyMembers(viewerUserId: string, order: string[]): Promise<void> {
+    const mine = await this.getMyCrewOrNull(viewerUserId);
+    if (!mine) return;
+
+    const viewerMember = await this.prisma.crewMember.findFirst({
+      where: { crewId: mine.id, userId: viewerUserId },
+      select: { role: true },
+    });
+    if (viewerMember?.role !== 'owner') return;
+
+    await this.prisma.$transaction(
+      order.map((userId, index) =>
+        this.prisma.crewMember.updateMany({
+          where: { crewId: mine.id, userId },
+          data: { sortOrder: index },
+        }),
+      ),
+    );
+  }
+
   async getCrewBySlug(params: {
     slug: string;
     viewerUserId: string | null;

@@ -1,7 +1,6 @@
-import { UsersController } from './users.controller';
+import { UsersDiscoveryService } from './users-discovery.service';
 
-import { PostsReadService } from '../posts-read/posts-read.service';
-describe('UsersController.byLocation', () => {
+describe('UsersDiscoveryService.byLocation', () => {
   it('returns the full eligible state member count independently of the section limit', async () => {
     const prisma = {
       user: {
@@ -17,21 +16,11 @@ describe('UsersController.byLocation', () => {
         viewerNotificationPreferences: new Map(),
       })),
     };
-    const controller = new UsersController(prisma as any,
+    const controller = new UsersDiscoveryService(prisma as any,
       { r2: jest.fn(() => null) } as any,
       followsService as any,
       {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any, new PostsReadService(prisma as any as never));
+      {} as any);
 
     const result = await controller.byLocation('viewer', { state: 'va', limit: 12 });
 

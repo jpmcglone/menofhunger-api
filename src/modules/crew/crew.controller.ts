@@ -23,7 +23,7 @@ import { CrewService } from './crew.service';
 import { CrewInvitesService } from './crew-invites.service';
 import { CrewWallService } from './crew-wall.service';
 import { CrewTransferService } from './crew-transfer.service';
-import { PrismaService } from '../prisma/prisma.service';
+import { UserLookupService } from '../user-lookup/user-lookup.service';
 
 const updateCrewSchema = z.object({
   name: z.string().trim().max(80).nullish(),
@@ -104,7 +104,7 @@ export class CrewController {
     private readonly invites: CrewInvitesService,
     private readonly wall: CrewWallService,
     private readonly transfer: CrewTransferService,
-    private readonly prisma: PrismaService,
+    private readonly users: UserLookupService,
   ) {}
 
   // ---------- my crew ----------
@@ -194,10 +194,7 @@ export class CrewController {
     @Body() body: unknown,
   ) {
     const parsed = updateCrewSchema.parse(body);
-    const u = await this.prisma.user.findUnique({
-      where: { id: viewerUserId },
-      select: { siteAdmin: true },
-    });
+    const u = await this.users.findById(viewerUserId, { siteAdmin: true });
     const crew = await this.crew.updateCrew({
       viewerUserId,
       isSiteAdmin: Boolean(u?.siteAdmin),
@@ -220,25 +217,7 @@ export class CrewController {
     @Body() body: unknown,
   ) {
     const { order } = reorderMembersSchema.parse(body);
-    const mine = await this.crew.getMyCrewOrNull(viewerUserId);
-    if (!mine) return { data: {} };
-
-    // Only the owner may reorder members
-    const viewerMember = await this.prisma.crewMember.findFirst({
-      where: { crewId: mine.id, userId: viewerUserId },
-      select: { role: true },
-    });
-    if (viewerMember?.role !== 'owner') return { data: {} };
-
-    await this.prisma.$transaction(
-      order.map((userId, index) =>
-        this.prisma.crewMember.updateMany({
-          where: { crewId: mine.id, userId },
-          data: { sortOrder: index },
-        }),
-      ),
-    );
-
+    await this.crew.reorderMyMembers(viewerUserId, order);
     return { data: {} };
   }
 

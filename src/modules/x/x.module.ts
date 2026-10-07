@@ -2,6 +2,7 @@ import { XPublishingService } from "./x-publishing.service";
 import { IntegrationOperationsService } from "./integration-operations.service";
 import { XPublicSnapshotService } from "./x-public-snapshot.service";
 import { IntegrationAdminController } from "./integration-admin.controller";
+import { IntegrationAdminService } from "./integration-admin.service";
 import { XNewsService } from "./x-news.service";
 import { XAuthorMetricsService } from "./x-author-metrics.service";
 import { IntegrationBudgetService } from "./integration-budget.service";
@@ -34,7 +35,8 @@ import { XController } from "./x.controller";
     XConnectionService,
     XCrosspostService,
     XSideEffectsHandler,
+    IntegrationAdminService,
   ],
-  exports: [XCrosspostService],
+  exports: [XCrosspostService, IntegrationAdminService],
 })
 export class XModule {}

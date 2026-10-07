@@ -8,6 +8,10 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { EmailModule } from '../email/email.module';
 import { UsersController } from './users.controller';
+import { UsersDiscoveryService } from './users-discovery.service';
+import { UsersPreferencesService } from './users-preferences.service';
+import { UsersPublicProfileService } from './users-public-profile.service';
+import { UsersMeService } from './users-me.service';
 import { PublicProfileCacheService } from './public-profile-cache.service';
 import { UsersRealtimeService } from './users-realtime.service';
 import { UsersLocationService } from './users-location.service';
@@ -33,6 +37,10 @@ import { MembersMapRealtimeService } from './members-map-realtime.service';
     UsersMeRealtimeService,
     UsersPublicRealtimeService,
     PublicProfilesService,
+    UsersDiscoveryService,
+    UsersPreferencesService,
+    UsersPublicProfileService,
+    UsersMeService,
   ],
   exports: [
     UsersProfileWriteService,

@@ -7,7 +7,7 @@ import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { GroupsService } from './groups.service';
 import { GroupInvitesService } from './group-invites.service';
-import { PrismaService } from '../prisma/prisma.service';
+import { UserLookupService } from '../user-lookup/user-lookup.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { queryBoolean } from '../../common/validation/query-boolean';
 
@@ -88,7 +88,7 @@ export class GroupsController {
   constructor(
     private readonly groups: GroupsService,
     private readonly invites: GroupInvitesService,
-    private readonly prisma: PrismaService,
+    private readonly users: UserLookupService,
   ) {}
 
   @UseGuards(OptionalAuthGuard)
@@ -233,9 +233,10 @@ export class GroupsController {
   @Post()
   async create(@CurrentUserId() viewerUserId: string, @Body() body: unknown) {
     const parsed = createGroupSchema.parse(body);
-    const u = await this.prisma.user.findUniqueOrThrow({
-      where: { id: viewerUserId },
-      select: { premium: true, premiumPlus: true, siteAdmin: true },
+    const u = await this.users.findByIdOrThrow(viewerUserId, {
+      premium: true,
+      premiumPlus: true,
+      siteAdmin: true,
     });
     const isPremium = Boolean(u.premium || u.premiumPlus);
     return await this.groups.create({
@@ -274,10 +275,7 @@ export class GroupsController {
   @Patch(':groupId')
   async update(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Body() body: unknown) {
     const parsed = updateGroupSchema.parse(body);
-    const u = await this.prisma.user.findUnique({
-      where: { id: viewerUserId },
-      select: { siteAdmin: true },
-    });
+    const u = await this.users.findById(viewerUserId, { siteAdmin: true });
     return await this.groups.updateGroup({
       viewerUserId,
       isSiteAdmin: Boolean(u?.siteAdmin),
@@ -293,7 +291,7 @@ export class GroupsController {
   @Post(':groupId/delete')
   async deleteGroup(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Body() body: unknown) {
     const { confirmName } = z.object({ confirmName: z.string().trim().min(1).max(200) }).parse(body);
-    const u = await this.prisma.user.findUnique({ where: { id: viewerUserId }, select: { siteAdmin: true } });
+    const u = await this.users.findById(viewerUserId, { siteAdmin: true });
     return { data: await this.groups.deleteGroup({ viewerUserId, isSiteAdmin: Boolean(u?.siteAdmin), groupId, confirmName }) };
   }
 
@@ -351,10 +349,7 @@ export class GroupsController {
     @Param('groupId') groupId: string,
     @Param('postId') postId: string,
   ) {
-    const u = await this.prisma.user.findUnique({
-      where: { id: viewerUserId },
-      select: { siteAdmin: true },
-    });
+    const u = await this.users.findById(viewerUserId, { siteAdmin: true });
     return await this.groups.pinPost({
       viewerUserId,
       isSiteAdmin: Boolean(u?.siteAdmin),
@@ -369,10 +364,7 @@ export class GroupsController {
   })
   @Delete(':groupId/pin')
   async unpinPost(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string) {
-    const u = await this.prisma.user.findUnique({
-      where: { id: viewerUserId },
-      select: { siteAdmin: true },
-    });
+    const u = await this.users.findById(viewerUserId, { siteAdmin: true });
     return await this.groups.unpinGroupPost({
       viewerUserId,
       isSiteAdmin: Boolean(u?.siteAdmin),
@@ -407,10 +399,7 @@ export class GroupsController {
   @UseGuards(AuthGuard)
   @Post(':groupId/members/:userId/promote-moderator')
   async promote(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
-    const u = await this.prisma.user.findUnique({
-      where: { id: viewerUserId },
-      select: { siteAdmin: true },
-    });
+    const u = await this.users.findById(viewerUserId, { siteAdmin: true });
     return await this.groups.promoteModerator({
       viewerUserId,
       isSiteAdmin: Boolean(u?.siteAdmin),
@@ -428,10 +417,7 @@ export class GroupsController {
   @UseGuards(AuthGuard)
   @Post(':groupId/members/:userId/demote-moderator')
   async demote(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
-    const u = await this.prisma.user.findUnique({
-      where: { id: viewerUserId },
-      select: { siteAdmin: true },
-    });
+    const u = await this.users.findById(viewerUserId, { siteAdmin: true });
     return await this.groups.demoteModerator({
       viewerUserId,
       isSiteAdmin: Boolean(u?.siteAdmin),

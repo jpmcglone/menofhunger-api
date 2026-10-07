@@ -1,8 +1,6 @@
-import { readAdminAnalytics } from './admin-analytics.read';
+import { AdminAnalyticsService } from './admin-analytics.service';
 import { BadRequestException, Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
-import { PrismaService } from '../prisma/prisma.service';
-import { LandingService } from '../landing/landing.service';
 import { AdminGuard } from './admin.guard';
 import { CurrentUserId } from '../users/users.decorator';
 import { AdminAnalyticsBriefService } from './admin-analytics-brief.service';
@@ -17,8 +15,7 @@ const briefBodySchema = z.object({
 @UseGuards(AdminGuard)
 export class AdminAnalyticsController {
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly landing: LandingService,
+    private readonly analytics: AdminAnalyticsService,
     private readonly briefService: AdminAnalyticsBriefService,
   ) {}
 
@@ -38,6 +35,6 @@ export class AdminAnalyticsController {
 
   @Get()
   async getAnalytics(@Query('range') rangeParam = '30d') {
-    return readAdminAnalytics(this.prisma, this.landing, rangeParam);
+    return this.analytics.read(rangeParam);
   }
 }

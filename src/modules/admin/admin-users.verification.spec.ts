@@ -1,10 +1,10 @@
-import { AdminUsersController } from './admin-users.controller';
+import { AdminUsersService } from './admin-users.service';
 
 describe('Admin user profile verification', () => {
   it.each(['none', 'manual'] as const)('resolves pending requests and records the admin from %s', async (verifiedStatus) => {
     const verifiedAt = new Date('2026-01-01T00:00:00Z');
     const current = { id: 'u1', username: 'member', verifiedStatus, verifiedAt, premium: false };
-    const controller = Object.create(AdminUsersController.prototype) as any;
+    const controller = Object.create(AdminUsersService.prototype) as any;
     controller.prisma = { user: {
       findUnique: jest.fn().mockResolvedValue(current),
       update: jest.fn().mockResolvedValue(current),

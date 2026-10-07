@@ -9,11 +9,12 @@ import { ArticleViewsModule } from '../article-views/article-views.module';
 import { SearchController } from './search.controller';
 import { SearchCleanupCron } from './search-cleanup.cron';
 import { SearchService } from './search.service';
+import { RecentSearchesService } from './recent-searches.service';
 
 @Module({
   imports: [AuthModule, FollowsModule, PostsModule, ArticlesModule, TaxonomyModule, CashtagsModule, ArticleViewsModule],
   controllers: [SearchController],
-  providers: [SearchService, SearchCleanupCron],
+  providers: [SearchService, RecentSearchesService, SearchCleanupCron],
   exports: [SearchService, SearchCleanupCron],
 })
 export class SearchModule {}

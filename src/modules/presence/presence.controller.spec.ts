@@ -1,6 +1,7 @@
 import { PresenceController } from './presence.controller';
 import { VerifiedGuard } from '../auth/verified.guard';
 import { OnlineMembersService } from './online-members.service';
+import { RecentlyOnlineService } from './recently-online.service';
 
 /**
  * Lightweight tests for the Marv "always online" injection in /presence/online and
@@ -98,7 +99,7 @@ function makeController(opts?: {
     presence,
     realtime,
     follows,
-    prisma,
+    new RecentlyOnlineService(prisma),
     redis,
     appConfig,
     marvIdentity,

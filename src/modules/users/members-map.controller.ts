@@ -4,8 +4,7 @@ import { z } from 'zod';
 import { AuthGuard } from '../auth/auth.guard';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { VerifiedGuard } from '../auth/verified.guard';
-import { viewerCanSeeMembers } from '../auth/member-visibility';
-import { PrismaService } from '../prisma/prisma.service';
+import { UserLookupService } from '../user-lookup/user-lookup.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import type { MembersMapSummaryDto, UserListDto } from '../../common/dto';
 import { MembersMapService } from './members-map.service';
@@ -25,7 +24,7 @@ const membersQuerySchema = z.object({
 export class MembersMapController {
   constructor(
     private readonly membersMap: MembersMapService,
-    private readonly prisma: PrismaService,
+    private readonly users: UserLookupService,
   ) {}
 
   /** Public: everyone sees counts; only verified members see faces and who is online. */
@@ -33,7 +32,7 @@ export class MembersMapController {
   @Throttle({ default: { limit: rateLimitLimit('publicRead', 60), ttl: rateLimitTtl('publicRead', 60) } })
   @Get()
   async summary(@OptionalCurrentUserId() userId: string | undefined): Promise<{ data: MembersMapSummaryDto }> {
-    const membersVisible = await viewerCanSeeMembers(this.prisma, userId);
+    const membersVisible = await this.users.viewerCanSeeMembers(userId);
     return { data: await this.membersMap.summary({ membersVisible, viewerUserId: userId ?? null }) };
   }
 

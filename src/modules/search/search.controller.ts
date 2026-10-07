@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { RecentSearchesService } from './recent-searches.service';
 import { ArticleViewsService } from '../article-views/article-views.service';
 import { OptionalCurrentUserId, CurrentUserId } from '../users/users.decorator';
 import { z } from 'zod';
@@ -10,7 +10,6 @@ import { AppConfigService } from '../app/app-config.service';
 import type { PostWithAuthorAndMedia } from '../../common/dto/post.dto';
 import type { ArticleWithAuthor } from '../../common/dto/article.dto';
 import { toArticleDto, toPostDto, toUserListDto } from '../../common/dto';
-import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { PostsService } from '../posts/posts.service';
 import { SearchService } from './search.service';
 import { Throttle } from '@nestjs/throttler';
@@ -49,7 +48,7 @@ export class SearchController {
     private readonly cacheInvalidation: CacheInvalidationService,
     private readonly posthog: PosthogService,
     private readonly taxonomy: TaxonomyService,
-    private readonly prisma: PrismaService,
+    private readonly recentSearches: RecentSearchesService,
     private readonly articleViews: ArticleViewsService,
   ) {}
 
@@ -241,19 +240,7 @@ export class SearchController {
     if (type === 'users') {
       const result = await this.search.searchUsers({ q, limit, cursor, viewerUserId });
       const userIds = result.users.map((u) => u.id);
-      const crewMembers = userIds.length
-        ? await this.prisma.crewMember.findMany({
-            where: { userId: { in: userIds }, crew: { deletedAt: null } },
-            select: { userId: true, crew: { select: { memberCount: true } } },
-          })
-        : [];
-      // `inCrew` here means "in a crew that blocks new invites." A solo crew
-      // member (memberCount === 1, just themselves) is treated as inviteable —
-      // accepting an invite to another crew auto-disbands their old crew. So
-      // the picker should NOT grey them out.
-      const inCrewIds = new Set(
-        crewMembers.filter((m) => m.crew.memberCount > 1).map((m) => m.userId),
-      );
+      const inCrewIds = await this.search.inviteBlockingCrewMemberIds(userIds);
       const users = result.users.map((u) => ({
         ...toUserListDto(u, publicBaseUrl, {
           relationship: {
@@ -410,36 +397,7 @@ export class SearchController {
   @Get('recent')
   async getRecentSearches(@CurrentUserId() userId: string) {
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    // Fetch more than we need so deduplication leaves us with 10 after filtering.
-    const rows = await this.prisma.userSearch.findMany({
-      where: { userId },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: 30,
-      select: {
-        id: true,
-        query: true,
-        createdAt: true,
-        targetUserId: true,
-        targetGroupId: true,
-        targetUser: { select: USER_LIST_SELECT },
-        targetGroup: {
-          select: { id: true, slug: true, name: true, avatarImageUrl: true, memberCount: true },
-        },
-      },
-    });
-
-    // Dedupe: key on targetUserId, targetGroupId, or normalized query text.
-    const seen = new Set<string>();
-    const unique = rows.filter((r) => {
-      const key = r.targetUserId
-        ? `uid:${r.targetUserId}`
-        : r.targetGroupId
-          ? `gid:${r.targetGroupId}`
-          : `q:${r.query.toLowerCase().replace(/\s+/g, ' ').trim()}`;
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }).slice(0, 10);
+    const unique = await this.recentSearches.listRecent(userId);
 
     return {
       data: unique.map((r) => ({
@@ -478,23 +436,7 @@ export class SearchController {
     const targetGroupId = parsed.groupId ?? null;
     const query = (parsed.query ?? '').trim();
 
-    // Resolve the display query text from the target if not provided.
-    let resolvedQuery = query;
-    if (targetUserId && !resolvedQuery) {
-      const target = await this.prisma.user.findUnique({
-        where: { id: targetUserId },
-        select: { username: true },
-      });
-      resolvedQuery = target?.username ? `@${target.username}` : '';
-    }
-    if (targetGroupId && !resolvedQuery) {
-      const target = await this.prisma.communityGroup.findUnique({
-        where: { id: targetGroupId },
-        select: { name: true },
-      });
-      resolvedQuery = target?.name ?? '';
-    }
-
+    const resolvedQuery = await this.recentSearches.resolveDisplayQuery({ query, targetUserId, targetGroupId });
     await this.search.recordUserSearch({ userId, query: resolvedQuery, targetUserId, targetGroupId });
     return { data: { recorded: true } };
   }
@@ -508,7 +450,7 @@ export class SearchController {
   })
   @Delete('recent/:id')
   async deleteRecentSearch(@CurrentUserId() userId: string, @Param('id') id: string) {
-    await this.prisma.userSearch.deleteMany({ where: { id: id.trim(), userId } });
+    await this.recentSearches.deleteRecent(userId, id.trim());
     return { data: { deleted: true } };
   }
 
@@ -521,7 +463,7 @@ export class SearchController {
   })
   @Delete('recent')
   async clearRecentSearches(@CurrentUserId() userId: string) {
-    await this.prisma.userSearch.deleteMany({ where: { userId } });
+    await this.recentSearches.clearRecent(userId);
     return { data: { cleared: true } };
   }
 }

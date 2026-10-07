@@ -20,9 +20,8 @@ import type {
   RecentlyOnlineUserDto,
   UserStatusDto,
 } from '../../common/dto';
-import { viewerCanSeeMembers } from '../auth/member-visibility';
 import { OnlineMembersService } from './online-members.service';
-import { PrismaService } from '../prisma/prisma.service';
+import { RecentlyOnlineService, decodeRecentlyOnlineCursor } from './recently-online.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
 import { PostsService } from '../posts/posts.service';
@@ -30,7 +29,6 @@ import { AccountSwitchService } from '../auth/account-switch.service';
 import { CallSessionStore } from '../calls/call-session.store';
 
 const ONLINE_LIST_CACHE_TTL_MS = 10_000;
-const RECENTLY_ONLINE_WINDOW_MS = 60 * 60_000;
 
 const recentSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -90,41 +88,6 @@ function isSummaryQuery(raw?: string): boolean {
   return v === '1' || v === 'true';
 }
 
-function encodeCursor(params: { tMs: number; id: string }): string {
-  return Buffer.from(JSON.stringify(params), 'utf8').toString('base64url');
-}
-
-function encodeNeverCursor(params: { cMs: number; id: string }): string {
-  return Buffer.from(JSON.stringify({ section: 'never', cMs: params.cMs, id: params.id }), 'utf8').toString('base64url');
-}
-
-/**
- * Decodes either a section-A cursor { tMs, id } (backward-compat) or a
- * section-B cursor { section: 'never', cMs, id }.
- */
-function decodePageCursor(
-  raw: string,
-): { section: 'recent'; tMs: number; id: string } | { section: 'never'; cMs: number | null; id: string | null } | null {
-  const s = (raw ?? '').trim();
-  if (!s) return null;
-  try {
-    const json = Buffer.from(s, 'base64url').toString('utf8');
-    const parsed = JSON.parse(json) as Record<string, unknown>;
-    if (parsed?.section === 'never') {
-      const cMs = typeof parsed.cMs === 'number' && Number.isFinite(parsed.cMs) ? Math.floor(parsed.cMs) : null;
-      const id = typeof parsed.id === 'string' ? parsed.id.trim() || null : null;
-      return { section: 'never', cMs, id };
-    }
-    // Section A (recent online): backward-compat format { tMs, id }
-    const tMs = typeof parsed?.tMs === 'number' && Number.isFinite(parsed.tMs) ? Math.floor(parsed.tMs) : null;
-    const id = typeof parsed?.id === 'string' ? parsed.id.trim() : '';
-    if (!tMs || !id) return null;
-    return { section: 'recent', tMs, id };
-  } catch {
-    return null;
-  }
-}
-
 @Controller('presence')
 export class PresenceController {
   constructor(
@@ -132,7 +95,7 @@ export class PresenceController {
     private readonly presence: PresenceService,
     private readonly realtime: PresenceRealtimeService,
     private readonly follows: FollowsService,
-    private readonly prisma: PrismaService,
+    private readonly recentlyOnline: RecentlyOnlineService,
     private readonly redis: RedisService,
     private readonly appConfig: AppConfigService,
     private readonly marvIdentity: MarvinBotIdentityService,
@@ -302,7 +265,7 @@ export class PresenceController {
     // Keep the query param for backwards compatibility (includeSelf=0/false will exclude).
     const includeSelf =
       includeSelfRaw == null ? true : (includeSelfRaw === '1' || includeSelfRaw === 'true');
-    const membersVisible = await viewerCanSeeMembers(this.prisma, viewerUserId);
+    const membersVisible = await this.recentlyOnline.viewerCanSeeMembers(viewerUserId);
 
     const toResponse = (full: { data: OnlineUserDto[]; pagination: OnlinePaginationDto }) => {
       const pagination: OnlinePaginationDto = {
@@ -394,14 +357,7 @@ export class PresenceController {
 
     // "Recently online" = active within the last hour but not currently connected.
     // Excludes everyone already counted in `totalOnline` so the two numbers never overlap.
-    const recentlyOnlineCount = await this.prisma.user.count({
-      where: {
-        usernameIsSet: true,
-        bannedAt: null,
-        lastOnlineAt: { gte: new Date(Date.now() - RECENTLY_ONLINE_WINDOW_MS) },
-        ...(userIds.length ? { id: { notIn: userIds } } : {}),
-      },
-    });
+    const recentlyOnlineCount = await this.recentlyOnline.countRecentlyOnline(userIds);
 
     const result = { data, pagination: { totalOnline, recentlyOnlineCount, anonymousOnline } };
     void this.redis.setJson(cacheKey, result, { ttlMs: ONLINE_LIST_CACHE_TTL_MS }).catch(() => undefined);
@@ -423,115 +379,20 @@ export class PresenceController {
     const viewerUserId = userId ?? null;
 
     // Signed-out and unverified viewers get counts elsewhere, never who was recently online.
-    if (!(await viewerCanSeeMembers(this.prisma, viewerUserId))) {
+    if (!(await this.recentlyOnline.viewerCanSeeMembers(viewerUserId))) {
       return { data: [], pagination: { nextCursor: null } };
     }
 
     const parsed = recentSchema.parse(query);
     const limit = parsed.limit ?? 30;
     const cursorRaw = (parsed.cursor ?? '').trim();
-    const cursor = decodePageCursor(cursorRaw);
+    const cursor = decodeRecentlyOnlineCursor(cursorRaw);
     if (cursorRaw && !cursor) throw new BadRequestException('Invalid cursor.');
 
     // Exclude currently-online users so "Recently online" is truly "recently" (offline users).
     const connectedIds = await this.presenceRedis.onlineUserIds();
     const { displayedIds } = await this.accountSwitch.expandPresenceOnlineIds(connectedIds);
-    const onlineFilter = displayedIds.length ? { id: { notIn: displayedIds } } : {};
-
-    let pageItems: Array<{ id: string; lastOnlineAt: string | null }> = [];
-    let nextCursor: string | null = null;
-
-    if (cursor?.section !== 'never') {
-      // ── Section A: users with a known lastOnlineAt, newest → oldest ──
-      const aItems = await this.prisma.user.findMany({
-        where: {
-          usernameIsSet: true,
-          bannedAt: null,
-          lastOnlineAt: { not: null },
-          ...onlineFilter,
-          ...(cursor
-            ? {
-                OR: [
-                  { lastOnlineAt: { lt: new Date(cursor.tMs) } },
-                  { lastOnlineAt: new Date(cursor.tMs), id: { lt: cursor.id } },
-                ],
-              }
-            : {}),
-        },
-        orderBy: [{ lastOnlineAt: 'desc' }, { id: 'desc' }],
-        take: limit + 1,
-        select: { id: true, lastOnlineAt: true },
-      });
-
-      const aHasMore = aItems.length > limit;
-      const aPage = aItems.slice(0, limit);
-
-      if (aHasMore) {
-        const aNext = aItems[limit];
-        nextCursor = encodeCursor({ tMs: aNext.lastOnlineAt!.getTime(), id: aNext.id });
-        pageItems = aPage.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null }));
-      } else {
-        // Section A exhausted — fill the remainder with users who have no presence history.
-        // Their account creation time is the best available "last seen" fallback.
-        const remaining = limit - aPage.length;
-        const bItems = await this.prisma.user.findMany({
-          where: {
-            usernameIsSet: true,
-            bannedAt: null,
-            lastOnlineAt: null,
-            ...onlineFilter,
-          },
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-          take: remaining + 1,
-          select: { id: true, createdAt: true },
-        });
-
-        const bHasMore = bItems.length > remaining;
-        const bPage = bItems.slice(0, remaining);
-
-        if (bHasMore) {
-          const bNext = bItems[remaining];
-          nextCursor = encodeNeverCursor({ cMs: bNext.createdAt.getTime(), id: bNext.id });
-        }
-
-        pageItems = [
-          ...aPage.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null })),
-          ...bPage.map((r) => ({ id: r.id, lastOnlineAt: r.createdAt.toISOString() })),
-        ];
-      }
-    } else {
-      // ── Section B: users with no lastOnlineAt, sorted by newest account first ──
-      const { cMs, id: cId } = cursor;
-      const bItems = await this.prisma.user.findMany({
-        where: {
-          usernameIsSet: true,
-          bannedAt: null,
-          lastOnlineAt: null,
-          ...onlineFilter,
-          ...(cMs != null && cId != null
-            ? {
-                OR: [
-                  { createdAt: { lt: new Date(cMs) } },
-                  { createdAt: new Date(cMs), id: { lt: cId } },
-                ],
-              }
-            : {}),
-        },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take: limit + 1,
-        select: { id: true, createdAt: true },
-      });
-
-      const bHasMore = bItems.length > limit;
-      const bPage = bItems.slice(0, limit);
-
-      if (bHasMore) {
-        const bNext = bItems[limit];
-        nextCursor = encodeNeverCursor({ cMs: bNext.createdAt.getTime(), id: bNext.id });
-      }
-
-      pageItems = bPage.map((r) => ({ id: r.id, lastOnlineAt: r.createdAt.toISOString() }));
-    }
+    const { items: pageItems, nextCursor } = await this.recentlyOnline.page({ excludeIds: displayedIds, limit, cursor });
 
     const userIds = pageItems.map((r) => r.id);
     const followListUsers = userIds.length
@@ -579,7 +440,7 @@ export class PresenceController {
     const includeSelfRaw = (parsed.includeSelf ?? '').trim();
     const includeSelf = includeSelfRaw ? includeSelfRaw === '1' || includeSelfRaw === 'true' : true;
 
-    if (!(await viewerCanSeeMembers(this.prisma, viewerUserId))) {
+    if (!(await this.recentlyOnline.viewerCanSeeMembers(viewerUserId))) {
       const counts = await this.online(userId, includeSelfRaw || undefined, '1');
       return {
         data: { online: [], recent: [] },
@@ -658,106 +519,14 @@ export class PresenceController {
     if (viewerUserId) {
       const limit = parsed.recentLimit ?? 30;
         const cursorRaw = (parsed.recentCursor ?? '').trim();
-        const cursor = decodePageCursor(cursorRaw);
+        const cursor = decodeRecentlyOnlineCursor(cursorRaw);
         if (cursorRaw && !cursor) throw new BadRequestException('Invalid cursor.');
 
         // Exclude currently-online users so "Recently online" is truly "recently" (offline users).
         const onlineIds = onlineUserIds.length ? onlineUserIds : await this.presenceRedis.onlineUserIds();
-        const onlineFilter = onlineIds.length ? { id: { notIn: onlineIds } } : {};
-
-        let pageItems: Array<{ id: string; lastOnlineAt: string | null }> = [];
-
-        if (cursor?.section !== 'never') {
-          // ── Section A: users with a known lastOnlineAt, newest → oldest ──
-          const aItems = await this.prisma.user.findMany({
-            where: {
-              usernameIsSet: true,
-              bannedAt: null,
-              lastOnlineAt: { not: null },
-              ...onlineFilter,
-              ...(cursor
-                ? {
-                    OR: [
-                      { lastOnlineAt: { lt: new Date(cursor.tMs) } },
-                      { lastOnlineAt: new Date(cursor.tMs), id: { lt: cursor.id } },
-                    ],
-                  }
-                : {}),
-            },
-            orderBy: [{ lastOnlineAt: 'desc' }, { id: 'desc' }],
-            take: limit + 1,
-            select: { id: true, lastOnlineAt: true },
-          });
-
-          const aHasMore = aItems.length > limit;
-          const aPage = aItems.slice(0, limit);
-
-          if (aHasMore) {
-            const aNext = aItems[limit];
-            recentNextCursor = encodeCursor({ tMs: aNext.lastOnlineAt!.getTime(), id: aNext.id });
-            pageItems = aPage.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null }));
-          } else {
-            // Section A exhausted — fill the remainder with users who have no presence history.
-            // Their account creation time is the best available "last seen" fallback.
-            const remaining = limit - aPage.length;
-            const bItems = await this.prisma.user.findMany({
-              where: {
-                usernameIsSet: true,
-                bannedAt: null,
-                lastOnlineAt: null,
-                ...onlineFilter,
-              },
-              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-              take: remaining + 1,
-              select: { id: true, createdAt: true },
-            });
-
-            const bHasMore = bItems.length > remaining;
-            const bPage = bItems.slice(0, remaining);
-
-            if (bHasMore) {
-              const bNext = bItems[remaining];
-              recentNextCursor = encodeNeverCursor({ cMs: bNext.createdAt.getTime(), id: bNext.id });
-            }
-
-            pageItems = [
-              ...aPage.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null })),
-              ...bPage.map((r) => ({ id: r.id, lastOnlineAt: r.createdAt.toISOString() })),
-            ];
-          }
-        } else {
-          // ── Section B: users with no lastOnlineAt, sorted by newest account first ──
-          const { cMs, id: cId } = cursor;
-          const bItems = await this.prisma.user.findMany({
-            where: {
-              usernameIsSet: true,
-              bannedAt: null,
-              lastOnlineAt: null,
-              ...onlineFilter,
-              ...(cMs != null && cId != null
-                ? {
-                    OR: [
-                      { createdAt: { lt: new Date(cMs) } },
-                      { createdAt: new Date(cMs), id: { lt: cId } },
-                    ],
-                  }
-                : {}),
-            },
-            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-            take: limit + 1,
-            select: { id: true, createdAt: true },
-          });
-
-          const bHasMore = bItems.length > limit;
-          const bPage = bItems.slice(0, limit);
-
-          if (bHasMore) {
-            const bNext = bItems[limit];
-            recentNextCursor = encodeNeverCursor({ cMs: bNext.createdAt.getTime(), id: bNext.id });
-          }
-
-          pageItems = bPage.map((r) => ({ id: r.id, lastOnlineAt: r.createdAt.toISOString() }));
-        }
+        const recentPage = await this.recentlyOnline.page({ excludeIds: onlineIds, limit, cursor });
+        const pageItems = recentPage.items;
+        recentNextCursor = recentPage.nextCursor;
 
         const recentUserIds = pageItems.map((r) => r.id);
         const followListUsers = recentUserIds.length

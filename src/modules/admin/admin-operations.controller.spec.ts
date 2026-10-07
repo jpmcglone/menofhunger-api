@@ -4,6 +4,7 @@ import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
 import cookieParser from "cookie-parser";
 import { AdminOperationsController } from "./admin-operations.controller";
+import { AdminOperationsService } from "./admin-operations.service";
 import { AdminGuard } from "./admin.guard";
 import { AuthService } from "../auth/auth.service";
 import { PrismaService } from "../prisma/prisma.service";
@@ -35,6 +36,7 @@ describe("Admin operations HTTP boundary", () => {
         { provide: PrismaService, useValue: prisma },
         { provide: PostsReadService, useFactory: () => new PostsReadService(prisma as never) },
         { provide: BillingService, useValue: billing },
+        AdminOperationsService,
       ],
     }).compile();
     app = module.createNestApplication();

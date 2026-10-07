@@ -1,4 +1,5 @@
 import { IntegrationAdminController } from "./integration-admin.controller";
+import { IntegrationAdminService } from "./integration-admin.service";
 function fixture() {
   let control: any = null;
   const tx: any = {
@@ -29,7 +30,12 @@ function fixture() {
       sharedMonthlyMicros: 20000000,
     }),
   };
-  return { controller: new IntegrationAdminController(prisma, config), tx };
+  return {
+    controller: new IntegrationAdminController(
+      new IntegrationAdminService(prisma, config),
+    ),
+    tx,
+  };
 }
 const input = {
   expectedRevision: 0,

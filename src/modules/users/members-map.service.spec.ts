@@ -4,6 +4,7 @@ import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { VerifiedGuard } from '../auth/verified.guard';
 import { canSeeMembers } from '../auth/member-visibility';
 import { MembersMapController } from './members-map.controller';
+import { UserLookupService } from '../user-lookup/user-lookup.service';
 import { MembersMapService, membersMapMemberWhere } from './members-map.service';
 
 describe('MembersMapController', () => {
@@ -16,7 +17,7 @@ describe('MembersMapController', () => {
   it('asks for the counts-only summary when the viewer is signed out or unverified', async () => {
     const membersMap = { summary: jest.fn(async () => ({})) };
     const prisma = { user: { findUnique: jest.fn(async () => ({ verifiedStatus: 'none', premium: false, premiumPlus: false, siteAdmin: false })) } };
-    const controller = new MembersMapController(membersMap as any, prisma as any);
+    const controller = new MembersMapController(membersMap as any, new UserLookupService(prisma as any));
     await controller.summary(undefined);
     await controller.summary('unverified');
     expect(membersMap.summary).toHaveBeenNthCalledWith(1, { membersVisible: false, viewerUserId: null });

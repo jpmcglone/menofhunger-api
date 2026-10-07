@@ -1,3 +1,4 @@
+import { RecentlyOnlineService } from './recently-online.service';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { FollowsModule } from '../follows/follows.module';
@@ -55,6 +56,7 @@ import { PresenceSideEffectsHandler } from './presence-side-effects.handler';
     ChannelsGatewayHandler,
     CallsGatewayHandler,
     PresenceSideEffectsHandler,
+    RecentlyOnlineService,
   ],
   exports: [RealtimeModule],
 })

@@ -15,7 +15,7 @@ import { JobsModule } from "../jobs/jobs.module";
 import { AdminAvatarVideoController } from "./admin-avatar-video.controller";
 import { DelegationSideEffectsHandler } from "./delegation/delegation-side-effects.handler";
 import { DelegationReadsService } from "./delegation/delegation-reads.service";
-import { IntegrationAdminController } from "../x/integration-admin.controller";
+import { XModule } from "../x/x.module";
 import { AvatarVideoModule } from "../uploads/avatar-video.module";
 import { AdminEngagementService } from "./admin-engagement.service";
 import { AdminMaintenanceService } from "./admin-maintenance.service";
@@ -32,6 +32,7 @@ import { PostsModule } from "../posts/posts.module";
 import { UsersModule } from "../users/users.module";
 import { AdminGuard } from "./admin.guard";
 import { AdminUsersController } from "./admin-users.controller";
+import { AdminUsersService } from "./admin-users.service";
 import { AdminSiteConfigController } from "./admin-site-config.controller";
 import { AdminImageReviewController } from "./admin-image-review.controller";
 import { AdminImageReviewService } from "./admin-image-review.service";
@@ -58,6 +59,7 @@ import { AdminDailyDigestCron } from "./admin-digest-email.cron";
 import { AdminVerificationSlaCron } from "./admin-verification-sla.cron";
 import { AdminNewMemberPostsCron } from "./admin-new-member-posts.cron";
 import { AdminAnalyticsController } from "./admin-analytics.controller";
+import { AdminAnalyticsService } from "./admin-analytics.service";
 import { AdminBillingController } from "./admin-billing.controller";
 import { AdminReferralController } from "./admin-referral.controller";
 import { AdminAffiliateController } from "./admin-affiliate.controller";
@@ -81,6 +83,7 @@ import { AdminPagesController } from "./admin-pages.controller";
 import { NewslettersModule } from "../newsletters/newsletters.module";
 import { AdminNewslettersController } from "./admin-newsletters.controller";
 import { AdminOperationsController } from "./admin-operations.controller";
+import { AdminOperationsService } from "./admin-operations.service";
 
 @Module({
   imports: [
@@ -113,6 +116,7 @@ import { AdminOperationsController } from "./admin-operations.controller";
     AnnouncementsModule,
     PagesModule,
     NewslettersModule,
+    XModule,
   ],
   controllers: [
     DelegationController,
@@ -145,8 +149,9 @@ import { AdminOperationsController } from "./admin-operations.controller";
   providers: [
     DelegationSideEffectsHandler,
     DelegationReadsService,
-    AdminOperationsController,
-    IntegrationAdminController,
+    AdminOperationsService,
+    AdminUsersService,
+    AdminAnalyticsService,
     DelegationService,
     DelegationPolicyService,
     DelegationActionsService,

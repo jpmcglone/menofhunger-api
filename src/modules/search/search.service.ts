@@ -280,6 +280,19 @@ export class SearchService {
     `;
   }
 
+  /**
+   * Users in a crew that blocks new invites. A solo crew member (memberCount === 1) stays
+   * inviteable because accepting another crew's invite auto-disbands their old crew.
+   */
+  async inviteBlockingCrewMemberIds(userIds: string[]): Promise<Set<string>> {
+    if (!userIds.length) return new Set();
+    const crewMembers = await this.prisma.crewMember.findMany({
+      where: { userId: { in: userIds }, crew: { deletedAt: null } },
+      select: { userId: true, crew: { select: { memberCount: true } } },
+    });
+    return new Set(crewMembers.filter((m) => m.crew.memberCount > 1).map((m) => m.userId));
+  }
+
   async searchUsers(params: {
     q: string;
     limit: number;

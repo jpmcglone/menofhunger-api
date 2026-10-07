@@ -1,0 +1,1100 @@
+import { revokeAccountChannels, emitChannelAccessChange } from '../group-channels/channel-lifecycle';
+import { publicPreviewUrl } from "../../common/urls/public-preview-url";
+import { normalizeSocialProfileUrl } from "../../common/urls/social-profile-url";
+import { toAvatarVideoDto } from "../../common/dto/avatar-video.dto";
+import { Injectable, BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
+import { ModuleRef } from "@nestjs/core";
+import { z } from "zod";
+import { normalizePhone } from "../auth/auth.utils";
+import { AppConfigService } from "../app/app-config.service";
+import { toUserDto, type OrgAffiliationDto } from "../../common/dto";
+import { publicAssetUrl } from "../../common/assets/public-asset-url";
+import { PrismaService } from "../prisma/prisma.service";
+import { validateUsername } from "../users/users.utils";
+import { PublicProfileCacheService } from "../users/public-profile-cache.service";
+import type { AdminRequest } from "./admin.guard";
+import { UsersMeRealtimeService } from "../users/users-me-realtime.service";
+import { UsersPublicRealtimeService } from "../users/users-public-realtime.service";
+import { AuthService } from "../auth/auth.service";
+import { PresenceRealtimeService } from "../presence/presence-realtime.service";
+import { SlackService } from "../../common/slack/slack.service";
+import { EntitlementService } from "../billing/entitlement.service";
+import { BillingService } from "../billing/billing.service";
+import { sanitizeFeatureToggles } from "../../common/feature-toggles";
+import { createdAtIdCursorWhere } from "../../common/pagination/created-at-id-cursor";
+import { CoinsService } from "../coins/coins.service";
+import { UsersLocationService } from "../users/users-location.service";
+import { UploadsService } from "../uploads/uploads.service";
+import { UserVerificationService } from "../verification/user-verification.service";
+import { PagesService } from "../pages/pages.service";
+import { PostsReadService } from '../posts-read/posts-read.service';
+
+const paginatedSearchSchema = z.object({
+  q: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  cursor: z.string().optional(),
+});
+
+const adminUsernameSchema = z.object({
+  username: z.string().optional(),
+});
+
+const banSchema = z.object({
+  reason: z.string().trim().max(500).optional(),
+});
+
+const updateUserSchema = z.object({
+  phone: z.string().trim().min(1).optional(),
+  username: z.union([z.string().trim().min(1), z.null()]).optional(),
+  name: z.string().trim().max(50).nullable().optional(),
+  bio: z.string().trim().max(160).nullable().optional(),
+  website: z.union([z.string().trim().max(200), z.literal("")]).optional(),
+  rumbleUrl: z.string().trim().max(300).optional(),
+  linkedinUrl: z.string().trim().max(300).optional(),
+  youtubeUrl: z.string().trim().max(300).optional(),
+  locationQuery: z.union([z.string().trim().max(80), z.literal("")]).optional(),
+  isOrganization: z.boolean().optional(),
+  verifiedStatus: z.enum(["none", "identity", "manual"]).optional(),
+  featureToggles: z.array(z.string()).max(50).optional(),
+});
+
+const adjustCoinsSchema = z.object({
+  delta: z
+    .number()
+    .int()
+    .refine((v) => v !== 0, "delta must be non-zero"),
+  reason: z.string().trim().max(200).optional().nullable(),
+});
+
+const usernameParamSchema = z.object({
+  username: z.string().trim().min(1),
+});
+
+const recentListSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  cursor: z.string().optional(),
+});
+
+@Injectable()
+export class AdminUsersService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly appConfig: AppConfigService,
+    private readonly publicProfileCache: PublicProfileCacheService<{
+        id: string;
+        username: string | null;
+      }>,
+    private readonly usersMeRealtime: UsersMeRealtimeService,
+    private readonly usersPublicRealtime: UsersPublicRealtimeService,
+    private readonly auth: AuthService,
+    private readonly moduleRef: ModuleRef,
+    private readonly slack: SlackService,
+    private readonly entitlementService: EntitlementService,
+    private readonly billingService: BillingService,
+    private readonly coinsService: CoinsService,
+    private readonly usersLocation: UsersLocationService,
+    private readonly uploads: UploadsService,
+    private readonly userVerification: UserVerificationService,
+    private readonly pages: PagesService,
+    private readonly postsRead: PostsReadService,
+  ) {}
+
+  private get publicBaseUrl(): string | null {
+    return this.appConfig.r2()?.publicBaseUrl ?? null;
+  }
+
+  /** Single-user admin DTO with org affiliations included. */
+  private async toAdminUserDto(user: Parameters<typeof toUserDto>[0]) {
+    const orgMap = await this.batchOrgAffiliations([user.id]);
+    return {
+      ...toUserDto(user, this.publicBaseUrl),
+      orgAffiliations: orgMap.get(user.id) ?? [],
+    };
+  }
+
+  private maskPhone(phone: string | null): string {
+    const trimmed = (phone ?? "").trim();
+    if (!trimmed) return "";
+    const visible = trimmed.slice(-2);
+    const maskedLen = Math.max(0, trimmed.length - visible.length);
+    return `${"*".repeat(maskedLen)}${visible}`;
+  }
+
+  private maskEmail(email: string | null): string | null {
+    const raw = (email ?? "").trim();
+    if (!raw) return null;
+    const [local, domain] = raw.split("@");
+    if (!local || !domain) return "***";
+    const localVisible = local.slice(0, 1);
+    return `${localVisible}${"*".repeat(Math.max(1, local.length - 1))}@${domain}`;
+  }
+
+  private maskBirthdate(iso: string | null): string | null {
+    const raw = (iso ?? "").trim();
+    if (!raw) return null;
+    return "****-**-**";
+  }
+
+  private normalizeSearchQueryForDedupe(query: string): string {
+    return String(query ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+  }
+
+  private async findByUsernameOrThrow(usernameRaw: string) {
+    const username = usernameRaw.trim().toLowerCase();
+    const user = await this.prisma.user.findFirst({
+      where: {
+        username: {
+          equals: username,
+          mode: "insensitive",
+        },
+      },
+    });
+    if (!user) throw new NotFoundException("User not found.");
+    return user;
+  }
+
+  /** Slice a take+1 user list into a paginated response with org affiliations. */
+  private async paginatedUserResult(
+    users: Parameters<typeof toUserDto>[0][],
+    take: number,
+  ) {
+    const slice = users.slice(0, take);
+    const nextCursor =
+      users.length > take ? (slice[slice.length - 1]?.id ?? null) : null;
+    const orgMap = await this.batchOrgAffiliations(slice.map((u) => u.id));
+    return {
+      data: slice.map((u) => ({
+        ...toUserDto(u, this.publicBaseUrl),
+        orgAffiliations: orgMap.get(u.id) ?? [],
+      })),
+      pagination: { nextCursor },
+    };
+  }
+
+  /** Batch-fetch org affiliations. Returns map of userId → OrgAffiliationDto[]. */
+  private async batchOrgAffiliations(
+    userIds: string[],
+  ): Promise<Map<string, OrgAffiliationDto[]>> {
+    if (userIds.length === 0) return new Map();
+    const publicBaseUrl = this.publicBaseUrl;
+    const memberships = await this.prisma.userOrgMembership.findMany({
+      where: { userId: { in: userIds } },
+      select: {
+        userId: true,
+        org: {
+          select: {
+            id: true,
+            username: true,
+            name: true,
+            avatarKey: true,
+            avatarVideoKey: true,
+            avatarVideoDurationMs: true,
+            avatarUpdatedAt: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    const map = new Map<string, OrgAffiliationDto[]>();
+    for (const m of memberships) {
+      const list = map.get(m.userId) ?? [];
+      list.push({
+        id: m.org.id,
+        username: m.org.username,
+        name: m.org.name,
+        avatarUrl: publicAssetUrl({
+          publicBaseUrl,
+          key: m.org.avatarKey ?? null,
+          updatedAt: m.org.avatarUpdatedAt ?? null,
+        }),
+        avatarVideo: toAvatarVideoDto(m.org, publicBaseUrl),
+      });
+      map.set(m.userId, list);
+    }
+    return map;
+  }
+  async listBanned(query: unknown) {
+    const { q, limit, cursor } = paginatedSearchSchema.parse(query);
+    const take = limit ?? 25;
+
+    const raw = (q ?? "").trim();
+    const cleaned = raw.startsWith("@") ? raw.slice(1) : raw;
+
+    const where: Prisma.UserWhereInput = {
+      bannedAt: { not: null },
+      ...(cleaned
+        ? {
+            OR: [
+              { username: { contains: cleaned, mode: "insensitive" } },
+              { name: { contains: cleaned, mode: "insensitive" } },
+              { email: { contains: cleaned, mode: "insensitive" } },
+              { phone: { contains: cleaned } },
+            ],
+          }
+        : {}),
+    };
+
+    const users = await this.prisma.user.findMany({
+      where,
+      orderBy: [{ bannedAt: "desc" }, { id: "desc" }],
+      take: take + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+
+    return this.paginatedUserResult(users, take);
+  }
+  async search(query: unknown) {
+    const { q, limit, cursor } = paginatedSearchSchema.parse(query);
+    const take = limit ?? 20;
+
+    const raw = (q ?? "").trim();
+    const cleaned = raw.startsWith("@") ? raw.slice(1) : raw;
+    const words = cleaned
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w) => w.length >= 2);
+
+    let where: Prisma.UserWhereInput | undefined;
+    if (cleaned) {
+      const orConditions: Prisma.UserWhereInput[] = [
+        { username: { contains: cleaned, mode: "insensitive" } },
+        { name: { contains: cleaned, mode: "insensitive" } },
+        { email: { contains: cleaned, mode: "insensitive" } },
+        { phone: { contains: cleaned } },
+      ];
+      // Each individual word (catches partial first/last name searches like "chris" or "grif").
+      for (const w of words) {
+        if (w === cleaned.toLowerCase()) continue;
+        orConditions.push({ username: { contains: w, mode: "insensitive" } });
+        orConditions.push({ name: { contains: w, mode: "insensitive" } });
+        orConditions.push({ email: { contains: w, mode: "insensitive" } });
+      }
+      // All words must appear in the same field — catches word-order-independent queries
+      // like "Griffith Chris" or "Chris G" matching "Chris Griffith".
+      if (words.length >= 2) {
+        orConditions.push({
+          AND: words.map((w) => ({
+            name: { contains: w, mode: "insensitive" as const },
+          })),
+        });
+        orConditions.push({
+          AND: words.map((w) => ({
+            username: { contains: w, mode: "insensitive" as const },
+          })),
+        });
+        orConditions.push({
+          AND: words.map((w) => ({
+            email: { contains: w, mode: "insensitive" as const },
+          })),
+        });
+      }
+      where = { OR: orConditions };
+    }
+
+    const users = await this.prisma.user.findMany({
+      where,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: take + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+
+    return this.paginatedUserResult(users, take);
+  }
+  async usernameAvailable(query: unknown) {
+    const { username } = adminUsernameSchema.parse(query);
+    const parsed = validateUsername(username ?? "", { minLen: 2, allowReserved: true });
+    if (!parsed.ok)
+      return {
+        data: { available: false, normalized: null, error: parsed.error },
+      };
+
+    const exists =
+      (
+        await this.prisma.$queryRaw<Array<{ id: string }>>`
+          SELECT "id"
+          FROM "User"
+          WHERE LOWER("username") = LOWER(${parsed.username})
+          LIMIT 1
+        `
+      )[0] ?? null;
+
+    return { data: { available: !exists, normalized: parsed.usernameLower } };
+  }
+  async ban(
+    req: AdminRequest,
+    id: string,
+    body: unknown,
+  ) {
+    const { reason } = banSchema.parse(body);
+    const adminId = String(req.user?.id ?? "").trim();
+    if (!adminId) throw new NotFoundException();
+
+    const current = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, siteAdmin: true, username: true },
+    });
+    if (!current) throw new NotFoundException("User not found.");
+    if (current.siteAdmin)
+      throw new BadRequestException("Site admins cannot be banned.");
+
+    const now = new Date();
+    const { updated, channelGroups } = await this.prisma.$transaction(async tx => {
+      const channelGroups = await revokeAccountChannels(tx, id);
+      const user = await tx.user.update({
+      where: { id },
+      data: {
+        bannedAt: now,
+        bannedReason: (reason ?? "").trim() || null,
+        bannedByAdminId: adminId,
+      },
+    });
+      return { updated: user, channelGroups };
+    });
+    const channelRealtime = this.moduleRef.get(PresenceRealtimeService, { strict: false });
+    for (const groupId of channelGroups) await emitChannelAccessChange(this.prisma, channelRealtime, groupId, id);
+
+    // Revoke all active sessions immediately.
+    await this.auth.revokeAllSessionsForUser(updated.id);
+
+    // Best-effort: notify active clients first, then disconnect sockets.
+    try {
+      this.usersMeRealtime.emitMeUpdatedFromUser(updated, "account_banned");
+    } catch {
+      // Best-effort
+    }
+    try {
+      const presenceRealtime = this.moduleRef.get(PresenceRealtimeService, {
+        strict: false,
+      });
+      presenceRealtime?.disconnectUserSockets(updated.id);
+    } catch {
+      // Best-effort
+    }
+
+    // Invalidate public profile cache (in case they were visible in search, etc).
+    try {
+      await this.publicProfileCache.invalidateForUser({
+        id: updated.id,
+        username: updated.username ?? null,
+      });
+    } catch {
+      // Best-effort
+    }
+
+    return { data: await this.toAdminUserDto(updated) };
+  }
+  async unban(id: string) {
+    const existing = await this.prisma.user.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException("User not found.");
+
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: {
+        bannedAt: null,
+        bannedReason: null,
+        bannedByAdminId: null,
+      },
+    });
+
+    try {
+      await this.publicProfileCache.invalidateForUser({
+        id: updated.id,
+        username: updated.username ?? null,
+      });
+    } catch {
+      // Best-effort
+    }
+
+    // Realtime: refresh their own auth snapshot across devices if they are logged in again later.
+    try {
+      this.usersMeRealtime.emitMeUpdatedFromUser(updated, "admin_user_updated");
+      await this.usersPublicRealtime.emitPublicProfileUpdated(updated.id);
+    } catch {
+      // Best-effort
+    }
+
+    return { data: await this.toAdminUserDto(updated) };
+  }
+  async getUser(id: string) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException("User not found.");
+    return { data: await this.toAdminUserDto(user) };
+  }
+  async getUserByUsername(params: unknown) {
+    const { username } = usernameParamSchema.parse(params);
+    const user = await this.findByUsernameOrThrow(username);
+    const full = await this.toAdminUserDto(user);
+
+    return {
+      data: {
+        ...full,
+        sensitive: {
+          phone: this.maskPhone(full.phone),
+          email: this.maskEmail(full.email),
+          birthdate: this.maskBirthdate(full.birthdate),
+        },
+        canRevealSensitive: true,
+      },
+    };
+  }
+  async revealSensitiveByUsername(params: unknown) {
+    const { username } = usernameParamSchema.parse(params);
+    const user = await this.findByUsernameOrThrow(username);
+    const dto = toUserDto(user, this.publicBaseUrl);
+    return {
+      data: {
+        phone: dto.phone,
+        email: dto.email,
+        birthdate: dto.birthdate,
+      },
+    };
+  }
+  async recentPostsByUsername(
+    params: unknown,
+    query: unknown,
+  ) {
+    const { username } = usernameParamSchema.parse(params);
+    const { limit, cursor } = recentListSchema.parse(query);
+    const take = limit ?? 20;
+    const user = await this.findByUsernameOrThrow(username);
+
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor: cursor ?? null,
+      lookup: async (id) =>
+        this.postsRead.read.findUnique({
+          where: { id },
+          select: { id: true, createdAt: true, userId: true },
+        }),
+    });
+
+    const rows = await this.postsRead.read.findMany({
+      where: {
+        userId: user.id,
+        deletedAt: null,
+        ...(cursorWhere ?? {}),
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: take + 1,
+      select: {
+        id: true,
+        createdAt: true,
+        body: true,
+        parentId: true,
+        rootId: true,
+        kind: true,
+        visibility: true,
+        commentCount: true,
+        boostCount: true,
+        bookmarkCount: true,
+      },
+    });
+
+    const slice = rows.slice(0, take);
+    const nextCursor =
+      rows.length > take ? (slice[slice.length - 1]?.id ?? null) : null;
+
+    return {
+      data: slice.map((row) => ({
+        id: row.id,
+        createdAt: row.createdAt.toISOString(),
+        body: row.body,
+        parentId: row.parentId,
+        rootId: row.rootId,
+        kind: row.kind,
+        visibility: row.visibility,
+        commentCount: row.commentCount,
+        boostCount: row.boostCount,
+        bookmarkCount: row.bookmarkCount,
+      })),
+      pagination: { nextCursor },
+    };
+  }
+  async recentArticlesByUsername(
+    params: unknown,
+    query: unknown,
+  ) {
+    const { username } = usernameParamSchema.parse(params);
+    const { limit, cursor } = recentListSchema.parse(query);
+    const take = limit ?? 20;
+    const user = await this.findByUsernameOrThrow(username);
+
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor: cursor ?? null,
+      lookup: async (id) =>
+        this.prisma.article.findUnique({
+          where: { id },
+          select: {
+            id: true,
+            publishedAt: true,
+            createdAt: true,
+            authorId: true,
+          },
+        }),
+    });
+
+    const rows = await this.prisma.article.findMany({
+      where: {
+        authorId: user.id,
+        deletedAt: null,
+        ...(cursorWhere ?? {}),
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: take + 1,
+      select: {
+        id: true,
+        title: true,
+        slug: true,
+        excerpt: true,
+        createdAt: true,
+        publishedAt: true,
+        isDraft: true,
+        visibility: true,
+        viewCount: true,
+        totalViewCount: true,
+        boostCount: true,
+        commentCount: true,
+      },
+    });
+
+    const slice = rows.slice(0, take);
+    const nextCursor =
+      rows.length > take ? (slice[slice.length - 1]?.id ?? null) : null;
+
+    return {
+      data: slice.map((row) => ({
+        id: row.id,
+        title: row.title,
+        slug: row.slug,
+        excerpt: row.excerpt,
+        createdAt: row.createdAt.toISOString(),
+        publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
+        isDraft: row.isDraft,
+        visibility: row.visibility,
+        viewCount: row.viewCount,
+        totalViewCount: row.totalViewCount ?? row.viewCount,
+        boostCount: row.boostCount,
+        commentCount: row.commentCount,
+      })),
+      pagination: { nextCursor },
+    };
+  }
+  async recentSearchesByUsername(
+    params: unknown,
+    query: unknown,
+  ) {
+    const { username } = usernameParamSchema.parse(params);
+    const { limit, cursor } = recentListSchema.parse(query);
+    const take = limit ?? 20;
+    const user = await this.findByUsernameOrThrow(username);
+
+    const cursorWhere = await createdAtIdCursorWhere({
+      cursor: cursor ?? null,
+      lookup: async (id) =>
+        this.prisma.userSearch.findUnique({
+          where: { id },
+          select: { id: true, createdAt: true, userId: true },
+        }),
+    });
+
+    const rows = await this.prisma.userSearch.findMany({
+      where: {
+        userId: user.id,
+        // Exclude profile/group-tap entries — admin list is for typed queries only.
+        targetUserId: null,
+        targetGroupId: null,
+        ...(cursorWhere ?? {}),
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: Math.max(take * 5, take + 1),
+      select: {
+        id: true,
+        query: true,
+        createdAt: true,
+      },
+    });
+
+    const uniqueRows: Array<{ id: string; query: string; createdAt: Date }> =
+      [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const key = this.normalizeSearchQueryForDedupe(row.query);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      uniqueRows.push(row);
+      if (uniqueRows.length >= take + 1) break;
+    }
+
+    const slice = uniqueRows.slice(0, take);
+    const nextCursor =
+      uniqueRows.length > take
+        ? (slice[slice.length - 1]?.id ?? null)
+        : rows.length >= Math.max(take * 5, take + 1)
+          ? (slice[slice.length - 1]?.id ?? null)
+          : null;
+
+    return {
+      data: slice.map((row) => ({
+        id: row.id,
+        query: row.query,
+        createdAt: row.createdAt.toISOString(),
+      })),
+      pagination: { nextCursor },
+    };
+  }
+  async updateUser(
+    id: string,
+    body: unknown,
+    req: AdminRequest,
+  ) {
+    const parsed = updateUserSchema.parse(body);
+
+    const current = await this.prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        username: true,
+        verifiedStatus: true,
+        verifiedAt: true,
+        unverifiedAt: true,
+        premium: true,
+        premiumPlus: true,
+        isOrganization: true,
+      },
+    });
+    if (!current) throw new NotFoundException("User not found.");
+
+    const data: Prisma.UserUpdateInput = {};
+    const now = new Date();
+
+    if (parsed.phone !== undefined) {
+      try {
+        data.phone = normalizePhone(parsed.phone);
+      } catch {
+        throw new BadRequestException("Invalid phone number format");
+      }
+    }
+
+    if (parsed.username !== undefined) {
+      if (parsed.username === null) {
+        data.username = null;
+        data.usernameIsSet = false;
+      } else {
+        const validated = validateUsername(parsed.username, { minLen: 2, allowReserved: true });
+        if (!validated.ok) throw new BadRequestException(validated.error);
+        data.username = validated.username;
+        data.usernameIsSet = true;
+      }
+    }
+
+    if (parsed.name !== undefined) {
+      data.name = parsed.name === null ? null : parsed.name || null;
+    }
+
+    if (parsed.bio !== undefined) {
+      data.bio = parsed.bio === null ? null : parsed.bio || null;
+    }
+
+    for (const [field, provider] of [
+      ["rumbleUrl", "rumble"],
+      ["linkedinUrl", "linkedin"],
+      ["youtubeUrl", "youtube"],
+    ] as const) {
+      if (parsed[field] !== undefined)
+        data[field] = normalizeSocialProfileUrl(parsed[field], provider);
+    }
+    if (parsed.website !== undefined) {
+      const raw = (parsed.website ?? "").trim();
+      if (!raw) {
+        data.website = null;
+      } else {
+        const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+        try {
+          const safe = publicPreviewUrl(withScheme);
+          if (!safe)
+            throw new BadRequestException(
+              "Use a public website URL without credentials or API secrets.",
+            );
+          const u = new URL(safe);
+          u.hash = "";
+          data.website = u.toString();
+        } catch {
+          throw new BadRequestException("Website must be a valid URL.");
+        }
+      }
+    }
+
+    if (parsed.locationQuery !== undefined) {
+      const q = (parsed.locationQuery ?? "").trim();
+      if (!q) {
+        data.locationInput = null;
+        data.locationDisplay = null;
+        data.locationZip = null;
+        data.locationCity = null;
+        data.locationCounty = null;
+        data.locationState = null;
+        data.locationCountry = null;
+      } else {
+        const loc = this.usersLocation.normalizeLocation(q);
+        data.locationInput = loc.input;
+        data.locationDisplay = loc.display;
+        data.locationZip = loc.zip;
+        data.locationCity = loc.city;
+        data.locationCounty = loc.county;
+        data.locationState = loc.state;
+        data.locationCountry = loc.country;
+      }
+    }
+
+    // Org invariant: org accounts must be verified AND have at least some form of premium access.
+    // current.premium reflects all sources (Stripe + grants) as computed by EntitlementService.
+    const effectiveVerifiedStatus =
+      parsed.verifiedStatus ?? current.verifiedStatus;
+    const effectiveIsOrganization =
+      parsed.isOrganization ?? current.isOrganization;
+    if (
+      effectiveIsOrganization === true &&
+      (!current.premium || effectiveVerifiedStatus === "none")
+    ) {
+      throw new BadRequestException(
+        "Organization accounts must be verified and premium.",
+      );
+    }
+
+    if (parsed.isOrganization !== undefined) {
+      data.isOrganization = parsed.isOrganization;
+    }
+
+    const wasVerified = current.verifiedStatus !== "none";
+    const nowVerified =
+      parsed.verifiedStatus !== undefined
+        ? parsed.verifiedStatus !== "none"
+        : wasVerified;
+    const isNewlyVerifying =
+      !wasVerified && nowVerified && parsed.verifiedStatus !== undefined;
+
+    if (parsed.verifiedStatus !== undefined) {
+      if (parsed.verifiedStatus === "none") {
+        data.verifiedStatus = "none";
+        data.verifiedAt = null;
+        data.unverifiedAt = now;
+      } else if (!isNewlyVerifying) {
+        // Already verified: allow identity ↔ manual without re-running verify side effects.
+        data.verifiedStatus = parsed.verifiedStatus;
+        data.verifiedAt = current.verifiedAt ?? now;
+        data.unverifiedAt = null;
+      }
+      // Newly verifying: handled by UserVerificationService after the other field updates.
+    }
+
+    if (parsed.featureToggles !== undefined) {
+      data.featureToggles = sanitizeFeatureToggles(parsed.featureToggles);
+    }
+
+    try {
+      await this.prisma.user.update({ where: { id }, data });
+
+      if (parsed.verifiedStatus !== undefined) {
+        if (isNewlyVerifying) {
+          await this.userVerification.verifyUser({
+            userId: id,
+            source: "admin_patch",
+            adminUserId: req.user?.id,
+            verifiedStatus:
+              parsed.verifiedStatus === "identity" ? "identity" : "manual",
+          });
+        } else if (wasVerified && !nowVerified) {
+          // Unverifying: pause Stripe sub, recompute tier (strips premium access).
+          await this.billingService.onUserUnverified(id);
+        } else if (wasVerified && nowVerified) {
+          // Keep stale requests closed without repeating verification rewards.
+          await this.userVerification.verifyUser({
+            userId: id,
+            source: "admin_patch",
+            adminUserId: req.user?.id,
+          });
+          await this.entitlementService.recomputeAndApply(id);
+        }
+      }
+
+      // Fetch the fresh user after all writes so the response reflects the computed state.
+      const updated = await this.prisma.user.findUnique({ where: { id } });
+      if (!updated) throw new NotFoundException("User not found.");
+
+      // Invalidate public profile caches (profile + preview) so tier changes reflect immediately.
+      try {
+        await this.publicProfileCache.invalidateForUser({
+          id: current.id,
+          username: current.username ?? null,
+        });
+        await this.publicProfileCache.invalidateForUser({
+          id: updated.id,
+          username: updated.username ?? null,
+        });
+      } catch {
+        // Best-effort cache invalidation; never fail admin updates.
+      }
+
+      // Realtime: user tier/profile changes should update their own UI and any related users.
+      try {
+        await this.usersPublicRealtime.emitPublicProfileUpdated(updated.id);
+        this.usersMeRealtime.emitMeUpdatedFromUser(
+          updated,
+          "admin_user_updated",
+        );
+      } catch {
+        // Best-effort
+      }
+
+      if (!current.premium && (updated.premium || updated.premiumPlus)) {
+        this.slack.notifyPremiumGranted({
+          userId: updated.id,
+          username: updated.username ?? null,
+          name: updated.name ?? null,
+          tier: updated.premiumPlus ? "premiumPlus" : "premium",
+          source: "admin",
+        });
+      }
+
+      return { data: await this.toAdminUserDto(updated) };
+    } catch (err: unknown) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2025"
+      ) {
+        throw new NotFoundException("User not found.");
+      }
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2002"
+      ) {
+        // Unique constraint violation (phone or username lower-ci index).
+        throw new ConflictException("That value is already in use.");
+      }
+      throw err;
+    }
+  }
+  async adminInitAvatar(id: string, body: unknown) {
+    const { contentType } = z
+      .object({ contentType: z.string().min(1) })
+      .parse(body);
+    const result = await this.uploads.initAvatarUpload(id, contentType);
+    return { data: result };
+  }
+  async adminCommitAvatar(id: string, body: unknown) {
+    const { key } = z.object({ key: z.string().min(1) }).parse(body);
+    const result = await this.uploads.commitAvatarUpload(id, key);
+    return { data: result };
+  }
+  async adminDeleteAvatar(id: string) {
+    const result = await this.uploads.deleteAvatarForUser(id);
+    return { data: result };
+  }
+  async adminInitBanner(id: string, body: unknown) {
+    const { contentType } = z
+      .object({ contentType: z.string().min(1) })
+      .parse(body);
+    const result = await this.uploads.initBannerUpload(id, contentType);
+    return { data: result };
+  }
+  async adminCommitBanner(id: string, body: unknown) {
+    const { key } = z.object({ key: z.string().min(1) }).parse(body);
+    const result = await this.uploads.commitBannerUpload(id, key);
+    return { data: result };
+  }
+  async adminDeleteBanner(id: string) {
+    const result = await this.uploads.deleteBannerForUser(id);
+    return { data: result };
+  }
+  async adjustCoins(
+    req: AdminRequest,
+    id: string,
+    body: unknown,
+  ) {
+    const adminId = String(req.user?.id ?? "").trim();
+    if (!adminId) throw new NotFoundException();
+    const parsed = adjustCoinsSchema.parse(body);
+    const data = await this.coinsService.adminAdjustCoins({
+      adminUserId: adminId,
+      targetUserId: id,
+      delta: parsed.delta,
+      reason: parsed.reason ?? null,
+    });
+    return { data };
+  }
+  async listOrgMemberships(id: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!user) throw new NotFoundException("User not found.");
+
+    const memberships = await this.prisma.userOrgMembership.findMany({
+      where: { userId: id },
+      include: {
+        org: {
+          select: {
+            id: true,
+            username: true,
+            name: true,
+            avatarKey: true,
+            avatarVideoKey: true,
+            avatarVideoDurationMs: true,
+            avatarUpdatedAt: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+
+    const data: OrgAffiliationDto[] = memberships.map((m) => ({
+      id: m.org.id,
+      username: m.org.username,
+      name: m.org.name,
+      avatarUrl: publicAssetUrl({
+        publicBaseUrl: this.publicBaseUrl,
+        key: m.org.avatarKey ?? null,
+        updatedAt: m.org.avatarUpdatedAt ?? null,
+      }),
+      avatarVideo: toAvatarVideoDto(m.org, this.publicBaseUrl),
+    }));
+
+    return { data };
+  }
+  async addOrgMembership(id: string, body: unknown) {
+    const { orgId } = z.object({ orgId: z.string().min(1) }).parse(body);
+
+    const [user, org] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id },
+        select: { id: true, isOrganization: true },
+      }),
+      this.prisma.user.findUnique({
+        where: { id: orgId },
+        select: { id: true, isOrganization: true },
+      }),
+    ]);
+
+    if (!user) throw new NotFoundException("User not found.");
+    if (!org) throw new NotFoundException("Org user not found.");
+    if (!org.isOrganization)
+      throw new BadRequestException("Target account is not an organization.");
+    if (user.isOrganization)
+      throw new BadRequestException(
+        "Organization accounts cannot be members of other orgs.",
+      );
+    if (user.id === org.id)
+      throw new BadRequestException(
+        "A user cannot be affiliated with themselves.",
+      );
+
+    try {
+      await this.prisma.userOrgMembership.create({
+        data: { userId: id, orgId },
+      });
+    } catch (err: unknown) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2002"
+      ) {
+        throw new ConflictException("Membership already exists.");
+      }
+      throw err;
+    }
+
+    const orgFull = await this.prisma.user.findUniqueOrThrow({
+      where: { id: orgId },
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        avatarKey: true,
+        avatarVideoKey: true,
+        avatarVideoDurationMs: true,
+        avatarUpdatedAt: true,
+      },
+    });
+
+    const data: OrgAffiliationDto = {
+      id: orgFull.id,
+      username: orgFull.username,
+      name: orgFull.name,
+      avatarUrl: publicAssetUrl({
+        publicBaseUrl: this.publicBaseUrl,
+        key: orgFull.avatarKey ?? null,
+        updatedAt: orgFull.avatarUpdatedAt ?? null,
+      }),
+      avatarVideo: toAvatarVideoDto(orgFull, this.publicBaseUrl),
+    };
+
+    return { data };
+  }
+  async removeOrgMembership(
+    id: string,
+    orgId: string,
+  ) {
+    const deleted = await this.prisma.userOrgMembership.deleteMany({
+      where: { userId: id, orgId },
+    });
+
+    if (deleted.count === 0)
+      throw new NotFoundException("Membership not found.");
+
+    return { data: { success: true } };
+  }
+  async convertToPage(id: string, body: unknown) {
+    const { operatorUserId } = z
+      .object({ operatorUserId: z.string().min(1) })
+      .parse(body);
+    const data = await this.pages.convertToPage(id, operatorUserId);
+    return { data };
+  }
+  async listOperators(id: string) {
+    return { data: await this.pages.listOperators(id) };
+  }
+  async addOperator(id: string, body: unknown) {
+    const { operatorUserId } = z
+      .object({ operatorUserId: z.string().min(1) })
+      .parse(body);
+    return { data: await this.pages.addOperator(id, operatorUserId) };
+  }
+  async removeOperator(
+    id: string,
+    operatorUserId: string,
+  ) {
+    await this.pages.removeOperator(id, operatorUserId);
+    return { data: { success: true } };
+  }
+  async listOperatedPages(id: string) {
+    return { data: await this.pages.listOperatedPages(id) };
+  }
+  async unverifyEmail(id: string) {
+    const now = new Date();
+    const existing = await this.prisma.user.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException("User not found.");
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.user.update({
+        where: { id },
+        data: {
+          emailVerifiedAt: null,
+          emailVerificationRequestedAt: null,
+        },
+      });
+
+      // Invalidate any outstanding verification links (best-effort).
+      await tx.emailActionToken.updateMany({
+        where: { userId: id, purpose: "verifyEmail", consumedAt: null },
+        data: { consumedAt: now },
+      });
+
+      return u;
+    });
+
+    this.usersMeRealtime.emitMeUpdatedFromUser(updated, "email_unverified");
+    return { data: await this.toAdminUserDto(updated) };
+  }
+}

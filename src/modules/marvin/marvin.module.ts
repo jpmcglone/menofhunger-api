@@ -16,6 +16,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { RedisModule } from '../redis/redis.module';
 import { AdminGuard } from '../admin/admin.guard';
 import { MarvinController } from './marvin.controller';
+import { MarvinMeService } from './services/marvin-me.service';
 import { MarvinIdentityModule } from './marvin-identity.module';
 import { MarvinCannedRepliesService } from './services/marvin-canned-replies.service';
 import { MarvinCreditService } from './services/marvin-credit.service';
@@ -92,6 +93,7 @@ import { ScriptureModule } from '../scripture/scripture.module';
     MarvinNonPremiumRepliesService,
     MarvinPrivateCannedRepliesService,
     MarvinAdminService,
+    MarvinMeService,
     MarvinContextCardService,
     MarvinThreadSummaryService,
     MarvinPublicReplyProcessor,
