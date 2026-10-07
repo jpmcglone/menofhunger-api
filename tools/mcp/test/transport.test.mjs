@@ -29,8 +29,10 @@ test('real stdio MCP handshake, tools, resources, prompts, validation and unauth
   t.after(() => client.close());
   await client.connect(transport);
   const tools = await client.listTools();
-  assert.equal(tools.tools.length, 36);
+  assert.equal(tools.tools.length, 38);
   assert.ok(tools.tools.some((tool) => tool.name === 'create_newsletter_draft'));
+  assert.ok(tools.tools.some((tool) => tool.name === 'signup_sources'));
+  assert.ok(tools.tools.some((tool) => tool.name === 'new_member_posts'));
   const publish = tools.tools.find((tool) => tool.name === 'publish_post');
   assert.equal(publish.annotations.readOnlyHint, false);
   assert.equal(publish.annotations.idempotentHint, false);
@@ -75,7 +77,7 @@ test('CLI machine discovery and errors use stable JSON and exit status', async (
   assert.equal(stderr, '');
   const result = JSON.parse(stdout);
   assert.equal(result.ok, true);
-  assert.equal(result.data.length, 36);
+  assert.equal(result.data.length, 38);
   await assert.rejects(
     exec(process.execPath, [cli, 'feedback', '--limit', '999', '--json']),
     (error) => {
