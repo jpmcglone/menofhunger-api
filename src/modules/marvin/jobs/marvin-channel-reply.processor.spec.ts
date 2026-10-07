@@ -7,7 +7,7 @@ function setup() {
     marvinUserSettings: { findUnique: jest.fn().mockResolvedValue({ aiConsentAt: new Date(), aiConsentVersion: 2 }) },
     marvinIdempotencyKey: { create: jest.fn(), deleteMany: jest.fn() }, message: { findUnique: jest.fn().mockResolvedValue(null) },
   };
-  const config = { groupChannels: () => ({ marvEnabled: true }), marvBot: () => ({ username: 'marv' }), marvLimits: () => ({ privateMaxPer10Minutes: 10, privateMaxPerUserPerDay: 100 }) };
+  const config = { groupChannels: () => ({}), marvBot: () => ({ username: 'marv' }), marvLimits: () => ({ privateMaxPer10Minutes: 10, privateMaxPerUserPerDay: 100 }) };
   const authorized = { grant: { botId: 'marv', invitation: 'one' }, channel: { conversationId: 'conversation' }, trigger: { body: '@marv help' } };
   const scope = { addressing: jest.fn().mockResolvedValue(null), authorize: jest.fn().mockResolvedValue(authorized), retrieve: jest.fn().mockResolvedValue([]), validateEvidence: jest.fn().mockResolvedValue(authorized) };
   const credits = { resolveCreditOwnerId: jest.fn().mockResolvedValue('owner'), costForMode: () => 2, threadContextSurcharge: (count: number) => count,

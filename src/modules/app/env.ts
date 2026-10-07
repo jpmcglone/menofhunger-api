@@ -501,7 +501,6 @@ export const envSchema = z
     // Channels stay disabled until client and privacy acceptance gates pass.
   GROUP_CHANNELS_ENABLED: z.enum(["true", "false"]).default("true"),
     GROUP_CHANNELS_GROUP_IDS: z.string().default(""),
-    GROUP_CHANNELS_MARV_ENABLED: z.enum(["true", "false"]).default("false"),
     AUDIO_TRANSCRIPTION_ENABLED: z.enum(["true", "false"]).default("false"),
     OPENAI_TRANSCRIBE_MODEL: z.preprocess(
       (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
@@ -556,6 +555,14 @@ export const envSchema = z
     TYPESAFE_TIMEOUT_MS: z.preprocess(
       (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
       z.coerce.number().int().positive().optional(),
+    ),
+    TYPESAFE_DAILY_BUDGET_USD: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.coerce.number().nonnegative().optional(),
+    ),
+    TYPESAFE_INPUT_USD_PER_MILLION_TOKENS: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.coerce.number().positive().optional(),
     ),
     TYPESAFE_ROUTING_ENABLED: z.enum(["true", "false"]).default("true"),
     TYPESAFE_REPLY_GATE_ENABLED: z.enum(["true", "false"]).default("true"),

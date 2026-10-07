@@ -224,7 +224,7 @@ export class ChannelMessagesService {
     });
     await this.broadcast(groupId, channelId, message.id);
     const result = (await this.present(userId, groupId, channelId, [message]))[0];
-    if (createdNow && this.config.groupChannels().marvEnabled) this.effects.dispatch('channel.marv.request', { groupId, channelId, messageId: message.id, requesterId: userId }, { jobId: `channel-marv-${message.id}` });
+    if (createdNow) this.effects.dispatch('channel.marv.request', { groupId, channelId, messageId: message.id, requesterId: userId }, { jobId: `channel-marv-${message.id}` });
     if (createdNow && Array.isArray(message.media) && message.media.some(item => item.kind === 'audio')) this.effects.dispatch('media.transcribe.request', { messageId: message.id }, { jobId: `transcribe-${message.id}` });
     if (createdNow) this.effects.dispatch('channel.message.changed', { groupId, channelId, messageId: message.id, edited: false }, { jobId: `channel-send-${message.id}` });
     return result;

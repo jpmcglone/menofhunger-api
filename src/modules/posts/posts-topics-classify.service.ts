@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import type { PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -6,6 +6,7 @@ import { AiUtilityService } from '../ai/ai-utility.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
+import { JevTopicsService } from '../typesafe/jev-topics.service';
 import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
 import { parseModelTopicList } from '../../common/topics/topic-utils';
 
@@ -52,11 +53,17 @@ export class PostsTopicsClassifyService {
     private readonly jobs: JobsService,
     private readonly appConfig: AppConfigService,
     private readonly cacheInvalidation: CacheInvalidationService,
+    @Optional() private readonly jev?: JevTopicsService,
   ) {}
+
+  /** Classification runs on OpenAI, or on Jev when OpenAI is not configured or fails. */
+  private canClassify(): boolean {
+    return this.ai.isConfigured() || Boolean(this.jev?.available());
+  }
 
   async enqueueIfNeeded(postId: string): Promise<void> {
     const id = (postId ?? '').trim();
-    if (!id || !this.ai.isConfigured()) return;
+    if (!id || !this.canClassify()) return;
     const post = await this.prisma.post.findFirst({
       where: { id, deletedAt: null },
       select: {
@@ -89,7 +96,7 @@ export class PostsTopicsClassifyService {
   }
 
   async process(data?: TopicsClassifyJobData): Promise<{ classified: number; examined: number }> {
-    if (!this.ai.isConfigured()) return { classified: 0, examined: 0 };
+    if (!this.canClassify()) return { classified: 0, examined: 0 };
     const postId = (data?.postId ?? '').trim();
     if (postId) {
       const wrote = await this.classifyOne(postId);
@@ -111,7 +118,7 @@ export class PostsTopicsClassifyService {
     batchSize?: number;
     runUntilEmpty?: boolean;
   }): Promise<{ classified: number; examined: number }> {
-    if (!this.ai.isConfigured()) return { classified: 0, examined: 0 };
+    if (!this.canClassify()) return { classified: 0, examined: 0 };
     const batchSize = Math.max(1, Math.min(40, Math.floor(opts.batchSize ?? 20)));
     const maxBatches = opts.runUntilEmpty ? 40 : 1;
     let classified = 0;
@@ -184,17 +191,21 @@ export class PostsTopicsClassifyService {
       .filter(Boolean)
       .join('\n');
 
-    const result = await this.ai.complete({
-      model,
-      instructions: CLASSIFY_INSTRUCTIONS,
-      userMessage,
-      maxOutputTokens: 256,
-      reasoningEffort: 'low',
-      cacheKey: 'topics:classify',
-    });
+    let topics: string[] | null = null;
+    if (this.ai.isConfigured()) {
+      const result = await this.ai.complete({
+        model,
+        instructions: CLASSIFY_INSTRUCTIONS,
+        userMessage,
+        maxOutputTokens: 256,
+        reasoningEffort: 'low',
+        cacheKey: 'topics:classify',
+      });
+      if (result) topics = parseModelTopicList(result.text);
+    }
+    topics ??= (await this.jev?.topicsFor(userMessage, 'public post').catch(() => null)) ?? null;
     // A transport failure is not a successful empty classification. Let the bounded job retry.
-    if (!result) throw new Error('Topic classification unavailable');
-    const topics = parseModelTopicList(result.text);
+    if (!topics) throw new Error('Topic classification unavailable');
     if (topics.length === 0) {
       await this.saveClassification(post, post.topics);
       return false;

@@ -29,7 +29,7 @@ export class ChannelMarvScopeService {
     private readonly access: ChannelAccessService, private readonly realtime: PresenceRealtimeService,
     @Optional() private readonly addressingService?: MarvinAddressingService) {}
 
-  private enabled(groupId: string) { return this.access.enabled(groupId) && this.config.groupChannels().marvEnabled && this.config.marvBot().enabled; }
+  private enabled(groupId: string) { return this.access.enabled(groupId) && this.config.marvBot().enabled; }
   private bot(db: Prisma.TransactionClient = this.prisma) {
     const configured = this.config.marvBot();
     return db.user.findFirst({ where: { ...(configured.userId ? { id: configured.userId } : { username: { equals: configured.username, mode: 'insensitive' as const } }), isBot: true, botType: 'marvin', bannedAt: null }, select: { id: true, username: true } });

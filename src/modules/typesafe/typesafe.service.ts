@@ -20,6 +20,10 @@ export type TypeSafeHealth = {
   lastFailureAt: string | null;
   lastFailure: string | null;
   consecutiveFailures: number;
+  inputTokensToday: number;
+  spentTodayUsd: number;
+  dailyBudgetUsd: number;
+  budgetExhausted: boolean;
 };
 
 export type TypeSafeProbe =
@@ -31,6 +35,8 @@ export type TypeSafeProbe =
  *
  * Jev returns choices, scores, or yes/no probabilities, not text. Callers own
  * thresholds and the fallback when this returns null (unconfigured, timeout, API error).
+ * Context rule: a call may carry only what every member of that context can already read (a public
+ * post, a group's own thread, one channel), never material from another group, channel, or DM.
  * Request content is never logged.
  */
 @Injectable()
@@ -42,7 +48,12 @@ export class TypeSafeService {
     lastFailureAt: null,
     lastFailure: null,
     consecutiveFailures: 0,
+    inputTokensToday: 0,
+    spentTodayUsd: 0,
+    dailyBudgetUsd: 0,
+    budgetExhausted: false,
   };
+  private spend = { day: '', tokens: 0 };
 
   constructor(private readonly appConfig: AppConfigService) {}
 
@@ -52,12 +63,15 @@ export class TypeSafeService {
 
   /** In-process view of recent call outcomes, reported on the admin service-status page. */
   healthSnapshot(): TypeSafeHealth {
-    return { ...this.health };
+    const cfg = this.appConfig.typeSafe();
+    return { ...this.health, inputTokensToday: this.spentToday(), spentTodayUsd: this.spentUsd(), dailyBudgetUsd: cfg.dailyBudgetUsd, budgetExhausted: this.overBudget() };
   }
 
   async decide<const Q extends Questions>(input: TypeSafeDecideInput<Q>): Promise<SystemOneResult<Q> | null> {
     const client = this.getClient();
     if (!client) return null;
+
+    if (this.overBudget()) return null;
 
     const cfg = this.appConfig.typeSafe();
     const startedAt = Date.now();
@@ -67,6 +81,7 @@ export class TypeSafeService {
         { signal: input.signal, ...(input.timeoutMs ? { timeout: input.timeoutMs } : {}) },
       );
       this.recordSuccess();
+      this.spend.tokens = this.spentToday() + result.usage.input_tokens;
       this.logger.log(
         `[typesafe] ${input.purpose} model=${result.model} in ${Date.now() - startedAt}ms ` +
           `tokens=${result.usage.input_tokens}/${result.usage.output_tokens}`,
@@ -96,6 +111,28 @@ export class TypeSafeService {
       return { ok: false, latencyMs: Date.now() - startedAt, error: message, status };
     }
   }
+
+  private spentToday(): number {
+    const day = new Date().toISOString().slice(0, 10);
+    if (this.spend.day !== day) this.spend = { day, tokens: 0 };
+    return this.spend.tokens;
+  }
+
+  private spentUsd(): number {
+    return (this.spentToday() / 1_000_000) * this.appConfig.typeSafe().inputUsdPerMillionTokens;
+  }
+
+  private overBudget(): boolean {
+    const budget = this.appConfig.typeSafe().dailyBudgetUsd;
+    if (!budget || this.spentUsd() < budget) return false;
+    if (!this.budgetWarned || this.budgetWarned !== this.spend.day) {
+      this.budgetWarned = this.spend.day;
+      this.logger.warn(`[typesafe] daily budget of $${budget} reached; Jev calls are paused until tomorrow (UTC) and callers use their fallbacks.`);
+    }
+    return true;
+  }
+
+  private budgetWarned = '';
 
   private recordSuccess(): void {
     this.health = { ...this.health, lastSuccessAt: new Date().toISOString(), consecutiveFailures: 0 };

@@ -15,7 +15,7 @@ function setup(opts: { body?: string; parent?: { body: string; senderId: string 
     message: { findFirst: jest.fn().mockImplementation(async ({ where }: { where: { id?: string } }) => (where.id === 'trigger' ? trigger : where.id ? parent : (opts.lastOther ?? null))) },
   };
   const access = { enabled: () => true, channel: jest.fn().mockResolvedValue({ channel: { id: 'chan', conversationId: 'conversation', archivedAt: null, privacy: opts.privacy ?? 'normal' } }) };
-  const config = { groupChannels: () => ({ marvEnabled: true }), marvBot: () => ({ enabled: true, username: 'marv' }) };
+  const config = { groupChannels: () => ({}), marvBot: () => ({ enabled: true, username: 'marv' }) };
   const addressing = { available: jest.fn(() => true), addressedToMarvProbability: jest.fn(async () => (opts.probability === undefined ? 0.95 : opts.probability)) };
   const service = new ChannelMarvScopeService(db as never, config as never, access as never, {} as never, addressing as never);
   return { service, addressing, db };

@@ -45,7 +45,6 @@ export class MarvinChannelReplyProcessor {
   }
 
   async process(request: ChannelMarvRequest) {
-    if (!this.config.groupChannels().marvEnabled) { this.logger.debug('[marv] channel reply skipped: GROUP_CHANNELS_MARV_ENABLED is off'); return; }
     this.logger.debug(`[marv] channel reply start message=${request.messageId}`);
     let input = request;
     let authorized: Awaited<ReturnType<ChannelMarvScopeService['authorize']>>;

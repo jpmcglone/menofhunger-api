@@ -11,7 +11,7 @@ function harness() {
   const prisma: any = { $transaction: jest.fn(async fn => fn(tx)) };
   const access: any = { lockGroup: jest.fn(), channel: jest.fn().mockResolvedValue({ channel, member: { role: 'member' } }) };
   const attention: any = { reconcile: jest.fn() };
-  const service = new ChannelMessagesService(prisma, access, {} as any, attention, { groupChannels: () => ({ marvEnabled: false }) } as any, {} as any, {} as any, { dispatch: jest.fn() } as any);
+  const service = new ChannelMessagesService(prisma, access, {} as any, attention, { groupChannels: () => ({}) } as any, {} as any, {} as any, { dispatch: jest.fn() } as any);
   // Delivery/mapping is covered separately; isolate the transactional protocol here.
   jest.spyOn(service as any, 'broadcast').mockResolvedValue(undefined);
   jest.spyOn(service as any, 'present').mockImplementation(async (_u, _g, _c, rows) => rows);

@@ -14,7 +14,7 @@ const url = process.env.MOH_CHANNEL_FIXTURE_DATABASE_URL;
 const enabled = url && new URL(url).hostname === '127.0.0.1' && new URL(url).pathname === '/moh_channel_fixture';
 (enabled ? describe : describe.skip)('channels on an isolated PostgreSQL database', () => {
   const db = new PrismaClient({ datasources: { db: { url: url ?? 'postgresql://invalid/never-connect' } } });
-  const config: any = { groupChannels: () => ({ enabled: true, groupIds: [], marvEnabled: false }), r2: () => null };
+  const config: any = { groupChannels: () => ({ enabled: true, groupIds: [] }), r2: () => null };
   const realtime: any = { emitGroupChannelMessages: jest.fn(), emitGroupChannelChanged: jest.fn(), emitGroupChannelViewer: jest.fn() };
   const effects: any = { dispatch: jest.fn() };
   const access = new ChannelAccessService(db as any, config);
@@ -181,7 +181,7 @@ const enabled = url && new URL(url).hostname === '127.0.0.1' && new URL(url).pat
     const normal = await send(owner, general, 'Shared decision');
     const privateMessage = await send(owner, privateX.id, 'Private decision X');
     await send(owner, privateY.id, 'Private decision Y');
-    const marvConfig: any = { groupChannels: () => ({ enabled: true, groupIds: [], marvEnabled: true }), marvBot: () => ({ enabled: true, userId: bot.id, username: bot.username }) };
+    const marvConfig: any = { groupChannels: () => ({ enabled: true, groupIds: [] }), marvBot: () => ({ enabled: true, userId: bot.id, username: bot.username }) };
     const scope = new ChannelMarvScopeService(db as any, marvConfig, access, realtime);
     const trigger = await send(owner, privateX.id, `@${bot.username} help`);
     const request = { groupId: group, channelId: privateX.id, messageId: trigger.id, requesterId: owner };

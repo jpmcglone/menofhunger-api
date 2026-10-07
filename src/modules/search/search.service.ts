@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -7,6 +7,7 @@ import { PostsService } from '../posts/posts.service';
 import { ArticlesRankingService } from '../articles/articles-ranking.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { ViewerContextService } from '../viewer/viewer-context.service';
+import { JevTopicsService } from '../typesafe/jev-topics.service';
 import { queryToTopicValues } from '../../common/topics/topic-utils';
 import { HASHTAG_IN_TEXT_DISPLAY_RE, parseHashtagsFromText } from '../../common/hashtags/hashtag-regex';
 import { CASHTAG_IN_TEXT_DISPLAY_RE, parseCashtagCandidatesFromText } from '../../common/cashtags/cashtag-regex';
@@ -53,6 +54,9 @@ const USER_SCORE = {
   bioAllWords: 50,
   bioAnyWord: 40,
 } as const;
+
+/** A post search returning fewer rows than this is thin enough to try topic matching. */
+const TOPIC_RESCUE_BELOW = 3;
 
 const POST_SCORE = {
   hashtagMatch: 110,
@@ -175,6 +179,7 @@ export class SearchService {
     private readonly articlesRanking: ArticlesRankingService,
     private readonly viewerContext: ViewerContextService,
     private readonly ticker: TickerService,
+    @Optional() private readonly jevTopics?: JevTopicsService,
   ) {}
 
   private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
@@ -1046,7 +1051,7 @@ export class SearchService {
     const phraseLowers = phrases.map((p) => p.toLowerCase());
     const words = queryToWords(qMatchExpanded);
     const qLower = qMatchExpanded.toLowerCase();
-    const topicValues = queryToTopicValues(qMatchExpanded);
+    let topicValues = queryToTopicValues(qMatchExpanded);
 
     const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
     const allowed = this.allowedVisibilitiesForViewer(viewer);
@@ -1317,6 +1322,23 @@ export class SearchService {
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: fetchSize,
       });
+    }
+
+    // Few hits and no topic recognised: let Jev map the wording to a topic ("gym" -> fitness) and add those posts.
+    // Same visibility filters as above, and topics exist only on public, ungrouped posts.
+    if (raw.length < TOPIC_RESCUE_BELOW && topicValues.length === 0 && hashtags.length === 0 && phrases.length === 0 && words.length > 0 && qMatchBase.length >= 3) {
+      const rescued = await this.jevTopics?.topicsFor(qMatchBase, 'search query').catch(() => null);
+      if (rescued?.length) {
+        const extra = await this.prisma.post.findMany({
+          where: { AND: [{ deletedAt: null }, readableGroupPostWhere, visibilityWhere, kindWhere, { topics: { hasSome: rescued } }] },
+          include: SEARCH_POST_INCLUDE,
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: fetchSize,
+        });
+        const seen = new Set(raw.map((p) => p.id));
+        raw = [...raw, ...extra.filter((p) => !seen.has(p.id))];
+        topicValues = rescued;
+      }
     }
 
     const postIds = raw.map((p) => p.id);

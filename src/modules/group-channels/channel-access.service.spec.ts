@@ -7,7 +7,7 @@ function setup(member: unknown, enabled = true, groupIds: string[] = []) {
     communityGroupMember: { findUnique: jest.fn().mockResolvedValue(member) },
     groupChannel: { findFirst: jest.fn().mockResolvedValue(null) },
   };
-  const config = { groupChannels: () => ({ enabled, groupIds, marvEnabled: false }) };
+  const config = { groupChannels: () => ({ enabled, groupIds }) };
   return { service: new ChannelAccessService(prisma as unknown as PrismaService, config as AppConfigService), prisma };
 }
 const active = { status: 'active', role: 'owner', group: { deletedAt: null }, user: { bannedAt: null, isBot: false, verifiedStatus: 'manual', premium: false, premiumPlus: false } };

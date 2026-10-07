@@ -119,6 +119,10 @@ export type TypeSafeConfig = {
   /** Alias such as `jev-latest`, or a pinned version such as `jev-1.13.0`. */
   model: string;
   timeoutMs: number;
+  /** Dollars one API process may spend on Jev per UTC day before calls stop and callers use their fallbacks. 0 = unlimited. */
+  dailyBudgetUsd: number;
+  /** Price used to turn tokens into dollars. Defaults to the higher published rate so the cap errs safe. */
+  inputUsdPerMillionTokens: number;
   /** Marv tier, web-search and crisis signals. Rules remain the fallback and the crisis floor. */
   routingEnabled: boolean;
   /** Skip paid Marv replies to public mentions that need no answer (thanks, amen, lol). */
@@ -227,7 +231,6 @@ export class AppConfigService {
     return {
       enabled: this.config.get<string>("GROUP_CHANNELS_ENABLED") !== "false",
       groupIds: (this.config.get<string>("GROUP_CHANNELS_GROUP_IDS") ?? "").split(",").map(id => id.trim()).filter(Boolean),
-      marvEnabled: this.config.get<string>("GROUP_CHANNELS_MARV_ENABLED") === "true",
     };
   }
 
@@ -961,6 +964,8 @@ export class AppConfigService {
       apiKey: this.config.get<string>("TYPESAFE_API_KEY")?.trim() ?? "",
       model: this.config.get<string>("TYPESAFE_MODEL")?.trim() || "jev-latest",
       timeoutMs: this.readPositiveInt("TYPESAFE_TIMEOUT_MS", 10_000),
+      dailyBudgetUsd: Math.max(0, Number(this.config.get<string>("TYPESAFE_DAILY_BUDGET_USD") ?? 1) || 0),
+      inputUsdPerMillionTokens: Math.max(0.000001, Number(this.config.get<string>("TYPESAFE_INPUT_USD_PER_MILLION_TOKENS") ?? 0.42) || 0.42),
       routingEnabled: this.readBool("TYPESAFE_ROUTING_ENABLED", true),
       replyGateEnabled: this.readBool("TYPESAFE_REPLY_GATE_ENABLED", true),
       addressingEnabled: this.readBool("TYPESAFE_ADDRESSING_ENABLED", true),

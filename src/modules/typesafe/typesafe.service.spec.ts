@@ -14,9 +14,9 @@ const questions = {
   urgent: { type: 'noul', instructions: 'Escalate now?' },
 } as const;
 
-function makeService(apiKey = 'ts-test') {
+function makeService(apiKey = 'ts-test', dailyBudgetUsd = 0) {
   const appConfig: any = {
-    typeSafe: jest.fn(() => ({ apiKey, model: 'jev-1.13.0', timeoutMs: 4000 })),
+    typeSafe: jest.fn(() => ({ apiKey, model: 'jev-1.13.0', timeoutMs: 4000, dailyBudgetUsd, inputUsdPerMillionTokens: 1 })),
   };
   return new TypeSafeService(appConfig);
 }
@@ -55,5 +55,15 @@ describe('TypeSafeService', () => {
   it('returns null instead of throwing when the API fails', async () => {
     mockSystemOne.mockRejectedValueOnce(new Error('boom'));
     await expect(makeService().decide({ purpose: 'test', state: 'x', questions })).resolves.toBeNull();
+  });
+
+  it('stops calling Jev once the daily dollar budget is spent, then reports it', async () => {
+    mockSystemOne.mockResolvedValue({ model: 'jev-1.13.0', answers: {}, usage: { input_tokens: 60, output_tokens: 1 } });
+    const svc = makeService('ts-test', 0.0001);
+    await svc.decide({ purpose: 'test', state: 'a', questions });
+    await svc.decide({ purpose: 'test', state: 'b', questions });
+    await expect(svc.decide({ purpose: 'test', state: 'c', questions })).resolves.toBeNull();
+    expect(mockSystemOne).toHaveBeenCalledTimes(2);
+    expect(svc.healthSnapshot()).toMatchObject({ inputTokensToday: 120, dailyBudgetUsd: 0.0001, budgetExhausted: true });
   });
 });

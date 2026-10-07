@@ -235,6 +235,7 @@ export class AdminServiceStatusService {
         ],
         extra: () => {
           const health = this.typeSafe.healthSnapshot();
+          if (health.budgetExhausted) return { failing: true, detail: `Daily budget of $${health.dailyBudgetUsd} reached ($${health.spentTodayUsd.toFixed(2)} spent); Jev is paused until tomorrow (UTC).` };
           return health.consecutiveFailures >= 3 ? { failing: true, detail: health.lastFailure } : null;
         },
       },

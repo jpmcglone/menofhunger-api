@@ -12,7 +12,7 @@ function setup() {
   };
   const channel = { id: 'private-x', conversationId: 'conversation', privacy: 'private', archivedAt: null };
   const access = { enabled: () => true, channel: jest.fn().mockResolvedValue({ channel }) };
-  const config = { groupChannels: () => ({ marvEnabled: true }), marvBot: () => ({ enabled: true, username: 'marv' }) };
+  const config = { groupChannels: () => ({}), marvBot: () => ({ enabled: true, username: 'marv' }) };
   const service = new ChannelMarvScopeService(db as never, config as never, access as never, {} as never);
   return { db, access, service };
 }
