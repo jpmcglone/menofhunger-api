@@ -13,6 +13,7 @@ import { CommunityGroupReadAccessService } from '../../viewer/community-group-re
 import { SpacesGatewayHandler } from './gateway-spaces.handler';
 import { OnlineMembersService } from '../online-members.service';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 /** The real shared roster over the fixture's presence mocks: every connected id is a member. */
 function makeOnlineMembers(presenceRedis: any, opts: { marvId?: string | null } = {}) {
   return new OnlineMembersService(
@@ -246,7 +247,7 @@ describe('ContentSubscriptionsHandler', () => {
       communityGroupMember: { findMany: jest.fn().mockResolvedValue(opts.memberships ?? []) },
     } as any;
     const groupReadAccess = new CommunityGroupReadAccessService(prisma, {} as any);
-    return { handler: new ContentSubscriptionsHandler(prisma, groupReadAccess), prisma };
+    return { handler: new ContentSubscriptionsHandler(prisma, groupReadAccess, new PostsReadService(prisma as never)), prisma };
   }
 
   it('puts verified viewers in the members map room and everyone else in the counts room', () => {

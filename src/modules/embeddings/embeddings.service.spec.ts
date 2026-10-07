@@ -1,5 +1,6 @@
 import { EmbeddingsService, groupText, hashText, parseVector, postText, userText, vectorLiteral } from './embeddings.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const create = jest.fn();
 jest.mock('openai', () => ({
   __esModule: true,
@@ -12,7 +13,7 @@ function make(cfg: Partial<{ enabled: boolean; dailyBudgetUsd: number }> = {}, p
       enabled: true, apiKey: 'k', model: 'm', dimensions: 4, dailyBudgetUsd: 1, usdPerMillionTokens: 0.02, ...cfg,
     }),
   };
-  return new EmbeddingsService(config, prisma);
+  return new EmbeddingsService(config, prisma, new PostsReadService(prisma as never));
 }
 
 const reply = (n: number, tokens = 10) => ({

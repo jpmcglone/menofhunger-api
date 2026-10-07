@@ -52,6 +52,7 @@ import {
   youtubeVideoId,
 } from "./youtube-link-metadata";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 export type GroupLinkPreviewDto = {
   slug: string;
   name: string;
@@ -219,6 +220,7 @@ export class LinkMetadataService {
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
     private readonly appConfig: AppConfigService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   /** Returns true if the hostname is a MoH-owned domain (production or dev). */
@@ -1075,7 +1077,7 @@ export class LinkMetadataService {
           : baseWhere;
 
       const posts: Array<{ id: string; createdAt: Date; body: string }> =
-        await this.prisma.post.findMany({
+        await this.postsRead.read.findMany({
           where: pageWhere,
           select: { id: true, createdAt: true, body: true },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],

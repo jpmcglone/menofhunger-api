@@ -13,6 +13,7 @@ import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern
 import { computeCheckinStreakStats } from '../checkins/checkin-streaks';
 import { queryBoolean } from '../../common/validation/query-boolean';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const hashtagBackfillSchema = z.object({
   /** Existing run id. If omitted, a new run is started. */
   runId: z.string().trim().min(1).optional(),
@@ -52,6 +53,7 @@ export class AdminJobsController {
     private readonly jobsStatus: JobsStatusService,
     private readonly entitlement: EntitlementService,
     private readonly tickerIngest: TickerIngestCron,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   @Post('tickers/ingest')
@@ -338,7 +340,7 @@ export class AdminJobsController {
 
     for (const user of users) {
       const userId = user.id;
-      const posts = await this.prisma.post.findMany({
+      const posts = await this.postsRead.read.findMany({
         where: { userId, kind: 'checkin', visibility: { not: 'onlyMe' }, deletedAt: null, isDraft: false },
         select: { createdAt: true, checkinDayKey: true },
         orderBy: { createdAt: 'asc' },

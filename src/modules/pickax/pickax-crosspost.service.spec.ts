@@ -3,6 +3,7 @@ import { resolve } from 'path';
 import { PickaxApiError } from './pickax-api.client';
 import { PickaxCrosspostService } from './pickax-crosspost.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 type PostRow = Record<string, unknown>;
 
 function postRow(overrides: PostRow = {}): PostRow {
@@ -83,14 +84,12 @@ function harness(opts: { post?: PostRow; connected?: boolean } = {}) {
     emitArticlesLiveUpdatedToUser: jest.fn(),
   };
 
-  const service = new PickaxCrosspostService(
-    prisma as never,
+  const service = new PickaxCrosspostService(prisma as never,
     { ensure: async (_user: string, _platform: string, kind: string, id: string) => sideEffects.dispatch('outbound.deliver', { kind, id }) } as never,
     appConfig as never,
     connections as never,
     api as never,
-    realtime as never,
-  );
+    realtime as never, new PostsReadService(prisma as never as never));
 
   return { service, prisma, api, connections, sideEffects, dispatched, postUpdates, crosspostUpserts, realtime };
 }

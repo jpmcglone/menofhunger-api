@@ -28,6 +28,7 @@ import {
   articleNotificationClickPath,
 } from "./notification-article-path";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 /** Kinds that announce the actor's own post/publish. Operators of a page actor already did the action. */
 const ACTOR_SELF_ECHO_KINDS = new Set<NotificationKind>([
   "followed_article",
@@ -81,6 +82,7 @@ export class NotificationWriterService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly postsRead: PostsReadService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly presenceRedis: PresenceRedisStateService,
     private readonly jobs: JobsService,
@@ -199,7 +201,7 @@ export class NotificationWriterService {
     kind: string,
   ): Promise<boolean> {
     if (!postId) return true;
-    const post = await this.prisma.post.findUnique({
+    const post = await this.postsRead.read.findUnique({
       where: { id: postId },
       select: { communityGroupId: true },
     });

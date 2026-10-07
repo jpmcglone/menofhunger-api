@@ -11,6 +11,7 @@ import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import type { CoinTransferDto, CoinTransferReceiptDto, TransferCoinsResponse } from '../../common/dto/coin-transfer.dto';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 export const transferCoinsSchema = z.object({
   postId: z.string().cuid().optional(),
   recipientUsername: z.string().trim().min(1),
@@ -36,6 +37,7 @@ export class CoinsService {
     private readonly sideEffects: SideEffectsService,
     private readonly usersMeRealtime: UsersMeRealtimeService,
     private readonly conversations: ConversationsService = undefined!,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   private async assertCoinsAccess(userId: string) {
@@ -72,7 +74,7 @@ export class CoinsService {
 
     if (params.postId) {
       const readable = await this.conversations.readableWhere(senderUserId);
-      const post = await this.prisma.post.findFirst({ where: { AND: [readable, { id: params.postId, userId: recipient.id, visibility: { not: 'onlyMe' }, kind: { not: 'repost' } }] }, select: { id: true } });
+      const post = await this.postsRead.read.findFirst({ where: { AND: [readable, { id: params.postId, userId: recipient.id, visibility: { not: 'onlyMe' }, kind: { not: 'repost' } }] }, select: { id: true } });
       if (!post) throw new NotFoundException('Post not found.');
     }
     const { senderAfter, transfer } = await this.prisma.$transaction(async (tx) => {

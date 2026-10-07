@@ -1,8 +1,8 @@
 import { NotificationWriterService } from './notification-writer.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function buildWriter(prisma: object, presenceRealtime: object, sideEffects: object): NotificationWriterService {
-  return new NotificationWriterService(
-    prisma as never,
+  return new NotificationWriterService(prisma as never, new PostsReadService(prisma as never as never),
     presenceRealtime as never,
     { isOnline: jest.fn(async () => false), isIdle: jest.fn(async () => false) } as never,
     { enqueueCron: jest.fn() } as never,
@@ -11,8 +11,7 @@ function buildWriter(prisma: object, presenceRealtime: object, sideEffects: obje
     {
       emitWaitingCountForUser: jest.fn(),
       undeliveredBellWhere: (uid: string) => ({ recipientUserId: uid, deliveredAt: null }),      emitNavUnreadForUser: jest.fn(async () => undefined),
-    } as never,
-  );
+    } as never);
 }
 
 function makeDeps() {

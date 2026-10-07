@@ -11,6 +11,7 @@ import { SlackService } from '../../common/slack/slack.service';
 import { easternDayKey, easternMinuteOfDay } from '../../common/time/eastern-day-key';
 import { adminDigestActivityWindow } from './admin-digest-window';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function safeBaseUrl(raw: string | null | undefined): string {
   return ((raw ?? '').trim() || 'https://menofhunger.com').replace(/\/$/, '');
 }
@@ -115,6 +116,7 @@ export class AdminDailyDigestCron {
     private readonly appConfig: AppConfigService,
     private readonly jobs: JobsService,
     private readonly slack: SlackService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   /** Every 5 min: enqueue in the 8:00–8:59am ET window (same hour as user digest). */
@@ -209,11 +211,11 @@ export class AdminDailyDigestCron {
         this.prisma.feedback.count({ where: { createdAt: { gte: windowStart, lt: windowEnd } } }),
         this.prisma.report.count({ where: { createdAt: { gte: windowStart, lt: windowEnd } } }),
         // Top-level posts only (parentId: null); replies counted separately. Board is its own line.
-        this.prisma.post.count({
+        this.postsRead.read.count({
           where: { createdAt: { gte: windowStart, lt: windowEnd }, deletedAt: null, isDraft: false, parentId: null, kind: { not: 'board' } },
         }),
         // Replies / comments (Board comments counted separately)
-        this.prisma.post.count({
+        this.postsRead.read.count({
           where: { createdAt: { gte: windowStart, lt: windowEnd }, deletedAt: null, isDraft: false, parentId: { not: null }, kind: { not: 'board' } },
         }),
         this.prisma.article.count({
@@ -225,7 +227,7 @@ export class AdminDailyDigestCron {
         this.prisma.user.count({ where: { lastSeenAt: { gte: sevenDaysAgo, lt: windowEnd } } }),
         this.prisma.user.count({ where: { bannedAt: { gte: windowStart, lt: windowEnd } } }),
         // Distinct users who published at least one top-level post yesterday
-        this.prisma.post.groupBy({
+        this.postsRead.read.groupBy({
           by: ['userId'],
           where: { createdAt: { gte: windowStart, lt: windowEnd }, deletedAt: null, isDraft: false, parentId: null, kind: { not: 'board' } },
         }),
@@ -272,8 +274,8 @@ export class AdminDailyDigestCron {
 
       const boardWindow = { createdAt: { gte: windowStart, lt: windowEnd }, deletedAt: null, isDraft: false, kind: 'board' as const };
       const [newBoardThreadCount, newBoardCommentCount] = await Promise.all([
-        this.prisma.post.count({ where: { ...boardWindow, parentId: null } }),
-        this.prisma.post.count({ where: { ...boardWindow, parentId: { not: null } } }),
+        this.postsRead.read.count({ where: { ...boardWindow, parentId: null } }),
+        this.postsRead.read.count({ where: { ...boardWindow, parentId: { not: null } } }),
       ]);
 
       // Top post of yesterday: highest trendingScore among top-level posts created in window (admins see all).

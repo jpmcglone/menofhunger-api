@@ -1,5 +1,6 @@
 import { ActivationService } from './activation.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function setup(verified = true) {
   const prisma = {
     user: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findUnique: jest.fn().mockResolvedValue({ verifiedStatus: verified ? 'manual' : 'none', verifiedAt: new Date('2026-09-20T12:00:00Z'), activationCelebratedAt: null }) },
@@ -8,7 +9,7 @@ function setup(verified = true) {
     post: { findFirst: jest.fn().mockResolvedValue(null) },
   };
   const realtime = { emitMeUpdated: jest.fn().mockResolvedValue(undefined) };
-  return { prisma, realtime, service: new ActivationService(prisma as never, realtime as never) };
+  return { prisma, realtime, service: new ActivationService(prisma as never, realtime as never, new PostsReadService(prisma as never as never)) };
 }
 
 describe('ActivationService', () => {

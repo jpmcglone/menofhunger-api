@@ -5,6 +5,7 @@ import { InsufficientMarvCreditsError } from './marvin-credit.service';
 import { MarvinThreadContextService } from './marvin-thread-context.service';
 import type { MarvinCatchUpDto } from '../../../common/dto/marvin';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 /**
  * MarvinCatchUpService gates (enabled + premium + visibility + credits), then summarizes
  * a thread around a focal post. Invariants:
@@ -186,7 +187,7 @@ function makeService(opts?: {
     collect: jest.fn(async () => opts?.context ?? makeContext()),
     // Delegate image selection to the real (pure) implementation shared with the reply path.
     selectImageMedia: (ctx: any, o: any) =>
-      new MarvinThreadContextService({} as any, {} as any).selectImageMedia(ctx, o),
+      new MarvinThreadContextService({} as any, {} as any, new PostsReadService({} as any as never)).selectImageMedia(ctx, o),
   };
   const routing: any = {
     resolve: jest.fn(() => ({ mode: 'regular', reason: 'auto_routed', crisisDetected: false, webSearchDemanded: false })),

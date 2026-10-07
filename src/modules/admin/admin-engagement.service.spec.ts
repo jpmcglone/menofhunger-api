@@ -1,5 +1,6 @@
 import { AdminEngagementService, summarizeAttentionPulse, utcDayMs } from './admin-engagement.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function engagementPrisma() {
   return {
     verificationRequest: {
@@ -33,7 +34,7 @@ function engagementPrisma() {
 describe('admin engagement snapshots', () => {
   it('returns full counts independently of the bounded unanswered preview', async () => {
     const prisma: any = engagementPrisma();
-    const result = await new AdminEngagementService(prisma).attention();
+    const result = await new AdminEngagementService(prisma, new PostsReadService(prisma as never)).attention();
     expect(result.items.find(i => i.id === 'unanswered')?.count).toBe(20);
     expect(result.items.find(i => i.id === 'unanswered')?.path).toBe('/admin/attention/conversations');
     expect(result.items.find(i => i.id === 'unanswered')?.detail).toContain('Member posts are listed first');
@@ -59,7 +60,7 @@ describe('admin engagement snapshots', () => {
       }
       return [];
     });
-    const result = await new AdminEngagementService(prisma).attention();
+    const result = await new AdminEngagementService(prisma, new PostsReadService(prisma as never)).attention();
     expect(result.unansweredPosts).toHaveLength(8);
     expect(result.unansweredPosts.every(post => post.id.startsWith('member-'))).toBe(true);
   });
@@ -67,7 +68,7 @@ describe('admin engagement snapshots', () => {
   it('keeps complete cohort totals when drilling into one stage and binds pagination parameters', async () => {
     const result = { counts: { joined: 100, verified: 70, contributed: 50, returned: 30 }, members: [], matching: 20 };
     const prisma: any = { $queryRaw: jest.fn(async () => [result]) };
-    const data = await new AdminEngagementService(prisma).activation({ days: 90, stage: 'contributed', offset: 25, limit: 25 });
+    const data = await new AdminEngagementService(prisma, new PostsReadService(prisma as never)).activation({ days: 90, stage: 'contributed', offset: 25, limit: 25 });
     expect(data.counts.joined).toBe(100);
     expect(data.matching).toBe(20);
     expect(data.offset).toBe(25);

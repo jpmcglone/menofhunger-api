@@ -27,6 +27,7 @@ import {
 } from "./x-publishing-plan";
 import type { XPublishingWorkspaceDto } from "../../common/dto/integrations.dto";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 @Injectable()
 export class XPublishingService {
   constructor(
@@ -40,10 +41,11 @@ export class XPublishingService {
     private readonly redis: RedisService,
     private readonly realtime: PresenceRealtimeService,
     private readonly usage: XUsageService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   private async source(userId: string, postId: string) {
-    const post = await this.prisma.post.findFirst({
+    const post = await this.postsRead.read.findFirst({
       where: {
         id: postId,
         userId,

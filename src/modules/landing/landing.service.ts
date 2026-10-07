@@ -13,6 +13,7 @@ import { POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.includ
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { ACTIVITY_WINDOW_DAYS, scoreActiveMan } from './landing-score';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 /** Extends the standard poll include with a shallow parent for "Replying to @username". */
 const LANDING_POST_INCLUDE = {
   ...POST_WITH_POLL_INCLUDE,
@@ -86,6 +87,7 @@ export class LandingService {
     private readonly appConfig: AppConfigService,
     private readonly articles: ArticlesService,
     private readonly cache: CacheService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   private get publicBaseUrl(): string | null {
@@ -474,7 +476,7 @@ export class LandingService {
     }
 
     if (poolRows.length === 0) {
-      const fallbackPosts = await this.prisma.post.findMany({
+      const fallbackPosts = await this.postsRead.read.findMany({
         where: {
           deletedAt: null,
           isDraft: false,
@@ -503,7 +505,7 @@ export class LandingService {
 
     const topPostIds = poolRows.map((row) => row.id);
     const topPosts = topPostIds.length
-      ? await this.prisma.post.findMany({
+      ? await this.postsRead.read.findMany({
           where: { id: { in: topPostIds } },
           include: LANDING_POST_INCLUDE,
         })

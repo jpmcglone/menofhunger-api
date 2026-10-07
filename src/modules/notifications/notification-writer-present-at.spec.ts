@@ -9,6 +9,7 @@ import { SideEffectsService } from '../side-effects/side-effects.service';
 import { NotificationQueryService } from './notification-query.service';
 import { NotificationReadStateService } from './notification-read-state.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 type Deps = {
   presenceRedis: { isOnline: jest.Mock; isIdle: jest.Mock };
   presenceRealtime: { emitNotificationsUpdated: jest.Mock; emitNotificationNew: jest.Mock };
@@ -27,15 +28,13 @@ function buildWriter(deps: Deps): NotificationWriterService {
     emitWaitingCountForUser: jest.fn(),
     undeliveredBellWhere: (uid: string) => ({ recipientUserId: uid, deliveredAt: null, kind: { notIn: ['message', 'community_group_post'] } }),    emitNavUnreadForUser: jest.fn(async () => undefined),
   } as unknown as NotificationReadStateService;
-  return new NotificationWriterService(
-    deps.prisma as any,
+  return new NotificationWriterService(deps.prisma as any, new PostsReadService(deps.prisma as any as never),
     deps.presenceRealtime as any,
     deps.presenceRedis as any,
     deps.jobs as any,
     sideEffects,
     query,
-    readState,
-  );
+    readState);
 }
 
 function makeDeps(overrides?: { online?: boolean; idle?: boolean }): Deps {

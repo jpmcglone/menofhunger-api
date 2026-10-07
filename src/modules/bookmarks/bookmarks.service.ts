@@ -9,6 +9,7 @@ import { JOBS } from '../jobs/jobs.constants';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const COLLECTIONS_CACHE_TTL_SECONDS = 60;
 
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean };
@@ -34,6 +35,7 @@ export class BookmarksService {
     private readonly postViews: PostViewsService,
     private readonly jobs: JobsService,
     private readonly redis: RedisService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   private invalidateCollectionsCache(userId: string): void {
@@ -114,7 +116,7 @@ export class BookmarksService {
     const viewer = await this.viewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
-    const post = await this.prisma.post.findFirst({
+    const post = await this.postsRead.read.findFirst({
       where: { id: postId, deletedAt: null },
       select: { id: true, userId: true, visibility: true, communityGroupId: true },
     });
@@ -352,7 +354,7 @@ export class BookmarksService {
 
     // Fetch updated bookmark count for realtime payload (keep REST response stable).
     try {
-      const post = await this.prisma.post.findUnique({
+      const post = await this.postsRead.read.findUnique({
         where: { id: postId },
         select: { bookmarkCount: true },
       });
@@ -406,7 +408,7 @@ export class BookmarksService {
     // Best-effort: removing a bookmark should not require the post to still be visible.
     const postUserId =
       (
-        await this.prisma.post.findUnique({
+        await this.postsRead.read.findUnique({
           where: { id: postId },
           select: { userId: true },
         })
@@ -424,7 +426,7 @@ export class BookmarksService {
 
     // Fetch updated bookmark count for realtime payload (keep REST response stable).
     try {
-      const post = await this.prisma.post.findUnique({
+      const post = await this.postsRead.read.findUnique({
         where: { id: postId },
         select: { bookmarkCount: true },
       });

@@ -1,5 +1,6 @@
 import { LandingService } from './landing.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const NOW = new Date('2026-04-25T03:00:00.000Z');
 const WINDOW_START = new Date(NOW.getTime() - 30 * 86400000);
 
@@ -150,7 +151,7 @@ function makeService(prismaOverride?: ReturnType<typeof makePrisma>) {
   const cache = {
     getOrSetJson: jest.fn(async ({ compute }: { compute: () => Promise<unknown> }) => compute()),
   };
-  const service = new LandingService(prisma as any, config as any, articles as any, cache as any);
+  const service = new LandingService(prisma as any, config as any, articles as any, cache as any, new PostsReadService(prisma as any as never));
   return { service, prisma, articles, cache };
 }
 

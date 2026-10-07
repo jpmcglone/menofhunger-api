@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { CoinsService } from './coins.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function makeService(overrides?: { prisma?: any }) {
   const prisma =
     overrides?.prisma ??
@@ -33,7 +34,7 @@ function makeService(overrides?: { prisma?: any }) {
   const appConfig = { r2: jest.fn(() => null) } as any;
   const sideEffects = { dispatch: jest.fn() } as any;
   const usersMeRealtime = { emitMeUpdated: jest.fn(async () => undefined) } as any;
-  const svc = new CoinsService(prisma, appConfig, sideEffects, usersMeRealtime);
+  const svc = new CoinsService(prisma, appConfig, sideEffects, usersMeRealtime, undefined as never, new PostsReadService(prisma as never));
   return { svc, prisma, sideEffects };
 }
 

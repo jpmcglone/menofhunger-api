@@ -60,6 +60,7 @@ import {
   type BoardRange,
 } from "./board.utils";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 type ThreadRow = Prisma.PostGetPayload<{ include: typeof POST_LIST_INCLUDE }>;
 type CommentRow = Prisma.PostGetPayload<{ include: typeof POST_BASE_INCLUDE }>;
 
@@ -111,6 +112,7 @@ export class BoardService implements OnModuleInit {
     private readonly realtime: PresenceRealtimeService,
     private readonly sideEffects: SideEffectsService,
     private readonly mutes: MutesService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   /** Authors kept off the viewer's Board lists: blocks in either direction, plus people the viewer muted. */
@@ -136,7 +138,7 @@ export class BoardService implements OnModuleInit {
 
   /** One-shot: repair mirrored article comment counts; drop bodies that were auto-copied from the article excerpt. */
   async onModuleInit() {
-    const threads = await this.prisma.post.findMany({
+    const threads = await this.postsRead.read.findMany({
       where: {
         kind: "board",
         articleId: { not: null },
@@ -285,12 +287,12 @@ export class BoardService implements OnModuleInit {
       const cursorWhere = await createdAtIdCursorWhere({
         cursor: params.cursor,
         lookup: (id) =>
-          this.prisma.post.findUnique({
+          this.postsRead.read.findUnique({
             where: { id },
             select: { id: true, createdAt: true },
           }),
       });
-      rows = await this.prisma.post.findMany({
+      rows = await this.postsRead.read.findMany({
         where: cursorWhere ? { AND: [where, cursorWhere] } : where,
         include: POST_LIST_INCLUDE,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -304,7 +306,7 @@ export class BoardService implements OnModuleInit {
       const offset = decodeOffsetCursor(params.cursor);
       const start = params.range ? boardRangeStart(params.range) : null;
       // Top matches the visible vote count. A range only filters creation time.
-      rows = await this.prisma.post.findMany({
+      rows = await this.postsRead.read.findMany({
         where: start ? { AND: [where, { createdAt: { gte: start } }] } : where,
         include: POST_LIST_INCLUDE,
         orderBy: [
@@ -337,7 +339,7 @@ export class BoardService implements OnModuleInit {
   private async findThreadRow(threadId: string): Promise<ThreadRow> {
     const id = (threadId ?? "").trim();
     const row = id
-      ? await this.prisma.post.findFirst({
+      ? await this.postsRead.read.findFirst({
           where: {
             id,
             kind: "board",
@@ -366,7 +368,7 @@ export class BoardService implements OnModuleInit {
     const hiddenAuthors = await this.hiddenAuthorIds(viewer, {
       includeMuted: true,
     });
-    const groups = await this.prisma.post.groupBy({
+    const groups = await this.postsRead.read.groupBy({
       by: ["rootId"],
       where: {
         deletedAt: null,
@@ -552,7 +554,7 @@ export class BoardService implements OnModuleInit {
       throw new BadRequestException(`Add up to ${BOARD_MAX_TAGS} tags.`);
 
     const since = new Date(Date.now() - 60 * 60 * 1000);
-    const recent = await this.prisma.post.count({
+    const recent = await this.postsRead.read.count({
       where: {
         userId,
         kind: "board",
@@ -629,7 +631,7 @@ export class BoardService implements OnModuleInit {
     tags: string[];
     showInFeed: boolean;
   }): Promise<string | null> {
-    const existing = await this.prisma.post.findFirst({
+    const existing = await this.postsRead.read.findFirst({
       where: {
         articleId: params.article.id,
         kind: "board",
@@ -688,7 +690,7 @@ export class BoardService implements OnModuleInit {
       deleted?: boolean;
     },
   ) {
-    const threads = await this.prisma.post.findMany({
+    const threads = await this.postsRead.read.findMany({
       where: { articleId, kind: "board", parentId: null, deletedAt: null },
       select: { id: true },
     });
@@ -732,7 +734,7 @@ export class BoardService implements OnModuleInit {
     threadIds: string[],
   ): Promise<void> {
     for (const id of threadIds) {
-      const commentCount = await this.prisma.post.count({
+      const commentCount = await this.postsRead.read.count({
         where: { rootId: id, deletedAt: null, NOT: { id } },
       });
       await this.prisma.post.update({ where: { id }, data: { commentCount } });
@@ -818,7 +820,7 @@ export class BoardService implements OnModuleInit {
   }
 
   async deletePost(userId: string, postId: string) {
-    const row = await this.prisma.post.findFirst({
+    const row = await this.postsRead.read.findFirst({
       where: { id: postId, kind: "board" },
       select: { id: true },
     });
@@ -863,7 +865,7 @@ export class BoardService implements OnModuleInit {
   ): Promise<BoardCommentContextDto> {
     const id = (commentId ?? "").trim();
     const row = id
-      ? await this.prisma.post.findFirst({
+      ? await this.postsRead.read.findFirst({
           where: { id, kind: "board", parentId: { not: null } },
           select: { id: true, rootId: true, parentId: true },
         })
@@ -894,7 +896,7 @@ export class BoardService implements OnModuleInit {
     threadId: string,
     sort: "top" | "new",
   ) {
-    const rows: CommentRow[] = await this.prisma.post.findMany({
+    const rows: CommentRow[] = await this.postsRead.read.findMany({
       where: { rootId: threadId, kind: "board" },
       include: POST_BASE_INCLUDE,
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -957,7 +959,7 @@ export class BoardService implements OnModuleInit {
     let parentId = root.id;
     let depth = 0;
     if (input.parentId && input.parentId !== root.id) {
-      const parent = await this.prisma.post.findFirst({
+      const parent = await this.postsRead.read.findFirst({
         where: {
           id: input.parentId,
           rootId: root.id,
@@ -993,7 +995,7 @@ export class BoardService implements OnModuleInit {
     let current: string | null = commentId;
     for (let i = 0; i < 64 && current; i++) {
       const row: { parentId: string | null } | null =
-        await this.prisma.post.findUnique({
+        await this.postsRead.read.findUnique({
           where: { id: current },
           select: { parentId: true },
         });
@@ -1038,12 +1040,12 @@ export class BoardService implements OnModuleInit {
     const cursorWhere = await createdAtIdCursorWhere({
       cursor: params.cursor,
       lookup: (id) =>
-        this.prisma.post.findUnique({
+        this.postsRead.read.findUnique({
           where: { id },
           select: { id: true, createdAt: true },
         }),
     });
-    let rows = await this.prisma.post.findMany({
+    let rows = await this.postsRead.read.findMany({
       where: cursorWhere ? { AND: [where, cursorWhere] } : where,
       include: {
         ...POST_BASE_INCLUDE,
@@ -1205,7 +1207,7 @@ export class BoardService implements OnModuleInit {
     const since = new Date(
       Date.now() - BOARD_DUPLICATE_WINDOW_DAYS * 86_400_000,
     );
-    const row = await this.prisma.post.findFirst({
+    const row = await this.postsRead.read.findFirst({
       where: {
         kind: "board",
         parentId: null,

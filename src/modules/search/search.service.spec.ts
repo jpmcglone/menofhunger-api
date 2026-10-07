@@ -1,5 +1,6 @@
 import { SearchService } from './search.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function makeService(viewer: any = null) {
   const prisma: any = {
     post: {
@@ -23,14 +24,12 @@ function makeService(viewer: any = null) {
     }),
   };
 
-  const service = new SearchService(
-    prisma,
+  const service = new SearchService(prisma, new PostsReadService(prisma as never),
     {} as any,
     posts,
     { ensureArticleBoostScoresFresh: async () => {} } as any,
     viewerContext,
-    { isValid: () => false, searchPrefix: async () => [] } as any,
-  );
+    { isValid: () => false, searchPrefix: async () => [] } as any);
 
   return { service, prisma, posts, viewerContext };
 }
@@ -130,7 +129,7 @@ describe('SearchService.searchCommunityGroups — group visibility', () => {
       },
     };
 
-    const service = new SearchService(prisma, {} as any, {} as any, { ensureArticleBoostScoresFresh: async () => {} } as any, {
+    const service = new SearchService(prisma, new PostsReadService(prisma as never), {} as any, {} as any, { ensureArticleBoostScoresFresh: async () => {} } as any, {
       getViewer: jest.fn(async () => null),
       isVerified: jest.fn(() => true),
       allowedPostVisibilities: jest.fn(() => ['public']),
@@ -208,14 +207,12 @@ describe('SearchService.recordUserSearch', () => {
         }),
       },
     };
-    const service = new SearchService(
-      prisma,
+    const service = new SearchService(prisma, new PostsReadService(prisma as never),
       {} as any,
       { ensureBoostScoresFresh: async () => new Map(), computeScoresForPostIds: async () => new Map() } as any,
       { ensureArticleBoostScoresFresh: async () => {} } as any,
       { getViewer: async () => null, isVerified: () => false, allowedPostVisibilities: () => ['public'] } as any,
-      { isValid: () => false, searchPrefix: async () => [] } as any,
-    );
+      { isValid: () => false, searchPrefix: async () => [] } as any);
     return { service, prisma, rows };
   }
 
@@ -296,14 +293,12 @@ describe('SearchService.searchUsers — ranking', () => {
         viewerNotificationPreferences: new Map(),
       })),
     };
-    const service = new SearchService(
-      prisma,
+    const service = new SearchService(prisma, new PostsReadService(prisma as never),
       follows,
       { ensureBoostScoresFresh: async () => new Map(), computeScoresForPostIds: async () => new Map() } as any,
       { ensureArticleBoostScoresFresh: async () => {} } as any,
       { getViewer: async () => null, isVerified: () => false, allowedPostVisibilities: () => ['public'] } as any,
-      { isValid: () => false, searchPrefix: async () => [] } as any,
-    );
+      { isValid: () => false, searchPrefix: async () => [] } as any);
     return { service };
   }
 

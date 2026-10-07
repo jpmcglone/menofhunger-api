@@ -17,6 +17,7 @@ import { parseMentionsFromBody } from '../../../common/mentions/mention-regex';
 import { AppConfigService } from '../../app/app-config.service';
 import { resolveMarvVisionUrl } from './marvin-vision-media';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 const RECENT_MESSAGES_DEFAULT = 10;
 const RECENT_MESSAGES_MAX = 30;
 const SIMILAR_MEMBERS_DEFAULT = 5;
@@ -130,6 +131,7 @@ export class MarvinToolHandlersService {
     private readonly appConfig: AppConfigService,
     private readonly personal: MarvinPersonalService,
     private readonly participation: MarvinParticipationService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   async dispatch(name: string, args: unknown, ctx: MarvAIToolCallContext): Promise<string> {
@@ -340,7 +342,7 @@ export class MarvinToolHandlersService {
     const visibility: Array<'public' | 'verifiedOnly' | 'premiumOnly'> = ['public'];
     if (viewer && viewer.verifiedStatus !== 'none') visibility.push('verifiedOnly');
     if (viewer?.premium || viewer?.premiumPlus) visibility.push('premiumOnly');
-    const root = ctx.rootPostId ? await this.prisma.post.findUnique({ where: { id: ctx.rootPostId }, select: { communityGroupId: true } }) : null;
+    const root = ctx.rootPostId ? await this.postsRead.read.findUnique({ where: { id: ctx.rootPostId }, select: { communityGroupId: true } }) : null;
     const member = root?.communityGroupId ? await this.prisma.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: root.communityGroupId, userId: ctx.requesterUserId } }, select: { status: true } }) : null;
     const permittedGroupId = member?.status === 'active' || viewer?.siteAdmin ? root?.communityGroupId : null;
     return { deletedAt: null, visibility: { in: visibility }, OR: marvToolGroupAccessOr(ctx.rootPostId, permittedGroupId) };
@@ -355,7 +357,7 @@ export class MarvinToolHandlersService {
       key: `marv:tool:post:${parsed.data.postId}:root:${scope}`,
       ttlSeconds: TTL_POST,
       compute: async () => {
-        const post = await this.prisma.post.findFirst({
+        const post = await this.postsRead.read.findFirst({
           where: {
             id: parsed.data.postId,
             ...await this.permittedPostWhere(ctx),
@@ -396,7 +398,7 @@ export class MarvinToolHandlersService {
           });
           if (!exists) return { error: 'user_not_found', posts: [], note: 'No member found with that username.' };
         }
-        const rows = await this.prisma.post.findMany({
+        const rows = await this.postsRead.read.findMany({
           where: {
             deletedAt: null,
             visibility: 'public',
@@ -442,7 +444,7 @@ export class MarvinToolHandlersService {
       key: `marv:tool:thread-recent:${requestedRoot}:${limit}:root:${scope}`,
       ttlSeconds: TTL_THREAD_RECENT,
       compute: async () => {
-        const root = await this.prisma.post.findFirst({
+        const root = await this.postsRead.read.findFirst({
           where: {
             id: requestedRoot,
             ...await this.permittedPostWhere(ctx),
@@ -467,7 +469,7 @@ export class MarvinToolHandlersService {
           },
         });
         if (!root) return { error: 'thread_not_found' };
-        const replies = await this.prisma.post.findMany({
+        const replies = await this.postsRead.read.findMany({
           where: {
             rootId: requestedRoot,
             ...await this.permittedPostWhere(ctx),
@@ -546,7 +548,7 @@ export class MarvinToolHandlersService {
       ttlSeconds: TTL_THREAD_SUMMARY,
       nullTtlSeconds: TTL_NEGATIVE,
       compute: async () => {
-        const root = await this.prisma.post.findFirst({
+        const root = await this.postsRead.read.findFirst({
           where: {
             id: rootPostId,
             ...await this.permittedPostWhere(ctx),
@@ -802,7 +804,7 @@ export class MarvinToolHandlersService {
     };
     add(ctx.requesterUsername);
     if (ctx.rootPostId) {
-      const posts = await this.prisma.post.findMany({
+      const posts = await this.postsRead.read.findMany({
         where: {
           deletedAt: null,
           OR: [{ id: ctx.rootPostId }, { rootId: ctx.rootPostId }],

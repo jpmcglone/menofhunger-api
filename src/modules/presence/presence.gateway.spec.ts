@@ -19,6 +19,7 @@ import { CallsGatewayHandler } from './gateway/gateway-calls.handler';
 import { CommunityGroupReadAccessService } from '../viewer/community-group-read-access.service';
 import { OnlineMembersService } from './online-members.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 /** The real shared roster over the fixture's presence mocks: every connected id is a member. */
 function makeOnlineMembers(presenceRedis: any, opts: { marvId?: string | null } = {}) {
   return new OnlineMembersService(
@@ -291,7 +292,7 @@ function buildGateway(deps: {
   );
   // filterReadableGroupIds doesn't touch ViewerContextService, so a bare stub suffices.
   const groupReadAccess = new CommunityGroupReadAccessService(deps.prisma, {} as any);
-  const subscriptionsHandler = new ContentSubscriptionsHandler(deps.prisma, groupReadAccess);
+  const subscriptionsHandler = new ContentSubscriptionsHandler(deps.prisma, groupReadAccess, new PostsReadService(deps.prisma as never));
   const messagingHandler = new MessagingGatewayHandler(
     deps.presence,
     deps.presenceRedis,

@@ -1,6 +1,7 @@
 import { MarvinMemoryService } from './marvin-memory.service';
 import { memoryScore } from './marvin-memory-policy';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 const question = 'What do we know about marathon training?';
 const ctx = { requesterUserId: 'viewer', triggeringPostId: 'focal', rootPostId: 'focal' };
 const privateCtx = { requesterUserId: 'viewer', conversationId: 'dm-a', requesterMessageId: 'current' };
@@ -24,7 +25,7 @@ function setup() {
     marvinMemorySource: { createMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([]) },
   };
   const posts = { getById: jest.fn().mockResolvedValue({}) };
-  return { prisma, posts, service: new MarvinMemoryService(prisma as any, posts as any) };
+  return { prisma, posts, service: new MarvinMemoryService(prisma as any, posts as any, new PostsReadService(prisma as any as never)) };
 }
 
 it('never lets recency make an unrelated memory relevant, and preserves stronger relevance', () => {

@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { TaxonomyService } from './taxonomy.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function makePrisma(overrides?: Record<string, any>) {
   return {
     taxonomyTerm: {
@@ -61,7 +62,7 @@ describe('TaxonomyService', () => {
         ]),
       },
     });
-    const svc = new TaxonomyService(prisma);
+    const svc = new TaxonomyService(prisma, new PostsReadService(prisma as never));
 
     const a = await svc.search({ q: '', limit: 5 });
     const b = await svc.search({ q: '', limit: 5 });
@@ -79,7 +80,7 @@ describe('TaxonomyService', () => {
         ]),
       },
     });
-    const svc = new TaxonomyService(prisma);
+    const svc = new TaxonomyService(prisma, new PostsReadService(prisma as never));
 
     const out = await svc.search({ q: 'stoicism', limit: 5 });
     expect(out[0]?.slug).toBe('stoicism');
@@ -90,7 +91,7 @@ describe('TaxonomyService', () => {
     const prisma = makePrisma({
       taxonomyTerm: { findUnique: jest.fn(async () => null) },
     });
-    const svc = new TaxonomyService(prisma);
+    const svc = new TaxonomyService(prisma, new PostsReadService(prisma as never));
     await expect(svc.getBySlug('unknown')).resolves.toBeNull();
   });
 
@@ -100,7 +101,7 @@ describe('TaxonomyService', () => {
         findUnique: jest.fn(async () => ({ id: 't1', slug: 'stoicism', label: 'Stoicism', kind: 'topic', status: 'hidden', aliases: [] })),
       },
     });
-    const svc = new TaxonomyService(prisma);
+    const svc = new TaxonomyService(prisma, new PostsReadService(prisma as never));
     await expect(svc.getBySlug('stoicism')).resolves.toBeNull();
   });
 
@@ -117,7 +118,7 @@ describe('TaxonomyService', () => {
         })),
       },
     });
-    const svc = new TaxonomyService(prisma);
+    const svc = new TaxonomyService(prisma, new PostsReadService(prisma as never));
 
     await expect(svc.getBySlug('stoicism')).resolves.toEqual({
       id: 't1',
@@ -133,7 +134,7 @@ describe('TaxonomyService', () => {
     const prisma = makePrisma({
       taxonomyTerm: { count: jest.fn(async () => 0) },
     });
-    const svc = new TaxonomyService(prisma);
+    const svc = new TaxonomyService(prisma, new PostsReadService(prisma as never));
 
     await expect(svc.setUserPreferences('u1', ['term-a', 'term-b'])).rejects.toThrow(BadRequestException);
   });
@@ -152,7 +153,7 @@ describe('TaxonomyService', () => {
         ]),
       },
     });
-    const svc = new TaxonomyService(prisma);
+    const svc = new TaxonomyService(prisma, new PostsReadService(prisma as never));
 
     await svc.setUserPreferences('u1', ['term-a', 'term-a']);
 
@@ -172,7 +173,7 @@ describe('TaxonomyService', () => {
         ]),
       },
     });
-    const svc = new TaxonomyService(prisma);
+    const svc = new TaxonomyService(prisma, new PostsReadService(prisma as never));
 
     await expect(svc.getUserPreferences('u1')).resolves.toEqual([
       { termId: 't1', slug: 'stoicism', label: 'Stoicism', kind: 'topic' },

@@ -4,11 +4,13 @@ import type { ActivationCompletionDto, ActivationDto } from '../../common/dto/ac
 import { UsersMeRealtimeService } from './users-me-realtime.service';
 import { PrismaService } from '../prisma/prisma.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 @Injectable()
 export class ActivationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtime: UsersMeRealtimeService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   async claimCompletion(userId: string): Promise<ActivationCompletionDto> {
@@ -58,15 +60,15 @@ export class ActivationService {
       ...(user.verifiedAt ? { createdAt: { gte: user.verifiedAt } } : {}),
     };
     const [first, reply] = await Promise.all([
-      this.prisma.post.findFirst({ where, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { createdAt: true } }),
-      this.prisma.post.findFirst({ where: { ...where, parent: { userId: { not: userId }, deletedAt: null, user: { isBot: false } } }, select: { id: true } }),
+      this.postsRead.read.findFirst({ where, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { createdAt: true } }),
+      this.postsRead.read.findFirst({ where: { ...where, parent: { userId: { not: userId }, deletedAt: null, user: { isBot: false } } }, select: { id: true } }),
     ]);
     result.contributed = Boolean(first);
     result.replied = Boolean(reply);
     if (first) {
       const nextDay = new Date(first.createdAt);
       nextDay.setUTCHours(24, 0, 0, 0);
-      result.returned = Boolean(await this.prisma.post.findFirst({
+      result.returned = Boolean(await this.postsRead.read.findFirst({
         where: { ...where, createdAt: { gte: nextDay } }, select: { id: true },
       }));
     }

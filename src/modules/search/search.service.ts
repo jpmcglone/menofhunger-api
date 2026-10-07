@@ -21,6 +21,7 @@ import { excludeBoardOnlyWhere } from '../posts/posts-query-builders';
 import { articleAuthorInclude } from '../../common/dto/article.dto';
 import { toCommunityGroupShellDto, type CommunityGroupShellDto } from '../../common/dto/community-group.dto';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 /**
  * Search scoring (higher = better). Used for ranking only; tie-breaks: relationship (users), createdAt (posts).
  * Post search: combines text relevance + popularity score (boost + bookmark + comments, time-decayed).
@@ -182,6 +183,7 @@ function extractQuotedPhrases(q: string): string[] {
 export class SearchService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly postsRead: PostsReadService,
     private readonly follows: FollowsService,
     private readonly posts: PostsService,
     private readonly articlesRanking: ArticlesRankingService,
@@ -968,7 +970,7 @@ export class SearchService {
           : Prisma.sql``;
 
       const cursorRow = cursorPostId
-        ? await this.prisma.post.findUnique({ where: { id: cursorPostId }, select: { id: true, createdAt: true } })
+        ? await this.postsRead.read.findUnique({ where: { id: cursorPostId }, select: { id: true, createdAt: true } })
         : null;
       const cursorSql = cursorRow
         ? Prisma.sql`AND (
@@ -1007,7 +1009,7 @@ export class SearchService {
       const nextCursor = ids.length > limit ? (sliceIds[sliceIds.length - 1] ?? null) : null;
       if (sliceIds.length === 0) return { posts: [], nextCursor: null };
 
-      const rows = await this.prisma.post.findMany({
+      const rows = await this.postsRead.read.findMany({
         where: { id: { in: sliceIds } },
         include: SEARCH_POST_INCLUDE,
       });
@@ -1021,10 +1023,10 @@ export class SearchService {
     const readableGroupPostWhere = this.readableGroupPostWhere(params.viewer);
     const cursorWhere = await createdAtIdCursorWhere({
       cursor: cursorPostId,
-      lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+      lookup: async (id) => await this.postsRead.read.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
     });
 
-    const rows = await this.prisma.post.findMany({
+    const rows = await this.postsRead.read.findMany({
       where: {
         AND: [
           { deletedAt: null },
@@ -1100,10 +1102,10 @@ export class SearchService {
       const cursorWhere = await createdAtIdCursorWhere({
         cursor: (cursor ?? '').trim() || null,
         lookup: async (id) =>
-          await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+          await this.postsRead.read.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
       });
 
-      const rows = await this.prisma.post.findMany({
+      const rows = await this.postsRead.read.findMany({
         where: {
           AND: [
             { deletedAt: null },
@@ -1130,7 +1132,7 @@ export class SearchService {
     if (isHashtagOnly) {
       // Support legacy offset cursor (numeric) but prefer createdAt/id cursor for scalability.
       if (cursorIsOffset) {
-        const rows = await this.prisma.post.findMany({
+        const rows = await this.postsRead.read.findMany({
           where: {
             AND: [{ deletedAt: null }, readableGroupPostWhere, visibilityWhere, kindWhere, hashtagWhere],
           },
@@ -1160,13 +1162,13 @@ export class SearchService {
         const cursorWhere = await createdAtIdCursorWhere({
           cursor: cursorPostId,
           lookup: async (id) =>
-            await this.prisma.post.findUnique({
+            await this.postsRead.read.findUnique({
               where: { id },
               select: { id: true, createdAt: true },
             }),
         });
 
-        const rows = await this.prisma.post.findMany({
+        const rows = await this.postsRead.read.findMany({
           where: {
             AND: [
               { deletedAt: null },
@@ -1287,7 +1289,7 @@ export class SearchService {
 
       const postIds = ids.map((r) => r.id);
       raw = postIds.length
-        ? await this.prisma.post.findMany({
+        ? await this.postsRead.read.findMany({
             where: { id: { in: postIds } },
             include: SEARCH_POST_INCLUDE,
           })
@@ -1323,7 +1325,7 @@ export class SearchService {
               ],
             };
 
-      raw = await this.prisma.post.findMany({
+      raw = await this.postsRead.read.findMany({
         where: baseWhere,
         include: SEARCH_POST_INCLUDE,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -1336,7 +1338,7 @@ export class SearchService {
     if (raw.length < TOPIC_RESCUE_BELOW && topicValues.length === 0 && hashtags.length === 0 && phrases.length === 0 && words.length > 0 && qMatchBase.length >= 3) {
       const rescued = await this.jevTopics?.topicsFor(qMatchBase, 'search query').catch(() => null);
       if (rescued?.length) {
-        const extra = await this.prisma.post.findMany({
+        const extra = await this.postsRead.read.findMany({
           where: { AND: [{ deletedAt: null }, readableGroupPostWhere, visibilityWhere, kindWhere, { topics: { hasSome: rescued } }] },
           include: SEARCH_POST_INCLUDE,
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -1371,7 +1373,7 @@ export class SearchService {
           const have = new Set(raw.map((p) => p.id));
           const missing = near.map((r) => r.id).filter((id) => !have.has(id));
           if (missing.length) {
-            const extra = await this.prisma.post.findMany({ where: { id: { in: missing } }, include: SEARCH_POST_INCLUDE });
+            const extra = await this.postsRead.read.findMany({ where: { id: { in: missing } }, include: SEARCH_POST_INCLUDE });
             raw = [...raw, ...extra];
           }
         }
@@ -1579,7 +1581,7 @@ export class SearchService {
             ],
           },
         }),
-        this.prisma.post.count({
+        this.postsRead.read.count({
           where: {
             AND: [
               { deletedAt: null },

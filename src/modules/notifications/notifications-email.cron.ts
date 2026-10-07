@@ -19,6 +19,7 @@ import { computeCheckinRewards } from '../checkins/checkin-rewards';
 import { CHECKIN_REMINDER_MINUTE } from '../checkins/checkin-schedule';
 import { SlackService } from '../../common/slack/slack.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function safeBaseUrl(raw: string | null): string {
   const base = (raw ?? '').trim() || 'https://menofhunger.com';
   return base.replace(/\/$/, '');
@@ -121,6 +122,7 @@ export class NotificationsEmailCron {
     private readonly jobs: JobsService,
     private readonly messages: MessagesService,
     private readonly slack: SlackService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   private notificationsFromAddress(): string | undefined {
@@ -712,17 +714,17 @@ export class NotificationsEmailCron {
       const weeklyFeaturedSelect = { id: true, body: true, createdAt: true, user: { select: { username: true, name: true } } } satisfies Prisma.PostSelect;
       const weeklyCreatedAtWindow = { gte: weekWindowStart, lt: weekWindowEnd };
 
-      const weeklyFeaturedPostPublic = await this.prisma.post.findFirst({
+      const weeklyFeaturedPostPublic = await this.postsRead.read.findFirst({
         where: { deletedAt: null, parentId: null, kind: { not: 'board' }, visibility: { in: ['public'] }, createdAt: weeklyCreatedAtWindow },
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         select: weeklyFeaturedSelect,
       });
-      const weeklyFeaturedPostVerified = await this.prisma.post.findFirst({
+      const weeklyFeaturedPostVerified = await this.postsRead.read.findFirst({
         where: { deletedAt: null, parentId: null, kind: { not: 'board' }, visibility: { in: ['public', 'verifiedOnly'] }, createdAt: weeklyCreatedAtWindow },
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         select: weeklyFeaturedSelect,
       });
-      const weeklyFeaturedPostPremium = await this.prisma.post.findFirst({
+      const weeklyFeaturedPostPremium = await this.postsRead.read.findFirst({
         where: { deletedAt: null, parentId: null, kind: { not: 'board' }, visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] }, createdAt: weeklyCreatedAtWindow },
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         select: weeklyFeaturedSelect,
@@ -784,7 +786,7 @@ export class NotificationsEmailCron {
         boardThread: { select: { title: true, domain: true } },
       } satisfies Prisma.PostSelect;
       const weeklyTopBoardFor = (visibilities: PostVisibility[]) =>
-        this.prisma.post.findMany({
+        this.postsRead.read.findMany({
           where: {
             kind: 'board',
             parentId: null,
@@ -947,7 +949,7 @@ export class NotificationsEmailCron {
                 take: 6,
                 select: weeklyTopArticleSelect,
               }),
-              this.prisma.post.findMany({
+              this.postsRead.read.findMany({
                 where: {
                   deletedAt: null,
                   parentId: null,

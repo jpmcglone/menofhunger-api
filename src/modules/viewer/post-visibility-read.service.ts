@@ -12,6 +12,7 @@ import { buildAttachParentChain } from '../posts/posts.utils';
 import { toPostDto, type PostDto } from '../../common/dto/post.dto';
 import { toCommunityGroupPreviewDto, type CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 export type VisiblePost = Prisma.PostGetPayload<{ include: typeof POST_WITH_POLL_INCLUDE }>;
 
 /**
@@ -27,6 +28,7 @@ export type VisiblePost = Prisma.PostGetPayload<{ include: typeof POST_WITH_POLL
 export class PostVisibilityReadService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly postsRead: PostsReadService,
     private readonly appConfig: AppConfigService,
     private readonly viewerContextService: ViewerContextService,
     private readonly redis?: RedisService,
@@ -87,7 +89,7 @@ export class PostVisibilityReadService {
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.viewerContextService.allowedPostVisibilities(viewer);
 
-    const fetched = await this.prisma.post.findMany({
+    const fetched = await this.postsRead.read.findMany({
       where: {
         id: { in: uniqueIds },
         ...(includeDeleted ? {} : { deletedAt: null }),

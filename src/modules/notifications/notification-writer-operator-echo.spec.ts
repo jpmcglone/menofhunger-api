@@ -1,5 +1,6 @@
 import { NotificationWriterService } from './notification-writer.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function makeService() {
   const prisma = {
     userPageOperator: {
@@ -8,15 +9,13 @@ function makeService() {
     },
     notification: { create: jest.fn() },
   };
-  const service = new NotificationWriterService(
-    prisma as never,
+  const service = new NotificationWriterService(prisma as never, new PostsReadService(prisma as never as never),
     { emitNotificationsUpdated: jest.fn() } as never,
     { isOnline: jest.fn().mockResolvedValue(false) } as never,
     { dispatch: jest.fn() } as never,
     { dispatch: jest.fn() } as never,
     { getOne: jest.fn() } as never,
-    { undeliveredBellWhere: jest.fn() } as never,
-  );
+    { undeliveredBellWhere: jest.fn() } as never);
   return { service, prisma };
 }
 
@@ -44,15 +43,13 @@ describe('NotificationWriterService — person-only kinds skip pages', () => {
       userPageOperator: { findUnique: jest.fn(), findMany: jest.fn(async () => []) },
       notification: { create: jest.fn() },
     };
-    const service = new NotificationWriterService(
-      prisma as never,
+    const service = new NotificationWriterService(prisma as never, new PostsReadService(prisma as never as never),
       { emitNotificationsUpdated: jest.fn() } as never,
       { isOnline: jest.fn().mockResolvedValue(false) } as never,
       { dispatch: jest.fn() } as never,
       { dispatch: jest.fn() } as never,
       { getOne: jest.fn() } as never,
-      { undeliveredBellWhere: jest.fn() } as never,
-    );
+      { undeliveredBellWhere: jest.fn() } as never);
 
     await service.create({
       recipientUserId: 'news',

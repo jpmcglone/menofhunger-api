@@ -7,6 +7,7 @@ import type { ChannelMediaService } from '../group-channels/channel-media.servic
 import type { MessagesService } from '../messages/messages.service';
 import type { ViewerContextService } from '../viewer/viewer-context.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function fixture() {
   const prisma = { message: { findFirst: jest.fn() }, article: { findFirst: jest.fn() }, report: { create: jest.fn(input => input.data) } };
   const channels = { channel: jest.fn() };
@@ -14,7 +15,7 @@ function fixture() {
   const viewer = { getViewer: jest.fn(), allowedPostVisibilities: jest.fn(() => ['public']) };
   const service = new ReportsService(prisma as unknown as PrismaService, {} as SlackService,
     channels as unknown as ChannelAccessService, messages as unknown as MessagesService,
-    viewer as unknown as ViewerContextService, {} as ChannelMediaService);
+    viewer as unknown as ViewerContextService, {} as ChannelMediaService, new PostsReadService(prisma as unknown as PrismaService as never));
   return { service, prisma, channels, messages };
 }
 const input = { reporterUserId: 'member', reason: 'other' as const, details: null };

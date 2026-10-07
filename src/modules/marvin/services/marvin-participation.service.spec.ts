@@ -1,5 +1,6 @@
 import { MarvinParticipationService } from './marvin-participation.service';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 describe('participation suggestions', () => {
   it('ranks followed and shared-interest authors, diversifies authors, and queries only eligible public posts', async () => {
     const post = (id: string, userId: string, interests: string[] = [], replies = 0) => ({ id, userId, body: id, user: { username: userId, name: null, interests }, _count: { replies } });
@@ -8,7 +9,7 @@ describe('participation suggestions', () => {
       follow: { findMany: jest.fn(async () => [{ followingId: 'friend' }]) },
       post: { findMany: jest.fn(async () => [post('recent', 'stranger'), post('shared', 'runner', ['running']), post('followed', 'friend'), post('duplicate', 'friend')]) },
     };
-    const result = await new MarvinParticipationService(prisma).suggestions('me', 'focal');
+    const result = await new MarvinParticipationService(prisma, new PostsReadService(prisma as never)).suggestions('me', 'focal');
     expect(result.suggestions.map(p => p.postId)).toEqual(['followed', 'shared', 'recent']);
     expect(result.suggestions[1].reason).toBe('Shared interest: running');
     const { where, take } = prisma.post.findMany.mock.calls[0][0];

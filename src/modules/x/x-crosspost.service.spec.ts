@@ -2,6 +2,7 @@ import { X_NATIVE_COST_MICROS } from "../../common/crosspost/crosspost-eligibili
 import { XApiError } from "./x-api.client";
 import { XCrosspostService } from "./x-crosspost.service";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 type Row = Record<string, unknown> | null;
 
 function postRow(overrides: Record<string, unknown> = {}) {
@@ -123,16 +124,14 @@ function harness(
     emitArticlesLiveUpdatedToUser: jest.fn(),
   };
   const budgets = { recordLegacy: jest.fn(), settle: jest.fn() };
-  const service = new XCrosspostService(
-    prisma as never,
+  const service = new XCrosspostService(prisma as never,
     { ensure: async () => sideEffects.dispatch("outbound.deliver") } as never,
     { settle: jest.fn(), reserve: jest.fn(async () => true) } as never,
     appConfig as never,
     connections as never,
     api as never,
     realtime as never,
-    budgets as never,
-  );
+    budgets as never, new PostsReadService(prisma as never as never));
   return {
     service,
     prisma,

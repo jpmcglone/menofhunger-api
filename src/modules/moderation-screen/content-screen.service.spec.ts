@@ -1,5 +1,6 @@
 import { classify, ContentScreenService } from './content-screen.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const moderationsCreate = jest.fn();
 jest.mock('openai', () => ({
   __esModule: true,
@@ -13,7 +14,7 @@ function make(post: any, postCount = 50, enabled = true) {
     report: { findFirst: jest.fn(async () => null), create: jest.fn(async () => ({})) },
   };
   const config: any = { contentScreen: () => ({ enabled, apiKey: 'k' }) };
-  return { svc: new ContentScreenService(config, prisma), prisma };
+  return { svc: new ContentScreenService(config, prisma, new PostsReadService(prisma as never)), prisma };
 }
 const post = (over: any = {}) => ({
   id: 'p1', userId: 'u1', body: 'a perfectly ordinary post body',

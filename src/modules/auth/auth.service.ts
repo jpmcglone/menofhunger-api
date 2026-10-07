@@ -37,6 +37,7 @@ import { PresenceService } from '../presence/presence.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 /** TTL for the full session cache (auth guards). Short enough to pick up bans/revocations quickly. */
 const SESSION_FULL_CACHE_TTL_MS = 30_000;
 const ACCOUNT_DELETION_PENDING_REASON = 'self_deleted_pending';
@@ -112,6 +113,7 @@ export class AuthService {
     private readonly presence: PresenceService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly sideEffects: SideEffectsService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   private maskPhone(phone: string) {
@@ -667,7 +669,7 @@ export class AuthService {
     // Safety: only-me posts should never be pinnable/show on profiles.
     // If a user already pinned an only-me post (legacy bug), auto-unpin on read.
     if (pinnedPostId) {
-      const pinned = await this.prisma.post.findFirst({
+      const pinned = await this.postsRead.read.findFirst({
         where: { id: pinnedPostId, userId, deletedAt: null },
         select: { visibility: true },
       });
@@ -687,7 +689,7 @@ export class AuthService {
       // Only run on a suspicious "awarded today but streak=1" state.
       if (lastKey === todayKey && currentStreak === 1) {
         const since = new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000);
-        const rows = await this.prisma.post.findMany({
+        const rows = await this.postsRead.read.findMany({
           where: {
             userId,
             kind: 'checkin',

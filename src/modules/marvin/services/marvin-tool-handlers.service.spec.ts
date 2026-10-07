@@ -1,6 +1,7 @@
 import { MarvinToolHandlersService } from './marvin-tool-handlers.service';
 import type { MarvAIToolCallContext } from './marvin-ai.service';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 /**
  * Fake CacheService that mimics `getOrSetJson` / `getOrSetNullableJson` semantics
  * with an in-memory map. Lets us assert on cache hit/miss and recompute counts
@@ -104,8 +105,7 @@ function makeService() {
   };
   const jobs: any = { enqueue: jest.fn(async () => undefined) };
   const appConfig: any = { r2: jest.fn(() => ({ publicBaseUrl: 'https://cdn.test' })) };
-  const svc = new MarvinToolHandlersService(
-    prisma,
+  const svc = new MarvinToolHandlersService(prisma,
     identity,
     fake.cache,
     contextCard,
@@ -113,8 +113,7 @@ function makeService() {
     jobs,
     appConfig,
     {} as any,
-    {} as any,
-  );
+    {} as any, new PostsReadService(prisma as never));
   return { svc, prisma, identity, cache: fake, contextCard, scripture, jobs, appConfig };
 }
 

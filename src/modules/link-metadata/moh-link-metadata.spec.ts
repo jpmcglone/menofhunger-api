@@ -1,9 +1,10 @@
 import { LinkMetadataService } from './link-metadata.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function setup() {
   const cache = { getJson: jest.fn() };
   const prisma = { linkMetadata: { findUnique: jest.fn() } };
-  const service = new LinkMetadataService(prisma as any, cache as any, { frontendBaseUrl: () => 'https://menofhunger.com' } as any);
+  const service = new LinkMetadataService(prisma as any, cache as any, { frontendBaseUrl: () => 'https://menofhunger.com' } as any, new PostsReadService(prisma as any as never));
   return { service, cache, prisma };
 }
 

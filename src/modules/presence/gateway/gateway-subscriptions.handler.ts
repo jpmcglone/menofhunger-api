@@ -21,6 +21,7 @@ import {
 } from './gateway-rooms';
 import { canSeeMembers } from '../../auth/member-visibility';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 /**
  * Content room subscriptions: posts, groups, and articles. Each subscribe is
  * access-gated (visibility tier, group membership) so a socket can never sit
@@ -31,6 +32,7 @@ export class ContentSubscriptionsHandler {
   constructor(
     private readonly prisma: PrismaService,
     private readonly groupReadAccess: CommunityGroupReadAccessService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   async handlePostsSubscribe(client: Socket, payload: Partial<PostsSubscribePayloadDto>): Promise<void> {
@@ -52,7 +54,7 @@ export class ContentSubscriptionsHandler {
     const viewerIsVerified = viewerIsAdmin || Boolean(viewer?.verified);
     const viewerIsPremium = viewerIsAdmin || Boolean(viewer?.premium) || Boolean(viewer?.premiumPlus);
 
-    const rows = await this.prisma.post.findMany({
+    const rows = await this.postsRead.read.findMany({
       where: { id: { in: toConsider }, deletedAt: null },
       select: { id: true, userId: true, visibility: true, communityGroupId: true },
     });

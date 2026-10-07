@@ -7,6 +7,7 @@ import { NotificationQueryService } from './notification-query.service';
 import { NotificationWriterService } from './notification-writer.service';
 import { PostVisibilityReadService } from '../viewer/post-visibility-read.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 type FacadeDeps = {
   prisma: any;
   appConfig: any;
@@ -32,7 +33,7 @@ function buildFacade(deps: FacadeDeps) {
   deps.prisma.userMute ??= { findMany: jest.fn(async () => []) };
   const preferences = new NotificationPreferencesService(deps.prisma, noopCache);
   const apnsPush = new ApnsPushService(deps.prisma, deps.appConfig, noopCache);
-  const push = new NotificationPushService(deps.prisma, deps.appConfig, deps.presence, preferences, apnsPush, noopCache);
+  const push = new NotificationPushService(deps.prisma, deps.appConfig, deps.presence, preferences, apnsPush, noopCache, new PostsReadService(deps.prisma as never));
   // Stands in for the side-effects worker: runs the push handler inline so push assertions
   // still exercise the real payload through the new dispatch seam.
   const sideEffects = {
@@ -41,9 +42,9 @@ function buildFacade(deps: FacadeDeps) {
     }),
   } as any;
   const readState = new NotificationReadStateService(deps.prisma, deps.presenceRealtime, deps.posthog, sideEffects);
-  const postVisibility = new PostVisibilityReadService(deps.prisma, deps.appConfig, deps.viewerContextService);
-  const query = new NotificationQueryService(deps.prisma, deps.appConfig, postVisibility, readState);
-  const writer = new NotificationWriterService(deps.prisma, deps.presenceRealtime, deps.presenceRedis ?? stubPresenceRedis, deps.jobs, sideEffects, query, readState);
+  const postVisibility = new PostVisibilityReadService(deps.prisma, new PostsReadService(deps.prisma as never), deps.appConfig, deps.viewerContextService);
+  const query = new NotificationQueryService(deps.prisma, new PostsReadService(deps.prisma as never), deps.appConfig, postVisibility, readState);
+  const writer = new NotificationWriterService(deps.prisma, new PostsReadService(deps.prisma as never), deps.presenceRealtime, deps.presenceRedis ?? stubPresenceRedis, deps.jobs, sideEffects, query, readState);
   const svc = new NotificationsService(preferences, push, apnsPush, readState, query, writer);
   return { svc, preferences, push, apnsPush, readState, query, writer, sideEffects, postVisibility };
 }
@@ -181,7 +182,7 @@ describe('Board and article unread activity filtering', () => {
   it('partitions unread and all-activity first-page caches', async () => {
     const keys: string[] = [];
     const cache = { getOrSetJsonWithLock: jest.fn(async (args: { key: string }) => { keys.push(args.key); return { items: [] }; }) };
-    const query = new NotificationQueryService({} as any, {} as any, {} as any, {} as any, cache as any,
+    const query = new NotificationQueryService({} as any, {} as any, {} as any, {} as any, {} as any, cache as any,
       { notificationsListVersion: async () => 1 } as any);
     for (const unreadOnly of [true, false, undefined]) await query.list({ recipientUserId: 'viewer', limit: 30, cursor: null, kind: 'board', unreadOnly });
     await query.list({ recipientUserId: 'viewer', limit: 30, cursor: null, kind: 'board', unreadOnly: true, boardCommentsOnly: true });
@@ -1001,15 +1002,13 @@ describe('NotificationWriterService bell-counter eligibility', () => {
       },
       user: { update: userUpdate },
     };
-    const writer = new NotificationWriterService(
-      { $transaction: jest.fn(async (callback: any) => callback(tx)) } as any,
+    const writer = new NotificationWriterService({ $transaction: jest.fn(async (callback: any) => callback(tx)) } as any, new PostsReadService({ $transaction: jest.fn(async (callback: any) => callback(tx)) } as any as never),
       { emitNotificationsUpdated: jest.fn(), emitNotificationNew: jest.fn() } as any,
       { isOnline: jest.fn(async () => false), isIdle: jest.fn(async () => false) } as any,
       { enqueueCron: jest.fn() } as any,
       { dispatch: jest.fn() } as any,
       { buildNotificationDtoForRecipient: jest.fn(async () => null) } as any,
-      { undeliveredBellWhere: jest.fn(() => ({})), emitWaitingCountForUser: jest.fn(), emitNavUnreadForUser: jest.fn() } as any,
-    );
+      { undeliveredBellWhere: jest.fn(() => ({})), emitWaitingCountForUser: jest.fn(), emitNavUnreadForUser: jest.fn() } as any);
 
     await writer.create({
       recipientUserId: 'u_recipient',

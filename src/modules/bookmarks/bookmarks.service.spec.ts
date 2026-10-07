@@ -1,6 +1,7 @@
 import { ForbiddenException } from '@nestjs/common';
 import { BookmarksService } from './bookmarks.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 // Locks in the realtime fan-out contract for bookmarks: every change to the
 // bookmark count must reach BOTH the actor/author (via posts:interaction, used
 // to flip viewerHasBookmarked) AND the post room (via posts:liveUpdated, used
@@ -66,14 +67,12 @@ function makeService(overrides: Partial<Record<string, any>> = {}) {
   };
 
   const deps = { prisma, presenceRealtime, viewerContext, postViews, jobs, redis, ...overrides };
-  const service = new BookmarksService(
-    deps.prisma,
+  const service = new BookmarksService(deps.prisma,
     deps.presenceRealtime,
     deps.viewerContext,
     deps.postViews,
     deps.jobs,
-    deps.redis,
-  );
+    deps.redis, new PostsReadService(deps.prisma as never));
   return { service, deps };
 }
 

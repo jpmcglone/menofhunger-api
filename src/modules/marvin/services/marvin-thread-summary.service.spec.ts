@@ -1,5 +1,6 @@
 import { MarvinThreadSummaryService } from './marvin-thread-summary.service';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 /**
  * MarvinThreadSummaryService keeps a per-thread rolling summary fresh.
  * Two invariants matter:
@@ -61,7 +62,7 @@ function makeService(opts?: {
   };
 
   return {
-    service: new MarvinThreadSummaryService(prisma, ai),
+    service: new MarvinThreadSummaryService(prisma, ai, new PostsReadService(prisma as never)),
     findUniqueSummary,
     findManyPosts,
     upsertSummary,

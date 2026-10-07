@@ -6,6 +6,7 @@ import { publicAssetUrl } from "../../common/assets/public-asset-url";
 import type { PublicProfileDto } from "../../common/dto";
 import { PublicProfileCacheService } from "./public-profile-cache.service";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function formatBirthdayMonthDay(birthdate: Date): string {
   // Use UTC to avoid timezone surprises.
   const month = birthdate.getUTCMonth(); // 0-11
@@ -71,6 +72,7 @@ export class UsersRealtimeService {
       id: string;
       username: string | null;
     }>,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   async getPublicProfileDtoByUserId(
@@ -124,7 +126,7 @@ export class UsersRealtimeService {
     // Safety: only-me posts should never be pinnable/show on profiles.
     let pinnedPostId: string | null = user.pinnedPostId ?? null;
     if (pinnedPostId) {
-      const pinned = await this.prisma.post.findFirst({
+      const pinned = await this.postsRead.read.findFirst({
         where: { id: pinnedPostId, userId: user.id, deletedAt: null },
         select: { visibility: true },
       });

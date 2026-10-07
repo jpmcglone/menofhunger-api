@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 type SearchTaxonomyParams = {
   q: string;
   limit: number;
@@ -41,7 +42,7 @@ function slugify(raw: string): string {
 export class TaxonomyService {
   private readonly searchCache = new Map<string, { expiresAt: number; data: TaxonomySearchResult[] }>();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly postsRead: PostsReadService) {}
 
   private setSearchCache(key: string, data: TaxonomySearchResult[]) {
     const now = Date.now();
@@ -252,12 +253,12 @@ export class TaxonomyService {
     for (const term of terms) {
       const [articleCount, postCount, hashtagCount, recentArticleCount, recentPostCount] = await Promise.all([
         this.prisma.articleTag.count({ where: { tag: term.slug } }),
-        this.prisma.post.count({ where: { topics: { has: term.slug }, deletedAt: null } }),
+        this.postsRead.read.count({ where: { topics: { has: term.slug }, deletedAt: null } }),
         this.prisma.hashtag.count({ where: { tag: term.slug } }),
         this.prisma.articleTag.count({
           where: { tag: term.slug, article: { publishedAt: { gte: lookbackStart }, deletedAt: null, isDraft: false } },
         }),
-        this.prisma.post.count({
+        this.postsRead.read.count({
           where: { topics: { has: term.slug }, createdAt: { gte: lookbackStart }, deletedAt: null },
         }),
       ]);

@@ -15,6 +15,7 @@ import { NotificationPreferencesService } from './notification-preferences.servi
 import { ApnsPushService } from './apns-push.service';
 import { crewStreakBrokenPushBody } from './crew-streak-broken-copy';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 export type PushActorContext = {
   id: string;
   username: string | null;
@@ -111,6 +112,7 @@ export class NotificationPushService {
     private readonly preferences: NotificationPreferencesService,
     private readonly apnsPush: ApnsPushService,
     private readonly cache: CacheService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   /**
@@ -1218,7 +1220,7 @@ export class NotificationPushService {
       const [actor, mediaPost, threadPost, group] = await Promise.all([
         actorUserId ? this.getActorMini(actorUserId) : null,
         mediaPostId
-          ? this.prisma.post.findUnique({
+          ? this.postsRead.read.findUnique({
               where: { id: mediaPostId },
               select: {
                 id: true,
@@ -1241,7 +1243,7 @@ export class NotificationPushService {
             })
           : null,
         threadPostId && threadPostId !== mediaPostId
-          ? this.prisma.post.findUnique({
+          ? this.postsRead.read.findUnique({
               where: { id: threadPostId },
               select: { id: true, deletedAt: true, rootId: true },
             })

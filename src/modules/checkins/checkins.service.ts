@@ -19,6 +19,7 @@ import { SideEffectsService } from '../side-effects/side-effects.service';
 
 import { checkinSchedule, isCheckinOpen, CHECKIN_CLOSED_MESSAGE } from './checkin-schedule';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const LEADERBOARD_CACHE_TTL_SECONDS = 60;
 const WEEKLY_LEADERBOARD_CACHE_TTL_SECONDS = 120;
 const TODAY_STATE_CACHE_TTL_SECONDS = 120;
@@ -49,6 +50,7 @@ export class CheckinsService implements OnModuleInit {
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly sideEffects: SideEffectsService,
     private readonly registry: SideEffectsRegistry,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   onModuleInit(): void {
@@ -107,7 +109,7 @@ export class CheckinsService implements OnModuleInit {
     if (!user) throw new NotFoundException('User not found.');
 
     const hasCheckedInToday = Boolean(
-      await this.prisma.post.findFirst({
+      await this.postsRead.read.findFirst({
         where: { userId, kind: 'checkin', checkinDayKey: dayKey, deletedAt: null },
         select: { id: true },
       }),
@@ -182,7 +184,7 @@ export class CheckinsService implements OnModuleInit {
     if (!crew || crew.deletedAt) return null;
 
     const memberIds = crew.members.map((m) => m.user.id);
-    const checkedIn = await this.prisma.post.findMany({
+    const checkedIn = await this.postsRead.read.findMany({
       where: {
         kind: 'checkin',
         checkinDayKey: params.dayKey,
@@ -345,7 +347,7 @@ export class CheckinsService implements OnModuleInit {
 
     // Count distinct members who have a non-deleted check-in for this dayKey.
     // We rely on the one-checkin-per-user-per-day invariant enforced by PostsService.
-    const checkedInCount = await this.prisma.post.count({
+    const checkedInCount = await this.postsRead.read.count({
       where: {
         kind: 'checkin',
         checkinDayKey: dayKey,
@@ -409,7 +411,7 @@ export class CheckinsService implements OnModuleInit {
 
     // Total: cheap count over today's check-ins (one row per user per day).
     // We deliberately exclude `onlyMe` posts since they aren't part of the social signal.
-    const totalToday = await this.prisma.post.count({
+    const totalToday = await this.postsRead.read.count({
       where: {
         kind: 'checkin',
         checkinDayKey: dayKey,
@@ -433,7 +435,7 @@ export class CheckinsService implements OnModuleInit {
     // Pull a small recent window — enough to reorder by follow bias without needing
     // a complex SQL window function.
     const recentLimit = 5;
-    const candidatePool = await this.prisma.post.findMany({
+    const candidatePool = await this.postsRead.read.findMany({
       where: {
         kind: 'checkin',
         checkinDayKey: dayKey,

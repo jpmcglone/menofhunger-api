@@ -1,5 +1,6 @@
 import { PostViewsService } from './post-views.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 describe('PostViewsService.markViewed', () => {
   function makeService(opts?: { createdCount?: number; impressionCount?: number; lastSeenCount?: number }) {
     const createdCount = opts?.createdCount ?? 0;
@@ -66,15 +67,13 @@ describe('PostViewsService.markViewed', () => {
       markReadBySubject: jest.fn(async () => undefined),
       markReadBySubjects: jest.fn(async () => undefined),
     };
-    const service = new PostViewsService(
-      prisma as any,
+    const service = new PostViewsService(prisma as any,
       cache as any,
       redis as any,
       cacheInvalidation as any,
       presenceRealtime as any,
       posthog as any,
-      notifications as any,
-    );
+      notifications as any, new PostsReadService(prisma as any as never));
     return { service, prisma, tx, redis, cacheInvalidation, presenceRealtime, posthog, notifications };
   }
 
@@ -318,15 +317,13 @@ describe('PostViewsService.markViewedBatch', () => {
       markReadBySubject: jest.fn(async () => undefined),
       markReadBySubjects: jest.fn(async () => undefined),
     };
-    const service = new PostViewsService(
-      prisma as any,
+    const service = new PostViewsService(prisma as any,
       cache as any,
       redis as any,
       cacheInvalidation as any,
       presenceRealtime as any,
       posthog as any,
-      notifications as any,
-    );
+      notifications as any, new PostsReadService(prisma as any as never));
     return {
       service,
       prisma,

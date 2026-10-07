@@ -6,6 +6,7 @@ import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 export type EmbeddingKind = 'post' | 'group' | 'user';
 
 const MIN_POST_CHARS = 24;
@@ -45,6 +46,7 @@ export class EmbeddingsService {
   constructor(
     private readonly config: AppConfigService,
     private readonly prisma: PrismaService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   available(): boolean {
@@ -289,7 +291,7 @@ export class EmbeddingsService {
   }
 
   private async postCandidate(postId: string): Promise<Candidate | null> {
-    const post = await this.prisma.post.findFirst({
+    const post = await this.postsRead.read.findFirst({
       where: { id: postId, deletedAt: null, isDraft: false, kind: { not: 'repost' }, visibility: { not: 'onlyMe' } },
       select: { id: true, body: true, hashtags: true },
     });

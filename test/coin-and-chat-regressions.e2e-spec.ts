@@ -4,6 +4,7 @@ import { PrismaClient } from '@prisma/client';
 import { CoinsService } from '../src/modules/coins/coins.service';
 import { MessagesService } from '../src/modules/messages/messages.service';
 
+import { PostsReadService } from '../src/modules/posts-read/posts-read.service';
 const databaseUrl = process.env.REGRESSION_DATABASE_URL;
 const databaseTests = databaseUrl ? describe : describe.skip;
 
@@ -32,7 +33,7 @@ databaseTests('coin concurrency and chat deletion (PostgreSQL)', () => {
       `CREATE TABLE "MessageParticipant" ("conversationId" text NOT NULL, "userId" text NOT NULL, status text NOT NULL, PRIMARY KEY ("conversationId", "userId"))`,
       `CREATE TABLE "MessageDeletion" ("messageId" text NOT NULL, "userId" text NOT NULL, PRIMARY KEY ("messageId", "userId"))`,
     ]) await db.$executeRawUnsafe(sql);
-    coins = new CoinsService(db as any, { r2: () => null } as any, { dispatch: jest.fn() } as any, { emitMeUpdated } as any);
+    coins = new CoinsService(db as any, { r2: () => null } as any, { dispatch: jest.fn() } as any, { emitMeUpdated } as any, undefined as never, new PostsReadService(db as any as never));
   }, 30000);
 
   afterAll(async () => {

@@ -5,6 +5,7 @@
  */
 import { NotificationsEmailCron } from './notifications-email.cron';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 // Minimal factory that produces a NotificationsEmailCron with everything mocked.
 function makeCron(overrides?: {
   notifFindMany?: jest.Mock;
@@ -40,7 +41,7 @@ function makeCron(overrides?: {
   const messages = { getUnreadSummary: jest.fn(async () => ({ primary: 0, requests: 0 })) } as any;
   const slack = { post: jest.fn() } as any;
 
-  return new NotificationsEmailCron(prisma, email, appConfig, jobs, messages, slack);
+  return new NotificationsEmailCron(prisma, email, appConfig, jobs, messages, slack, new PostsReadService(prisma as never));
 }
 
 // Access private methods for focused unit tests.

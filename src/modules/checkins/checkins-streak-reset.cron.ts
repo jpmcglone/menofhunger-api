@@ -11,6 +11,7 @@ import { RedisKeys } from '../redis/redis-keys';
 import { NotificationsService } from '../notifications/notifications.service';
 import { crewStreakBrokenPushDelayMs, STREAK_RESET_MINUTE } from './checkin-schedule';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 /**
  * Nightly job that resets checkinStreakDays to 0 for every user who did not
  * check in on the previous ET calendar day (or today). Without this, stale streak
@@ -28,6 +29,7 @@ export class CheckinsStreakResetCron {
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly redis: RedisService,
     private readonly notifications: NotificationsService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   /** Fire once the clock hits 1:00am ET, once per day (deduplicated by dayKey). */
@@ -174,7 +176,7 @@ export class CheckinsStreakResetCron {
       if (memberIds.length === 0) continue;
 
       // Identify who actually missed yesterday so we can name names in the push/UI.
-      const checkedIn = await this.prisma.post.findMany({
+      const checkedIn = await this.postsRead.read.findMany({
         where: {
           kind: 'checkin',
           checkinDayKey: yesterdayKey,
@@ -278,7 +280,7 @@ export class CheckinsStreakResetCron {
     const memberIds = crew.members.map((m) => m.userId);
     if (memberIds.length === 0) return;
 
-    const checkedIn = await this.prisma.post.findMany({
+    const checkedIn = await this.postsRead.read.findMany({
       where: {
         kind: 'checkin',
         checkinDayKey: missedDayKey,

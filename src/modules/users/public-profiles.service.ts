@@ -12,6 +12,7 @@ import { AppConfigService } from "../app/app-config.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { PublicProfileCacheService } from "./public-profile-cache.service";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 export type PublicProfilePayload = {
   id: string;
   createdAt: string;
@@ -109,6 +110,7 @@ export class PublicProfilesService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly cache: PublicProfileCacheService<PublicProfilePayload>,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   async batchOrgAffiliations(
@@ -191,7 +193,7 @@ export class PublicProfilesService {
         const verifiedStatus = fresh?.verifiedStatus ?? cached.verifiedStatus;
         let pinnedPostId = fresh?.pinnedPostId ?? cached.pinnedPostId;
         if (pinnedPostId) {
-          const pinned = await this.prisma.post.findFirst({
+          const pinned = await this.postsRead.read.findFirst({
             where: { id: pinnedPostId, userId: cached.id, deletedAt: null },
             select: { visibility: true },
           });
@@ -300,7 +302,7 @@ export class PublicProfilesService {
 
     let pinnedPostId = user.pinnedPostId ?? null;
     if (pinnedPostId) {
-      const pinned = await this.prisma.post.findFirst({
+      const pinned = await this.postsRead.read.findFirst({
         where: { id: pinnedPostId, userId: user.id, deletedAt: null },
         select: { visibility: true },
       });
@@ -387,7 +389,7 @@ export class PublicProfilesService {
           where: { userId: payload.id, crew: { deletedAt: null } },
           select: { crewId: true },
         }),
-        this.prisma.post.count({ where: totalUserPostsWhere(payload.id) }),
+        this.postsRead.read.count({ where: totalUserPostsWhere(payload.id) }),
         this.prisma.article.count({
           where: totalUserArticlesWhere(payload.id),
         }),

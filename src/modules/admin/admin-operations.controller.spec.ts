@@ -10,6 +10,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { BillingService } from "../billing/billing.service";
 import { ApiExceptionFilter } from "../../common/filters/api-exception.filter";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 describe("Admin operations HTTP boundary", () => {
   let app: INestApplication;
   const auth = { meFromSessionToken: jest.fn(), setSessionCookie: jest.fn() };
@@ -29,9 +30,10 @@ describe("Admin operations HTTP boundary", () => {
       controllers: [AdminOperationsController],
       providers: [
         AdminGuard,
-        { provide: AdminEngagementService, useFactory: () => new AdminEngagementService(prisma as any) },
+        { provide: AdminEngagementService, useFactory: () => new AdminEngagementService(prisma as any, new PostsReadService(prisma as any as never)) },
         { provide: AuthService, useValue: auth },
         { provide: PrismaService, useValue: prisma },
+        { provide: PostsReadService, useFactory: () => new PostsReadService(prisma as never) },
         { provide: BillingService, useValue: billing },
       ],
     }).compile();

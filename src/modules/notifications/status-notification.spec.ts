@@ -16,6 +16,7 @@ import { NotificationQueryService } from './notification-query.service';
 import { NotificationWriterService } from './notification-writer.service';
 import { PostVisibilityReadService } from '../viewer/post-visibility-read.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const stubPresenceRedis = { isOnline: jest.fn(async () => false), isIdle: jest.fn(async () => false) };
 const stubPresenceRealtime = {
   emitNotificationsUpdated: jest.fn(),
@@ -84,7 +85,7 @@ function buildServices(prismaOverrides: Record<string, any>) {
   };
   const preferences = new NotificationPreferencesService(prisma, noopCache);
   const apnsPush = new ApnsPushService(prisma, stubAppConfig, noopCache);
-  const push = new NotificationPushService(prisma, stubAppConfig, stubPresence as any, preferences, apnsPush, noopCache);
+  const push = new NotificationPushService(prisma, stubAppConfig, stubPresence as any, preferences, apnsPush, noopCache, new PostsReadService(prisma as never));
   // Stands in for the side-effects worker: runs the push handler inline so these tests keep
   // asserting the real push payload (url, coalesce tag) through the new dispatch seam.
   const sideEffects = {
@@ -93,9 +94,9 @@ function buildServices(prismaOverrides: Record<string, any>) {
     },
   } as any;
   const readState = new NotificationReadStateService(prisma, stubPresenceRealtime as any, stubPosthog as any, sideEffects);
-  const postVisibility = new PostVisibilityReadService(prisma, stubAppConfig, stubViewerContext as any);
-  const query = new NotificationQueryService(prisma, stubAppConfig, postVisibility, readState);
-  const writer = new NotificationWriterService(prisma, stubPresenceRealtime as any, stubPresenceRedis as any, stubJobs as any, sideEffects, query, readState);
+  const postVisibility = new PostVisibilityReadService(prisma, new PostsReadService(prisma as never), stubAppConfig, stubViewerContext as any);
+  const query = new NotificationQueryService(prisma, new PostsReadService(prisma as never), stubAppConfig, postVisibility, readState);
+  const writer = new NotificationWriterService(prisma, new PostsReadService(prisma as never), stubPresenceRealtime as any, stubPresenceRedis as any, stubJobs as any, sideEffects, query, readState);
   const svc = new NotificationsService(preferences, push, apnsPush, readState, query, writer);
   return { svc, prisma, push };
 }

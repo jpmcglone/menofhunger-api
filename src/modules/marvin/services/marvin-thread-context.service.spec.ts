@@ -1,5 +1,6 @@
 import { MarvinThreadContextService } from './marvin-thread-context.service';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 /**
  * MarvinThreadContextService loads the full public thread (same root), then
  * splits it into posts before the focal (ancestors) and after it (descendants).
@@ -62,7 +63,7 @@ function makeService(opts: {
   };
 
   return {
-    service: new MarvinThreadContextService(prisma, identity),
+    service: new MarvinThreadContextService(prisma, identity, new PostsReadService(prisma as never)),
     findFirst,
     findMany,
     count,
@@ -222,7 +223,7 @@ function ctxPost(id: string, depth: number, media: Array<{ kind: string; source:
 }
 
 describe('MarvinThreadContextService.selectImageMedia', () => {
-  const svc = new MarvinThreadContextService({} as any, {} as any);
+  const svc = new MarvinThreadContextService({} as any, {} as any, new PostsReadService({} as any as never));
   const opts = { visionEnabled: true, visionMaxImagesPerTurn: 8, publicBaseUrl: 'https://cdn.test' };
 
   it('includes all images from a single multi-image post (2 and 4)', () => {

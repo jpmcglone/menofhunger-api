@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { SlackService } from '../../common/slack/slack.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 @Injectable()
 export class ReportsService {
   constructor(
@@ -17,6 +18,7 @@ export class ReportsService {
     private readonly messages: MessagesService,
     private readonly viewer: ViewerContextService,
     private readonly channelMedia: ChannelMediaService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   readReportedMedia(reportId: string, mediaId: string, thumbnail: boolean, range?: string) {
@@ -51,7 +53,7 @@ export class ReportsService {
       const postId = input.subjectPostId;
       if (!postId) throw new NotFoundException();
 
-      const post = await this.prisma.post.findFirst({
+      const post = await this.postsRead.read.findFirst({
         where: { id: postId, deletedAt: null },
         select: { id: true },
       });

@@ -73,6 +73,7 @@ import {
   MembersMapRealtimeService,
 } from "./members-map-realtime.service";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const setUsernameSchema = z.object({
   username: z.string().min(1),
 });
@@ -265,6 +266,7 @@ export class UsersController {
     private readonly auth: AuthService,
     private readonly profileWrite: UsersProfileWriteService,
     private readonly membersMapRealtime: MembersMapRealtimeService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   private async viewerCanSeeLastOnline(
@@ -1183,7 +1185,7 @@ export class UsersController {
           })
         : Promise.resolve(null),
       profileId
-        ? this.prisma.post.count({ where: totalUserPostsWhere(profileId) })
+        ? this.postsRead.read.count({ where: totalUserPostsWhere(profileId) })
         : Promise.resolve(0),
       profileId
         ? this.prisma.article.count({
@@ -1361,7 +1363,7 @@ export class UsersController {
     const postId = (parsed.postId ?? "").trim();
     if (!postId) throw new BadRequestException("postId is required.");
 
-    const post = await this.prisma.post.findFirst({
+    const post = await this.postsRead.read.findFirst({
       where: { id: postId, deletedAt: null },
       select: { id: true, userId: true, visibility: true },
     });

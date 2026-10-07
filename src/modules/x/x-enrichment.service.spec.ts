@@ -2,6 +2,7 @@ import { XProfilePreviewService } from "./x-profile-preview.service";
 import { XAuthorMetricsService } from "./x-author-metrics.service";
 import { X_REFERENCE_PRICES } from "./integration-budget.policy";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function harness() {
   const cache = new Map<string, unknown>();
   const held = new Set<string>();
@@ -101,8 +102,7 @@ function harness() {
         invalidate: jest.fn(),
       } as any,
     ),
-    metrics: new XAuthorMetricsService(
-      prisma as any,
+    metrics: new XAuthorMetricsService(prisma as any,
       redis as any,
       config as any,
       budgets as any,
@@ -114,8 +114,7 @@ function harness() {
         saveProfile: jest.fn(),
         saveMetrics: jest.fn(),
         invalidate: jest.fn(),
-      } as any,
-    ),
+      } as any, new PostsReadService(prisma as any as never)),
   };
 }
 

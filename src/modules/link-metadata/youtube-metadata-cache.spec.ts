@@ -3,6 +3,7 @@ import { RedisKeys } from '../redis/redis-keys';
 import { LinkMetadataService } from './link-metadata.service';
 import { LinkMetadataController } from './link-metadata.controller';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const url = 'https://www.youtube.com/watch?v=yVm8vDoMzYs';
 function setup() {
   const values = new Map<string, unknown>([[RedisKeys.linkMeta(url), { meta: null }]]);
@@ -16,7 +17,7 @@ function setup() {
       imageUrl: null, socialPost: null, videoEmbed: null, updatedAt: new Date() })),
     upsert: jest.fn(async (args) => ({ ...args.create, socialPost: null, videoEmbed: null })),
   } };
-  const service = new LinkMetadataService(prisma as any, new CacheService(redis as any), { frontendBaseUrl: () => '' } as any);
+  const service = new LinkMetadataService(prisma as any, new CacheService(redis as any), { frontendBaseUrl: () => '' } as any, new PostsReadService(prisma as any as never));
   return { service, prisma, redis, values };
 }
 

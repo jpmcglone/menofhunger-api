@@ -21,6 +21,7 @@ import {
   type PickaxPostSource,
 } from './pickax-content';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 export type PickaxQueueResult =
   | { status: 'queued'; mode: CrosspostMode }
   | { status: 'skipped'; reason: string };
@@ -38,6 +39,7 @@ export class PickaxCrosspostService {
     private readonly connections: PickaxConnectionService,
     private readonly api: PickaxApiClient,
     private readonly realtime: PresenceRealtimeService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   // ─── Request path ──────────────────────────────────────────────────────────
@@ -346,7 +348,7 @@ export class PickaxCrosspostService {
   }
 
   private async loadPost(postId: string): Promise<{ userId: string; boardTitle: string | null; source: PickaxPostSource } | null> {
-    const post = await this.prisma.post.findUnique({
+    const post = await this.postsRead.read.findUnique({
       where: { id: postId },
       select: {
         id: true,

@@ -1,5 +1,6 @@
 import { MarvinPersonalService } from './marvin-personal.service';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 function setup() {
   const rows: any[] = [];
   const prisma: any = {
@@ -20,7 +21,7 @@ function setup() {
   const bookmarks: any = { setBookmark: jest.fn(async () => ({})) };
   const preferences: any = { getPreferences: jest.fn(async () => ({ pushBoost: true })), updatePreferences: jest.fn(async (_id, changes) => changes) };
   const realtime: any = { emitMarvActionsUpdated: jest.fn() };
-  return { svc: new MarvinPersonalService(prisma, bookmarks, preferences, realtime), prisma, bookmarks, preferences, realtime, rows };
+  return { svc: new MarvinPersonalService(prisma, bookmarks, preferences, realtime, new PostsReadService(prisma as never)), prisma, bookmarks, preferences, realtime, rows };
 }
 const ctx = { requesterUserId: 'member', requesterMessageId: 'message', conversationId: 'direct' };
 

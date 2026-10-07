@@ -9,6 +9,7 @@ import {
 } from './auth.constants';
 import { hmacSha256Hex, randomSessionToken } from './auth.utils';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const HMAC_SECRET = 'test-secret';
 
 function makeMinimalUser(overrides?: Record<string, unknown>) {
@@ -131,7 +132,7 @@ function makeService(overrides?: { prisma?: any }) {
   const presenceRealtime = { emitReferralRecruitUpdated: jest.fn() } as any;
 
   const sideEffects = { dispatch: jest.fn() } as any;
-  const svc = new AuthService(prisma, appConfig, cacheInvalidation, redis, otpProvider, posthog, slack, requestCache, presence, presenceRealtime, sideEffects);
+  const svc = new AuthService(prisma, appConfig, cacheInvalidation, redis, otpProvider, posthog, slack, requestCache, presence, presenceRealtime, sideEffects, new PostsReadService(prisma as never));
   return { svc, prisma, token, tokenHash, presence, posthog, sideEffects, redis, cacheInvalidation, requestCache };
 }
 
@@ -366,8 +367,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
     const presenceRealtime: any = { emitReferralRecruitUpdated: jest.fn() };
 
-    const svc = new AuthService(
-      prisma,
+    const svc = new AuthService(prisma,
       appConfig,
       cacheInvalidation,
       redis,
@@ -377,8 +377,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
       requestCache,
       presence,
       presenceRealtime,
-      { dispatch: jest.fn() } as any,
-    );
+      { dispatch: jest.fn() } as any, new PostsReadService(prisma as never));
 
     const a = await svc.meFromSessionToken(token);
     const b = await svc.meFromSessionToken(token);
@@ -428,8 +427,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
     const presenceRealtime: any = { emitReferralRecruitUpdated: jest.fn() };
 
-    const svc = new AuthService(
-      prisma,
+    const svc = new AuthService(prisma,
       appConfig,
       cacheInvalidation,
       redis,
@@ -439,8 +437,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
       requestCache,
       presence,
       presenceRealtime,
-      { dispatch: jest.fn() } as any,
-    );
+      { dispatch: jest.fn() } as any, new PostsReadService(prisma as never));
 
     // Simulate 5 concurrent requests all calling meFromSessionToken with the
     // same cookie at the same instant. Each uses a fresh AsyncLocalStorage
@@ -509,8 +506,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
     const presenceRealtime: any = { emitReferralRecruitUpdated: jest.fn() };
 
-    const svc = new AuthService(
-      prisma,
+    const svc = new AuthService(prisma,
       appConfig,
       cacheInvalidation,
       redis,
@@ -520,8 +516,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
       requestCache,
       presence,
       presenceRealtime,
-      { dispatch: jest.fn() } as any,
-    );
+      { dispatch: jest.fn() } as any, new PostsReadService(prisma as never));
 
     await svc.meFromSessionToken(token);
 
@@ -591,8 +586,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
     const presenceRealtime: any = { emitReferralRecruitUpdated: jest.fn() };
 
-    const svc = new AuthService(
-      prisma,
+    const svc = new AuthService(prisma,
       appConfig,
       cacheInvalidation,
       redis,
@@ -602,8 +596,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
       requestCache,
       presence,
       presenceRealtime,
-      { dispatch: jest.fn() } as any,
-    );
+      { dispatch: jest.fn() } as any, new PostsReadService(prisma as never));
 
     const result = await svc.meFromSessionToken(token);
     expect(result).not.toBeNull();

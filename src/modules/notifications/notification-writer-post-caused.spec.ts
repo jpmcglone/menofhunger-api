@@ -1,3 +1,4 @@
+import { PostsReadService } from '../posts-read/posts-read.service';
 import { NotificationWriterService } from './notification-writer.service';
 
 /**
@@ -10,6 +11,7 @@ import { NotificationWriterService } from './notification-writer.service';
 function buildWriter(prisma: object, presenceRealtime: object, sideEffects: object, mutes?: object): NotificationWriterService {
   return new NotificationWriterService(
     prisma as never,
+    new PostsReadService(prisma as never),
     presenceRealtime as never,
     { isOnline: jest.fn(async () => false), isIdle: jest.fn(async () => false) } as never,
     { enqueueCron: jest.fn() } as never,

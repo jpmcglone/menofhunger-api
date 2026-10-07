@@ -1,6 +1,7 @@
 import { XPublishingService } from "./x-publishing.service";
 import { xSourceHash } from "./x-publishing-plan";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function fixture() {
   const source = {
     body: "Hello",
@@ -84,8 +85,7 @@ function fixture() {
     emitPostsLiveUpdated: jest.fn(),
     emitPostsLiveUpdatedToUser: jest.fn(),
   };
-  const service = new XPublishingService(
-    prisma,
+  const service = new XPublishingService(prisma,
     config,
     connections,
     {} as any,
@@ -94,8 +94,7 @@ function fixture() {
     {} as any,
     {} as any,
     realtime,
-    { recordShared: jest.fn(), settle: jest.fn() } as any,
-  );
+    { recordShared: jest.fn(), settle: jest.fn() } as any, new PostsReadService(prisma as never));
   return {
     service,
     source,

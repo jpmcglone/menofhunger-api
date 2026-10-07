@@ -7,6 +7,7 @@ import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { PARTNER_POST_SELECT, PARTNER_PROFILE_SELECT } from './partner.constants';
 import type { PartnerContentDto, PartnerProfileDto, PartnerVerificationDto } from './partner.dto';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 export type PartnerPageQuery = { cursor?: string; limit: number; q?: string };
 export function decodePartnerCursor(cursor?: string): { id: string; createdAt: Date } | undefined {
   if (!cursor) return undefined;
@@ -28,7 +29,7 @@ const page = <T extends { id: string; createdAt: Date }>(rows: T[], limit: numbe
 
 @Injectable()
 export class PartnerReadService {
-  constructor(private readonly prisma: PrismaService, private readonly cfg: AppConfigService) {}
+  constructor(private readonly prisma: PrismaService, private readonly cfg: AppConfigService, private readonly postsRead: PostsReadService) {}
   private userWhere(viewer: string): Prisma.UserWhereInput {
     return { bannedAt: null, username: { not: null }, blocksInitiated: { none: { blockedId: viewer } }, blocksReceived: { none: { blockerId: viewer } } };
   }
@@ -83,7 +84,7 @@ export class PartnerReadService {
     while (next) {
       if (seen.has(next) || seen.size >= 100) throw new NotFoundException();
       seen.add(next);
-      const row: Prisma.PostGetPayload<{ select: typeof PARTNER_POST_SELECT }> | null = await this.prisma.post.findFirst({ where: { AND: [this.postWhere(viewer), { id: next }] }, select: this.postSelect(viewer) });
+      const row: Prisma.PostGetPayload<{ select: typeof PARTNER_POST_SELECT }> | null = await this.postsRead.read.findFirst({ where: { AND: [this.postWhere(viewer), { id: next }] }, select: this.postSelect(viewer) });
       if (!row) throw new NotFoundException();
       if (row.articleId) await this.article(viewer, row.articleId);
       result ??= this.postDto(row);
@@ -104,7 +105,7 @@ export class PartnerReadService {
   async posts(viewer: string, query: PartnerPageQuery, filter: { userId?: string; parentId?: string; articleId?: string } = {}) {
     if (filter.parentId) await this.post(viewer, filter.parentId);
     if (filter.articleId) await this.article(viewer, filter.articleId);
-    const rows = await this.prisma.post.findMany({ where: { AND: [this.postWhere(viewer), after(query), {
+    const rows = await this.postsRead.read.findMany({ where: { AND: [this.postWhere(viewer), after(query), {
       ...filter, parentId: filter.parentId ?? null, ...(filter.parentId ? {} : { articleId: filter.articleId ?? null }),
       ...(query.q ? { body: { contains: query.q, mode: 'insensitive' } } : {}),
     }] }, select: this.postSelect(viewer), orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: query.limit + 1 });

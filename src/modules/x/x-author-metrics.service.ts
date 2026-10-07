@@ -9,6 +9,7 @@ import { XApiClient } from "./x-api.client";
 import { XConnectionService } from "./x-connection.service";
 import type { XAuthorMetricsDto } from "../../common/dto/integrations.dto";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 @Injectable()
 export class XAuthorMetricsService {
   constructor(
@@ -19,10 +20,11 @@ export class XAuthorMetricsService {
     private readonly api: XApiClient,
     private readonly connections: XConnectionService,
     private readonly snapshots: XPublicSnapshotService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   async get(userId: string, postId: string): Promise<XAuthorMetricsDto | null> {
-    const post = await this.prisma.post.findFirst({
+    const post = await this.postsRead.read.findFirst({
       where: {
         id: postId,
         userId,

@@ -4,6 +4,7 @@ import { MarvinBotIdentityService } from './marvin-bot-identity.service';
 import { resolveMarvVisionUrl } from './marvin-vision-media';
 import { windowThreadAroundFocal } from './marvin-thread-window';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 /** Safety cap so a mega-thread cannot blow the prompt. Typical MOH threads fit entirely. */
 const DEFAULT_THREAD_LIMIT = 80;
 /** A Board post's title and link are its subject; put them ahead of the text Marv reads. */
@@ -110,6 +111,7 @@ export class MarvinThreadContextService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly identity: MarvinBotIdentityService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   async collect(params: {
@@ -130,7 +132,7 @@ export class MarvinThreadContextService {
     const threadLimit = params.threadLimit ?? DEFAULT_THREAD_LIMIT;
 
     try {
-      const focalMeta = await this.prisma.post.findFirst({
+      const focalMeta = await this.postsRead.read.findFirst({
         where: { id: focalPostId, deletedAt: null },
         select: { id: true, rootId: true },
       });
@@ -144,8 +146,8 @@ export class MarvinThreadContextService {
 
       const [marvUserId, totalInThread, rows] = await Promise.all([
         this.identity.getMarvUserId(),
-        this.prisma.post.count({ where: threadWhere }),
-        this.prisma.post.findMany({
+        this.postsRead.read.count({ where: threadWhere }),
+        this.postsRead.read.findMany({
           where: threadWhere,
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
           select: {

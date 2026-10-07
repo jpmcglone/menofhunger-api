@@ -6,6 +6,7 @@ import { LinkMetadataService } from '../link-metadata/link-metadata.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { BOARD_MAX_TAGS, normalizeBoardTags } from './board.utils';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 /** Links read per post: the post's own link plus the first few in its text. */
 const MAX_LINKS = 4;
 /** Established tags offered to the model so the Board converges on a shared vocabulary. */
@@ -47,10 +48,11 @@ export class BoardTaggerService {
     private readonly ai: AiUtilityService,
     private readonly linkMetadata: LinkMetadataService,
     private readonly realtime: PresenceRealtimeService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   async tagThread(threadId: string): Promise<string[] | null> {
-    const row = await this.prisma.post.findFirst({
+    const row = await this.postsRead.read.findFirst({
       where: { id: threadId, kind: 'board', parentId: null, deletedAt: null },
       select: {
         id: true,

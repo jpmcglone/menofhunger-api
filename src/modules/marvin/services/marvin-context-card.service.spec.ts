@@ -1,5 +1,6 @@
 import { MarvinContextCardService } from './marvin-context-card.service';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 /**
  * Safety-focused unit tests for the Marv context card pipeline.
  *
@@ -87,7 +88,7 @@ function makeService(opts?: {
   const linkMetadata: any = { previewLinks: jest.fn(async () => []) };
 
   return {
-    service: new MarvinContextCardService(prisma, ai, appConfig, linkMetadata),
+    service: new MarvinContextCardService(prisma, ai, appConfig, linkMetadata, new PostsReadService(prisma as never)),
     prisma,
     ai,
     findManyPosts,

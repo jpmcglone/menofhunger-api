@@ -43,6 +43,7 @@ import { UploadsService } from "../uploads/uploads.service";
 import { UserVerificationService } from "../verification/user-verification.service";
 import { PagesService } from "../pages/pages.service";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const paginatedSearchSchema = z.object({
   q: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -111,6 +112,7 @@ export class AdminUsersController {
     private readonly uploads: UploadsService,
     private readonly userVerification: UserVerificationService,
     private readonly pages: PagesService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   private get publicBaseUrl(): string | null {
@@ -496,13 +498,13 @@ export class AdminUsersController {
     const cursorWhere = await createdAtIdCursorWhere({
       cursor: cursor ?? null,
       lookup: async (id) =>
-        this.prisma.post.findUnique({
+        this.postsRead.read.findUnique({
           where: { id },
           select: { id: true, createdAt: true, userId: true },
         }),
     });
 
-    const rows = await this.prisma.post.findMany({
+    const rows = await this.postsRead.read.findMany({
       where: {
         userId: user.id,
         deletedAt: null,

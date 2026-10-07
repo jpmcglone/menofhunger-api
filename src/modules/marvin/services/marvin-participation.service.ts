@@ -2,16 +2,17 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { MarvinParticipationDto } from '../../../common/dto/marvin/marvin-personal.dto';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 @Injectable()
 export class MarvinParticipationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly postsRead: PostsReadService) {}
 
   async suggestions(userId: string, excludePostId?: string): Promise<MarvinParticipationDto> {
     const now = new Date();
     const [viewer, follows, posts] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: userId }, select: { interests: true } }),
       this.prisma.follow.findMany({ where: { followerId: userId }, select: { followingId: true }, take: 1000 }),
-      this.prisma.post.findMany({ where: {
+      this.postsRead.read.findMany({ where: {
         id: excludePostId ? { not: excludePostId } : undefined,
         userId: { not: userId }, visibility: 'public', communityGroupId: null, parentId: null,
         kind: 'regular', isDraft: false, deletedAt: null, createdAt: { gte: new Date(now.getTime() - 14 * 86400000) },

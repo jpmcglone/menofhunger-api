@@ -102,6 +102,7 @@ describe('PublicProfilesService.getAnonymousProfile', () => {
     service.batchOrgAffiliations = jest.fn().mockResolvedValue(
       new Map([['user-1', [{ id: 'org-1', username: 'moh', name: 'MoH', avatarUrl: null }]]]),
     );
+    service.postsRead = { read: { count: jest.fn().mockResolvedValue(12), aggregate: jest.fn().mockResolvedValue({ _sum: { boostCount: 7 } }) } };
     service.prisma = {
       crewMember: { findFirst: jest.fn().mockResolvedValue({ crewId: 'crew-1' }) },
       post: { count: jest.fn().mockResolvedValue(12), aggregate: jest.fn().mockResolvedValue({ _sum: { boostCount: 7 } }) },

@@ -48,6 +48,7 @@ import { SideEffectsConsumersModule } from '../side-effects/side-effects-consume
 import { RedisModule } from '../redis/redis.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { ViewerContextModule } from '../viewer/viewer-context.module';
+import { PostsReadModule } from '../posts-read/posts-read.module';
 import { DomainEventsModule } from '../events/domain-events.module';
 import { DailyContentModule } from '../daily-content/daily-content.module';
 import { CheckinsModule } from '../checkins/checkins.module';
@@ -99,6 +100,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     AppConfigModule,
     SiteConfigModule,
     ViewerContextModule,
+    PostsReadModule,
     DomainEventsModule,
     RealtimeModule,
     BullModule.forRootAsync({

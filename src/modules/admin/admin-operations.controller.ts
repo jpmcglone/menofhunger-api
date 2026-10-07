@@ -19,6 +19,7 @@ import type {
   AdminOperationsHealthDto,
 } from "../../common/dto/admin-operations.dto";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const idSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/);
 const contentSchema = z
   .object({
@@ -40,6 +41,7 @@ export class AdminOperationsController {
     private readonly prisma: PrismaService,
     private readonly billing: BillingService,
     private readonly engagement: AdminEngagementService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   @Get('attention')
@@ -216,7 +218,7 @@ export class AdminOperationsController {
     };
     if (input.cursor) {
       // Check the cursor against this same audience and interval; never reset to page one.
-      const cursor = await this.prisma.post.findFirst({
+      const cursor = await this.postsRead.read.findFirst({
         where: { AND: [where, { id: input.cursor }] },
         select: { id: true, createdAt: true },
       });
@@ -233,7 +235,7 @@ export class AdminOperationsController {
         },
       ];
     }
-    const rows = await this.prisma.post.findMany({
+    const rows = await this.postsRead.read.findMany({
       where,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: input.limit + 1,

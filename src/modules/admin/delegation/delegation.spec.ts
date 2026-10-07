@@ -12,6 +12,7 @@ import {
 } from "./delegation.schemas";
 import { nextDelegationRun } from "./delegation.schedule";
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 const admin = {
   id: "admin",
   username: "john",
@@ -255,8 +256,7 @@ describe("canonical draft and media execution", () => {
       createPost: jest.fn(),
       updateDraft: jest.fn(),
     };
-    const service = new DelegationActionsService(
-      prisma as any,
+    const service = new DelegationActionsService(prisma as any,
       posts as any,
       {} as any,
       {} as any,
@@ -268,8 +268,7 @@ describe("canonical draft and media execution", () => {
       {} as any,
       {} as any,
       {} as any,
-      {} as any,
-    );
+      {} as any, new PostsReadService(prisma as any as never));
     return { prisma, posts, service };
   };
   it("rejects a draft owned by another account before review", async () => {
@@ -332,8 +331,7 @@ describe("canonical post audiences", () => {
     "forwards %s without administrator visibility overrides",
     async (visibility) => {
       const posts = { createPost: jest.fn().mockResolvedValue({ id: "post" }) };
-      const service = new DelegationActionsService(
-        {} as any,
+      const service = new DelegationActionsService({} as any,
         posts as any,
         {} as any,
         {} as any,
@@ -345,8 +343,7 @@ describe("canonical post audiences", () => {
         {} as any,
         {} as any,
         {} as any,
-        {} as any,
-      );
+        {} as any, new PostsReadService({} as any as never));
       await service.execute("admin", "page", {
         operation: "post_publish",
         body: "Hello",
@@ -359,8 +356,7 @@ describe("canonical post audiences", () => {
   );
   it("preserves visibility when scheduling through the existing scheduler", async () => {
     const scheduled = { createScheduled: jest.fn() };
-    const service = new DelegationActionsService(
-      {} as any,
+    const service = new DelegationActionsService({} as any,
       {} as any,
       scheduled as any,
       {} as any,
@@ -372,8 +368,7 @@ describe("canonical post audiences", () => {
       {} as any,
       {} as any,
       {} as any,
-      {} as any,
-    );
+      {} as any, new PostsReadService({} as any as never));
     const scheduledAt = new Date(Date.now() + 3600000).toISOString();
     await service.execute("admin", "page", {
       operation: "post_schedule",
@@ -432,8 +427,7 @@ describe("Board publishing destinations", () => {
       createThread: jest.fn().mockResolvedValue({ id: "board1" }),
     };
     const posts = { createPost: jest.fn() };
-    const service = new DelegationActionsService(
-      {} as any,
+    const service = new DelegationActionsService({} as any,
       posts as any,
       {} as any,
       {} as any,
@@ -445,8 +439,7 @@ describe("Board publishing destinations", () => {
       {} as any,
       {} as any,
       {} as any,
-      board as any,
-    );
+      board as any, new PostsReadService({} as any as never));
     return { service, posts, board };
   }
   it.each([true, false])(

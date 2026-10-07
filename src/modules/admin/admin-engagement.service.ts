@@ -9,6 +9,7 @@ import type {
   AdminAttentionPulseDto,
 } from '../../common/dto/admin-engagement.dto';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const MS_DAY = 86400000;
 const PULSE_WINDOW_DAYS = 7;
 const PREVIEW_LIMIT = 8;
@@ -74,7 +75,7 @@ export function summarizeAttentionPulse(input: {
 
 @Injectable()
 export class AdminEngagementService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly postsRead: PostsReadService) {}
 
   async health(): Promise<AdminOperationsHealthDto> {
     const now = new Date();
@@ -102,7 +103,7 @@ export class AdminEngagementService {
         orderBy: { createdAt: "asc" },
         select: { createdAt: true },
       }),
-      this.prisma.post.count({
+      this.postsRead.read.count({
         where: {
           isDraft: true,
           deletedAt: null,
@@ -143,8 +144,8 @@ export class AdminEngagementService {
     const [health, verification, unanswered, memberPreview, oldestVerification, roots, lodge] = await Promise.all([
       this.health(),
       this.prisma.verificationRequest.count({ where: pendingVerification }),
-      this.prisma.post.count({ where: unansweredWhere }),
-      this.prisma.post.findMany({
+      this.postsRead.read.count({ where: unansweredWhere }),
+      this.postsRead.read.findMany({
         where: { ...unansweredWhere, user: memberAuthor },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         take: PREVIEW_LIMIT,
@@ -155,7 +156,7 @@ export class AdminEngagementService {
         orderBy: { createdAt: 'asc' },
         select: { createdAt: true },
       }),
-      this.prisma.post.findMany({
+      this.postsRead.read.findMany({
         where: { ...publicRoot, createdAt: { gte: since, lte: now }, user: memberAuthor },
         select: {
           userId: true,
@@ -163,13 +164,13 @@ export class AdminEngagementService {
           replies: { where: humanReply, orderBy: { createdAt: 'asc' }, take: 1, select: { createdAt: true } },
         },
       }),
-      this.prisma.post.findFirst({
+      this.postsRead.read.findFirst({
         where: { ...publicRoot, createdAt: { gte: since, lte: now }, user: { username: 'menofhunger' } },
         orderBy: { createdAt: 'desc' },
         select: { id: true, replies: { where: humanReply, select: { id: true } } },
       }),
     ]);
-    const otherPreview = memberPreview.length >= PREVIEW_LIMIT ? [] : await this.prisma.post.findMany({
+    const otherPreview = memberPreview.length >= PREVIEW_LIMIT ? [] : await this.postsRead.read.findMany({
       where: {
         ...unansweredWhere,
         user: { ...humanAuthor, OR: [{ siteAdmin: true }, { accountKind: { not: 'person' } }] },

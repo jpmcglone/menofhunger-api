@@ -1,5 +1,6 @@
 import { NotificationWriterService } from './notification-writer.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function buildWriter(overrides: {
   findFirst?: unknown;
   dto?: unknown;
@@ -21,15 +22,13 @@ function buildWriter(overrides: {
   const query = {
     buildNotificationDtoForRecipient: jest.fn(async () => overrides.dto ?? { id: 'n1' }),
   };
-  const writer = new NotificationWriterService(
-    prisma as any,
+  const writer = new NotificationWriterService(prisma as any, new PostsReadService(prisma as any as never),
     presenceRealtime as any,
     { isOnline: jest.fn(async () => false), isIdle: jest.fn(async () => false) } as any,
     { enqueueCron: jest.fn() } as any,
     { dispatch: jest.fn() } as any,
     query as any,
-    { undeliveredBellWhere: () => ({}), emitWaitingCountForUser: jest.fn() } as any,
-  );
+    { undeliveredBellWhere: () => ({}), emitWaitingCountForUser: jest.fn() } as any);
   return { writer, prisma, presenceRealtime, query };
 }
 

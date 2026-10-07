@@ -7,6 +7,7 @@ import { MarvinAIService } from './marvin-ai.service';
 import { fillVisionSlots, marvMediaMarker, resolveMarvVisionUrl } from './marvin-vision-media';
 import { marvPublicProfilePostWhere } from './marvin-post-access';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 export type GeneratedContextCard = {
   cardText: string;
   source: 'generated' | 'manual' | 'hybrid' | 'fallback';
@@ -86,6 +87,7 @@ export class MarvinContextCardService {
     private readonly ai: MarvinAIService,
     private readonly appConfig: AppConfigService,
     private readonly linkMetadata: LinkMetadataService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   async getCardText(username: string): Promise<string | null> {
@@ -338,7 +340,7 @@ export class MarvinContextCardService {
   }
 
   private async loadPublicPosts(userId: string, since: Date | null): Promise<CardPost[]> {
-    return this.prisma.post.findMany({
+    return this.postsRead.read.findMany({
       where: {
         userId,
         deletedAt: null,

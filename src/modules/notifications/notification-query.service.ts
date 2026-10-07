@@ -38,6 +38,7 @@ import {
   type FeedCollapsePrefer,
 } from "../../common/feed-collapse/collapse-by-root";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 /** Kinds that embed a full PostDto card in the bell. Everything else uses subjectPostPreview. */
 const NOTIFICATION_POST_CARD_KINDS = new Set<NotificationKind>([
   "comment",
@@ -57,6 +58,7 @@ const NOTIFICATION_POST_CARD_KINDS = new Set<NotificationKind>([
 export class NotificationQueryService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly postsRead: PostsReadService,
     private readonly appConfig: AppConfigService,
     private readonly postVisibility: PostVisibilityReadService,
     private readonly readState: NotificationReadStateService,
@@ -318,7 +320,7 @@ export class NotificationQueryService {
       subjectSpaces,
     ] = await Promise.all([
       previewPostIds.length > 0
-        ? this.prisma.post.findMany({
+        ? this.postsRead.read.findMany({
             where: { id: { in: previewPostIds } },
             select: {
               id: true,
@@ -1131,7 +1133,7 @@ export class NotificationQueryService {
         Boolean(postId) && arr.indexOf(postId) === index,
     );
     if (previewPostIds.length > 0) {
-      const posts = await this.prisma.post.findMany({
+      const posts = await this.postsRead.read.findMany({
         where: { id: { in: previewPostIds } },
         select: {
           id: true,

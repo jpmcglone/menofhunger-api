@@ -8,6 +8,7 @@ import { NotificationPreferencesService } from './notification-preferences.servi
 import { ApnsPushService } from './apns-push.service';
 import type { NotificationKind } from '@prisma/client';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 jest.mock('web-push', () => ({
   setVapidDetails: jest.fn(),
   sendNotification: jest.fn().mockResolvedValue({}),
@@ -147,7 +148,7 @@ function makeService(opts?: {
   const { svc: apnsSvc, apnsSendToUser } = opts?.apns ?? makeApns();
   const presence = opts?.presence ?? makePresence();
   const cache = opts?.cache ?? makeCache();
-  const svc = new NotificationPushService(prisma, appConfig, presence, prefs, apnsSvc, cache as any);
+  const svc = new NotificationPushService(prisma, appConfig, presence, prefs, apnsSvc, cache as any, new PostsReadService(prisma as never));
   return { svc, prisma, appConfig, prefs, apnsSvc, apnsSendToUser, presence, cache };
 }
 

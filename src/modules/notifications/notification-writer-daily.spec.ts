@@ -1,5 +1,6 @@
 import { NotificationWriterService } from './notification-writer.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 /**
  * Focused tests for the daily-content (word_of_the_day / quote_of_the_day)
  * fan-out deduplication logic.
@@ -52,15 +53,13 @@ function makeService(): { service: NotificationWriterService; prisma: MockPrisma
     undeliveredBellWhere: jest.fn((userId: string) => ({ recipientUserId: userId, deliveredAt: null })),
   };
 
-  const service = new NotificationWriterService(
-    prisma as never,
+  const service = new NotificationWriterService(prisma as never, new PostsReadService(prisma as never as never),
     presenceRealtime as never,
     presenceRedis as never,
     jobs as never,
     sideEffects as never,
     query as never,
-    readState as never,
-  );
+    readState as never);
 
   return { service, prisma, sideEffects };
 }

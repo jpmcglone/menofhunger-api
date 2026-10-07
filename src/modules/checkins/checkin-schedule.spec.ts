@@ -7,6 +7,7 @@ import {
 import { CheckinsService } from './checkins.service';
 import { PostsMutationService } from '../posts/posts-mutation.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 describe('daily check-in window', () => {
   it.each([
     ['2026-09-07T20:59:59.999Z', false],
@@ -58,7 +59,7 @@ function makeService() {
     coins: 0, checkinStreakDays: 2, allowedVisibilities: ['verifiedOnly'], crew: null, socialProof: null,
   }) };
   const service = new CheckinsService(prisma as never, posts as never, {} as never, {} as never,
-    redis as never, {} as never, {} as never, {} as never, {} as never);
+    redis as never, {} as never, {} as never, {} as never, {} as never, new PostsReadService(prisma as never as never));
   return { service, prisma, posts };
 }
 

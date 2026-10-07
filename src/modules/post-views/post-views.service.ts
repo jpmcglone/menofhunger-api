@@ -17,6 +17,7 @@ import {
   sanitizeAnonViewerId,
 } from '../views/view-tracking.utils';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const BREAKDOWN_TTL_SECONDS = 60;
 const BATCH_MAX = 50;
 
@@ -68,6 +69,7 @@ export class PostViewsService {
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly posthog: PosthogService,
     private readonly notifications: NotificationsService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   /**
@@ -89,7 +91,7 @@ export class PostViewsService {
     if (!pid || (!uid && !anonId)) return null;
 
     try {
-      const post = await this.prisma.post.findFirst({
+      const post = await this.postsRead.read.findFirst({
         where: { id: pid, deletedAt: null },
         select: { id: true, visibility: true, userId: true },
       });
@@ -255,7 +257,7 @@ export class PostViewsService {
         actorUserId: uid,
       });
     }
-    if (!opts?.skipMarkRead && (source !== 'feed_scroll' || await this.prisma.post.findFirst({
+    if (!opts?.skipMarkRead && (source !== 'feed_scroll' || await this.postsRead.read.findFirst({
       where: { id: pid, kind: { not: 'board' } }, select: { id: true },
     }))) {
       await this.notifications.markReadBySubject(uid, { postId: pid });
@@ -322,7 +324,7 @@ export class PostViewsService {
     }
 
     if (viewerIncrement === 0 && weightedIncrement <= 0 && totalIncrement === 0) {
-      const unchanged = await this.prisma.post.findUnique({
+      const unchanged = await this.postsRead.read.findUnique({
         where: { id: pid },
         select: { viewerCount: true, totalViewCount: true },
       });
@@ -456,7 +458,7 @@ export class PostViewsService {
       try {
         const readableIds = acks.map((ack) => ack.id);
         const readIds = source === 'feed_scroll'
-          ? (await this.prisma.post.findMany({
+          ? (await this.postsRead.read.findMany({
               where: { id: { in: readableIds }, kind: { not: 'board' } },
               select: { id: true },
             })).map((post) => post.id)
@@ -477,7 +479,7 @@ export class PostViewsService {
   ): Promise<PostViewAckDto[]> {
     try {
       const [posts, identity] = await Promise.all([
-        this.prisma.post.findMany({
+        this.postsRead.read.findMany({
           where: { id: { in: postIds }, deletedAt: null, visibility: 'public' },
           select: { id: true },
         }),
@@ -579,7 +581,7 @@ export class PostViewsService {
   ): Promise<PostViewAckDto[]> {
     try {
       const [posts, viewer] = await Promise.all([
-        this.prisma.post.findMany({
+        this.postsRead.read.findMany({
           where: { id: { in: postIds }, deletedAt: null },
           select: { id: true, visibility: true, userId: true, viewerCount: true, totalViewCount: true },
         }),
@@ -771,7 +773,7 @@ export class PostViewsService {
   async expandViewTargetIds(ids: string[]): Promise<string[]> {
     if (ids.length === 0) return [];
 
-    const rows = await this.prisma.post.findMany({
+    const rows = await this.postsRead.read.findMany({
       where: { id: { in: ids }, deletedAt: null },
       select: { id: true, kind: true, repostedPostId: true, quotedPostId: true },
     });
@@ -793,7 +795,7 @@ export class PostViewsService {
     const pid = (postId ?? '').trim();
     const uid = (viewerUserId ?? '').trim() || null;
 
-    const post = await this.prisma.post.findFirst({
+    const post = await this.postsRead.read.findFirst({
       where: { id: pid, deletedAt: null },
       select: { visibility: true, userId: true, viewerCount: true, totalViewCount: true },
     });

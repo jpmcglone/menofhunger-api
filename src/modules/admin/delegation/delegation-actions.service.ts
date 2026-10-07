@@ -19,6 +19,7 @@ import { PresenceRealtimeService } from "../../presence/presence-realtime.servic
 import { actionSchema, type DelegatedActionInput } from "./delegation.schemas";
 
 import { createHash } from "node:crypto";
+import { PostsReadService } from '../../posts-read/posts-read.service';
 export function actionSubjectKey(
   ownerId: string,
   actorId: string,
@@ -57,6 +58,7 @@ export class DelegationActionsService {
     private readonly config: AppConfigService,
     private readonly realtime: PresenceRealtimeService,
     private readonly board: BoardService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   async assertFreshSubject(
@@ -106,7 +108,7 @@ export class DelegationActionsService {
     let row: unknown = { state: "new" };
     switch (input.operation) {
       case "post_update":
-        row = await this.prisma.post.findFirst({
+        row = await this.postsRead.read.findFirst({
           where: {
             id: input.postId,
             userId: actorId,
@@ -197,7 +199,7 @@ export class DelegationActionsService {
       );
   }
   private async draft(actorId: string, id: string) {
-    const draft = await this.prisma.post.findFirst({
+    const draft = await this.postsRead.read.findFirst({
       where: {
         id,
         userId: actorId,

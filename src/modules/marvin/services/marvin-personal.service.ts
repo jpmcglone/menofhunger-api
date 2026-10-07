@@ -10,6 +10,7 @@ import { personalActionSchema } from './marvin-personal-tools';
 import type { MarvAIToolCallContext } from './marvin-ai.service';
 import type { MarvinPersonalActionDto } from '../../../common/dto/marvin/marvin-personal.dto';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 @Injectable()
 export class MarvinPersonalService {
   constructor(
@@ -17,6 +18,7 @@ export class MarvinPersonalService {
     private readonly bookmarks: BookmarksService,
     private readonly preferences: NotificationPreferencesService,
     private readonly realtime: PresenceRealtimeService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   async assertPrivate(ctx: MarvAIToolCallContext) {
@@ -53,7 +55,7 @@ export class MarvinPersonalService {
     let preview: string;
     let before: Record<string, unknown> = {};
     if (action.kind === 'bookmark') {
-      const post = await this.prisma.post.findFirst({ where: {
+      const post = await this.postsRead.read.findFirst({ where: {
         id: action.postId, visibility: 'public', communityGroupId: null, deletedAt: null, isDraft: false,
         user: { bannedAt: null, blocksInitiated: { none: { blockedId: userId } }, blocksReceived: { none: { blockerId: userId } } },
       }, select: { body: true, user: { select: { username: true } } } });

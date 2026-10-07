@@ -24,6 +24,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { XApiClient, XApiError } from "./x-api.client";
 import { XConnectionService, monthStartUtc } from "./x-connection.service";
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 export type XQueueResult =
   | { status: "queued"; mode: CrosspostMode }
   | { status: "skipped"; reason: string };
@@ -68,6 +69,7 @@ export class XCrosspostService {
     private readonly api: XApiClient,
     private readonly realtime: PresenceRealtimeService,
     private readonly budgets: IntegrationBudgetService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   async requestPostCrosspost(
@@ -1000,7 +1002,7 @@ export class XCrosspostService {
   }
 
   private async loadPost(postId: string): Promise<LoadedPost | null> {
-    const post = await this.prisma.post.findUnique({
+    const post = await this.postsRead.read.findUnique({
       where: { id: postId },
       select: {
         userId: true,

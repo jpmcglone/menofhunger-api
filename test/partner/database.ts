@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import assert = require('node:assert/strict');
 import { PrismaClient } from '@prisma/client';
 import { XUsageService } from '../../src/modules/x/x-usage.service';
+import { PostsReadService } from '../../src/modules/posts-read/posts-read.service';
 import { PartnerReadService } from '../../src/modules/partner/partner-read.service';
 
 async function main() {
@@ -38,7 +39,7 @@ async function main() {
     const article = await db.article.create({ data: { authorId: owner.id, title: 'Fixture', slug: 'fixture', isDraft: false, publishedAt: new Date(), body: '{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Public article"}]}]}' } });
     const comment = await db.articleComment.create({ data: { authorId: other.id, articleId: article.id, body: 'Fixture comment' } });
     assert.ok(await db.partnerEvent.findFirst({ where: { userId: owner.id, resourceKind: 'article_comment' } }));
-    const reads = new PartnerReadService(db as any, { frontendBaseUrl: () => 'https://menofhunger.example', r2: () => null } as any);
+    const reads = new PartnerReadService(db as any, { frontendBaseUrl: () => 'https://menofhunger.example', r2: () => null } as any, new PostsReadService(db as never));
     await assert.rejects(() => reads.post(other.id, post.id));
     assert.equal((await reads.articleComments(other.id, article.id, { limit: 20 })).data.length, 1);
     await db.articleComment.update({ where: { id: comment.id }, data: { deletedAt: new Date() } });

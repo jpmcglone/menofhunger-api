@@ -1,5 +1,6 @@
 import { BoardTaggerService, parseTagList } from './board-tagger.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 function setup(reply: string | null, thread: Record<string, unknown> | null) {
   const prisma = {
     post: { findFirst: jest.fn().mockResolvedValue(thread) },
@@ -16,13 +17,11 @@ function setup(reply: string | null, thread: Record<string, unknown> | null) {
     getMetadata: jest.fn().mockResolvedValue({ title: 'Barbell basics', description: 'How to squat', siteName: 'Stronger' }),
   };
   const realtime = { emitPostsLiveUpdated: jest.fn() };
-  const service = new BoardTaggerService(
-    prisma as any,
+  const service = new BoardTaggerService(prisma as any,
     { marvOpenAI: () => ({ fastModel: 'fast' }) } as any,
     ai as any,
     linkMetadata as any,
-    realtime as any,
-  );
+    realtime as any, new PostsReadService(prisma as any as never));
   return { service, prisma, ai, linkMetadata, realtime };
 }
 

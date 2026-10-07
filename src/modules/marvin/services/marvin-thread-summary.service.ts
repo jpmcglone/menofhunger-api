@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MarvinAIService } from './marvin-ai.service';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 const SUMMARY_TRIGGER_REPLY_COUNT = 20;
 const SUMMARY_INPUT_BODY_TRUNCATE = 320;
 const SUMMARY_MAX_LENGTH = 1500;
@@ -27,6 +28,7 @@ export class MarvinThreadSummaryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly ai: MarvinAIService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   /** Returns the current rolling summary text for a thread, or null when none exists yet. */
@@ -42,7 +44,7 @@ export class MarvinThreadSummaryService {
   /** Returns true if the thread currently meets the size threshold for summarization. */
   async shouldSummarize(rootPostId: string): Promise<boolean> {
     if (!rootPostId) return false;
-    const replyCount = await this.prisma.post.count({
+    const replyCount = await this.postsRead.read.count({
       where: { rootId: rootPostId, deletedAt: null, visibility: { not: 'onlyMe' } },
     });
     return replyCount >= SUMMARY_TRIGGER_REPLY_COUNT;
@@ -94,13 +96,13 @@ export class MarvinThreadSummaryService {
   ): Promise<Array<{ id: string; body: string; createdAt: Date; username: string | null }>> {
     let createdAtFloor: Date | null = null;
     if (lastIncluded) {
-      const last = await this.prisma.post.findUnique({
+      const last = await this.postsRead.read.findUnique({
         where: { id: lastIncluded },
         select: { createdAt: true },
       });
       createdAtFloor = last?.createdAt ?? null;
     }
-    const rows = await this.prisma.post.findMany({
+    const rows = await this.postsRead.read.findMany({
       where: {
         rootId: rootPostId,
         deletedAt: null,

@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const NEW_ACCOUNT_DAYS = 14;
 const NEW_AUTHOR_POST_COUNT = 5;
 const MIN_BODY_CHARS = 8;
@@ -29,12 +30,13 @@ export class ContentScreenService {
   constructor(
     private readonly config: AppConfigService,
     private readonly prisma: PrismaService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   async screenPost(postId: string, systemReporterUserId: string | null): Promise<'skipped' | 'clean' | 'flagged' | 'failed'> {
     const cfg = this.config.contentScreen();
     if (!cfg.enabled || !systemReporterUserId) return 'skipped';
-    const post = await this.prisma.post.findFirst({
+    const post = await this.postsRead.read.findFirst({
       where: { id: postId, deletedAt: null, isDraft: false, kind: { not: 'repost' }, communityGroupId: null, visibility: { not: 'onlyMe' } },
       select: { id: true, body: true, userId: true, user: { select: { createdAt: true, isBot: true } } },
     });
@@ -69,7 +71,7 @@ export class ContentScreenService {
   private async worthScreening(userId: string, createdAt: Date, body: string): Promise<boolean> {
     if (LINK.test(body)) return true;
     if (Date.now() - createdAt.getTime() < NEW_ACCOUNT_DAYS * 24 * 60 * 60 * 1000) return true;
-    const count = await this.prisma.post.count({ where: { userId, deletedAt: null }, take: NEW_AUTHOR_POST_COUNT + 1 });
+    const count = await this.postsRead.read.count({ where: { userId, deletedAt: null }, take: NEW_AUTHOR_POST_COUNT + 1 });
     return count <= NEW_AUTHOR_POST_COUNT;
   }
 

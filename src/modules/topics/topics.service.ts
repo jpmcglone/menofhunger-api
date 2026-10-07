@@ -11,6 +11,7 @@ import { buildPostVisibilityWhere } from '../../common/posts/post-visibility';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { POST_BASE_INCLUDE } from '../../common/prisma-includes/post.include';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean } | null;
 
 function normalizeTopic(s: string): string {
@@ -38,6 +39,7 @@ export class TopicsService {
     private readonly prisma: PrismaService,
     private readonly posts: PostsService,
     private readonly viewerContext: ViewerContextService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   private topicsCache = new Map<string, { expiresAt: number; data: TopicDto[] }>();
@@ -258,10 +260,10 @@ export class TopicsService {
 
     const cursorWhere = await createdAtIdCursorWhere({
       cursor,
-      lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+      lookup: async (id) => await this.postsRead.read.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
     });
 
-    const rows = await this.prisma.post.findMany({
+    const rows = await this.postsRead.read.findMany({
       where: {
         AND: [
           { deletedAt: null, isDraft: false },
@@ -330,10 +332,10 @@ export class TopicsService {
 
     const cursorWhere = await createdAtIdCursorWhere({
       cursor,
-      lookup: async (id) => await this.prisma.post.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+      lookup: async (id) => await this.postsRead.read.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
     });
 
-    const rows = await this.prisma.post.findMany({
+    const rows = await this.postsRead.read.findMany({
       where: {
         AND: [
           { deletedAt: null, isDraft: false },

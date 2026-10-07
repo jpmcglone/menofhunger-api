@@ -28,6 +28,7 @@ import { RedisKeys } from '../redis/redis-keys';
 import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
+import { PostsReadService } from '../posts-read/posts-read.service';
 const FEATURED_CACHE_TTL_SECONDS = 120;
 
 /**
@@ -121,6 +122,7 @@ function slugifyBase(name: string): string {
 export class GroupsService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly postsRead: PostsReadService,
     private readonly posts: PostsService,
     private readonly appConfig: AppConfigService,
     private readonly sideEffects: SideEffectsService,
@@ -318,7 +320,7 @@ export class GroupsService {
 
     const lastPostRows =
       groupIds.length > 0
-        ? await this.prisma.post.groupBy({
+        ? await this.postsRead.read.groupBy({
             by: ['communityGroupId'],
             where: {
               userId: params.viewerUserId,
@@ -1123,7 +1125,7 @@ export class GroupsService {
     }
     const postId = (params.postId ?? '').trim();
     if (!postId) throw new NotFoundException('Post not found.');
-    const post = await this.prisma.post.findFirst({
+    const post = await this.postsRead.read.findFirst({
       where: {
         id: postId,
         communityGroupId: params.groupId,
@@ -1490,7 +1492,7 @@ export class GroupsService {
     let trending: Array<typeof featured[number]> = [];
     if (seenIds.size < take) {
       const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-      const heat = await this.prisma.post.groupBy({
+      const heat = await this.postsRead.read.groupBy({
         by: ['communityGroupId'],
         where: {
           deletedAt: null,
