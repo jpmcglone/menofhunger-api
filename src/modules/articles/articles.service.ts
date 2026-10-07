@@ -6,8 +6,6 @@ import {
   BadRequestException,
   ConflictException,
   Logger,
-  HttpException,
-  HttpStatus,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
@@ -16,7 +14,6 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { CacheService } from '../redis/cache.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { JobsService } from '../jobs/jobs.service';
-import { JOBS } from '../jobs/jobs.constants';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { ArticleViewsService } from '../article-views/article-views.service';
 import { BoardService } from '../board/board.service';
@@ -32,15 +29,11 @@ import {
 } from '../../common/dto/article.dto';
 import { toPostDto } from '../../common/dto/post.dto';
 import { findReactionById } from '../../common/constants/reactions';
-import { parseMentionsFromBody } from '../../common/mentions/mention-regex';
 import type { PostVisibility } from '@prisma/client';
-import { LOGGED_IN_VIEW_WEIGHT } from '../views/view-tracking.utils';
-import { easternDayKey } from '../../common/time/eastern-day-key';
 import { slugifyArticleTitle } from '../../common/text/slugify';
 import { MENTION_USER_SELECT } from '../../common/prisma-selects/user.select';
 import { PostsWriteService } from '../posts-read/posts-write.service';
-
-const VERIFIED_ARTICLES_PER_DAY = 1;
+import { listPublishedRawOn, publishArticleOn, createArticleCommentOn } from './articles-list.query';
 
 /**
  * Strip leading/trailing whitespace from every line, trim the whole string,
@@ -56,7 +49,7 @@ function normalizeCommentBody(raw: string): string {
 }
 
 /** Normalize a tag to a stable slug key (lowercase, alphanumeric + hyphens). */
-function normalizeTag(raw: string): string {
+export function normalizeTag(raw: string): string {
   return raw
     .toLowerCase()
     .trim()
@@ -86,23 +79,23 @@ function extractExcerpt(tiptapJson: string, maxLength = 200): string {
 
 @Injectable()
 export class ArticlesService {
-  private readonly logger = new Logger(ArticlesService.name);
+  readonly logger = new Logger(ArticlesService.name);
 
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly viewer: ViewerContextService,
-    private readonly appConfig: AppConfigService,
-    private readonly presenceRealtime: PresenceRealtimeService,
-    private readonly cache: CacheService,
-    private readonly cacheInvalidation: CacheInvalidationService,
-    private readonly jobs: JobsService,
-    private readonly sideEffects: SideEffectsService,
-    private readonly articleViews: ArticleViewsService,
-    private readonly board: BoardService,
-    private readonly postsWrite: PostsWriteService,
+    readonly prisma: PrismaService,
+    readonly viewer: ViewerContextService,
+    readonly appConfig: AppConfigService,
+    readonly presenceRealtime: PresenceRealtimeService,
+    readonly cache: CacheService,
+    readonly cacheInvalidation: CacheInvalidationService,
+    readonly jobs: JobsService,
+    readonly sideEffects: SideEffectsService,
+    readonly articleViews: ArticleViewsService,
+    readonly board: BoardService,
+    readonly postsWrite: PostsWriteService,
   ) {}
 
-  private get r2BaseUrl(): string | null {
+  get r2BaseUrl(): string | null {
     return this.appConfig.r2()?.publicBaseUrl ?? null;
   }
 
@@ -129,7 +122,7 @@ export class ArticlesService {
     return { select: articleAuthorInclude };
   }
 
-  private articleIncludes(includeReactions = true, includeBoosts = true, viewerUserId?: string | null) {
+  articleIncludes(includeReactions = true, includeBoosts = true, viewerUserId?: string | null) {
     return {
       author: this.articleAuthorSelect(),
       tags: { select: { tag: true, label: true }, orderBy: { createdAt: 'asc' as const } },
@@ -354,132 +347,17 @@ export class ArticlesService {
     return this._listPublishedRaw(opts, limit, sort);
   }
 
-  private async _listPublishedRaw(
+  async _listPublishedRaw(
     opts: {
       viewerUserId?: string | null;
       limit?: number;
       cursor?: string | null;
-      authorUsername?: string | null;
-      sort?: 'new' | 'trending' | null;
-      visibilityFilter?: PostVisibility | null;
-      mine?: boolean | null;
-      followingOnly?: boolean | null;
-      tag?: string | null;
-      includeRestricted?: boolean | null;
-      includeBody?: boolean | null;
+      [key: string]: unknown;
     },
-    limit: number,
-    sort: string,
+    limit?: number,
+    sort?: string,
   ) {
-    const viewerCtx = opts.viewerUserId ? await this.viewer.getViewer(opts.viewerUserId) : null;
-    const allowedVisibilities = this.viewer.allowedPostVisibilities(viewerCtx);
-
-    // followingOnly / mine with no authenticated viewer returns nothing
-    if ((opts.followingOnly || opts.mine) && !opts.viewerUserId) {
-      return { articles: [], nextCursor: null };
-    }
-
-    if (!opts.includeRestricted && opts.visibilityFilter && !allowedVisibilities.includes(opts.visibilityFilter)) {
-      if (opts.visibilityFilter === 'verifiedOnly') {
-        throw new ForbiddenException('Verify to view verified-only posts.');
-      }
-      if (opts.visibilityFilter === 'premiumOnly') {
-        throw new ForbiddenException('Upgrade to premium to view premium-only posts.');
-      }
-    }
-
-    const effectiveVisibilities = opts.visibilityFilter ? [opts.visibilityFilter] : allowedVisibilities;
-
-    const normalizedAuthorUsername = (opts.authorUsername ?? '').trim();
-
-    const authorFilter = opts.mine
-      ? { authorId: opts.viewerUserId! }
-      : normalizedAuthorUsername
-        ? { author: { username: { equals: normalizedAuthorUsername, mode: 'insensitive' as const } } }
-        : opts.followingOnly && opts.viewerUserId
-          ? { author: { followers: { some: { followerId: opts.viewerUserId } } } }
-          : {};
-
-    const tagFilter = opts.tag
-      ? { tags: { some: { tag: normalizeTag(opts.tag) } } }
-      : {};
-
-    // When includeRestricted is set we normally skip the visibility WHERE so all tiers appear.
-    // However, if the caller also provides an explicit visibilityFilter (e.g. the user picked
-    // "public only"), honour that filter even in restricted-include mode.
-    const visibilityFilter = opts.includeRestricted
-      ? opts.visibilityFilter
-        ? { visibility: opts.visibilityFilter }
-        : {}
-      : { visibility: { in: effectiveVisibilities } };
-
-    const toDto = (a: ArticleWithAuthor, viewed: Set<string>) => {
-      const viewerCanAccess =
-        allowedVisibilities.includes(a.visibility) || a.authorId === opts.viewerUserId;
-      return toArticleDto(a, this.r2BaseUrl, {
-        viewerUserId: opts.viewerUserId,
-        viewerHasBoosted: opts.viewerUserId ? (a.boosts?.length ?? 0) > 0 : false,
-        viewerHasViewed: opts.viewerUserId ? viewed.has(a.id) : undefined,
-        viewerCanAccess,
-        includeBody: opts.includeBody ?? false,
-      });
-    };
-
-    const mapItems = async (items: ArticleWithAuthor[]) => {
-      const viewed = await this.articleViews.viewerViewedArticleIds(
-        opts.viewerUserId,
-        items.map((a) => a.id),
-      );
-      return items.map((a) => toDto(a, viewed));
-    };
-
-    if (sort === 'trending') {
-      // Offset-based for trending (score changes, cursor-based is unreliable).
-      // Include all articles regardless of trendingScore; nulls sort last explicitly (Postgres defaults to NULLS FIRST with DESC).
-      const skip = opts.cursor ? parseInt(opts.cursor, 10) : 0;
-      const articles = await this.prisma.article.findMany({
-        where: {
-          isDraft: false,
-          deletedAt: null,
-          publishedAt: { not: null },
-          ...visibilityFilter,
-          ...authorFilter,
-          ...tagFilter,
-        },
-        orderBy: [{ trendingScore: { sort: 'desc', nulls: 'last' } }, { publishedAt: 'desc' }],
-        skip,
-        take: limit + 1,
-        include: this.articleIncludes(true, true, opts.viewerUserId),
-      }) as ArticleWithAuthor[];
-
-      const hasMore = articles.length > limit;
-      const items = hasMore ? articles.slice(0, limit) : articles;
-      const nextCursor = hasMore ? String(skip + limit) : null;
-
-      return { articles: await mapItems(items), nextCursor };
-    }
-
-    // Default: newest first, cursor-based
-    const articles = await this.prisma.article.findMany({
-      where: {
-        isDraft: false,
-        deletedAt: null,
-        publishedAt: { not: null },
-        ...visibilityFilter,
-        ...authorFilter,
-        ...tagFilter,
-        ...(opts.cursor ? { id: { lt: opts.cursor } } : {}),
-      },
-      orderBy: [{ publishedAt: 'desc' }, { id: 'desc' }],
-      take: limit + 1,
-      include: this.articleIncludes(true, true, opts.viewerUserId),
-    }) as ArticleWithAuthor[];
-
-    const hasMore = articles.length > limit;
-    const items = hasMore ? articles.slice(0, limit) : articles;
-    const nextCursor = hasMore ? items[items.length - 1].id : null;
-
-    return { articles: await mapItems(items), nextCursor };
+    return listPublishedRawOn(this, opts as never, limit as never, sort as never);
   }
 
   // ─── List user drafts ────────────────────────────────────────────────────────
@@ -658,115 +536,11 @@ export class ArticlesService {
   // ─── Publish ─────────────────────────────────────────────────────────────────
 
   async publish(userId: string, articleId: string, opts: { postToBoard?: boolean; shareToFeed?: boolean; crosspost?: { pickax?: 'link' | 'native'; x?: 'link' | 'native' } } = {}) {
-    const article = await this.prisma.article.findUnique({ where: { id: articleId } });
-    if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
-    if (article.authorId !== userId) throw new ForbiddenException('Not your article.');
-    if (!article.title.trim()) throw new BadRequestException('Article must have a title before publishing.');
-
-    const viewerCtx = await this.viewer.getViewerOrThrow(userId);
-    if (!this.viewer.isVerified(viewerCtx) && !this.viewer.isPremium(viewerCtx)) {
-      throw new ForbiddenException('Verify your account to publish articles.');
-    }
-
-    const allowedVisibilities = this.viewer.allowedPostVisibilities(viewerCtx);
-    if (!allowedVisibilities.includes(article.visibility)) {
-      throw new ForbiddenException("This article's visibility is not available on your current plan.");
-    }
-
-    const isFirstPublish = !article.publishedAt;
-
-    // Verified non-premium: 1 first-publish per Eastern calendar day
-    if (isFirstPublish && !this.viewer.isPremium(viewerCtx)) {
-      const todayKey = easternDayKey(new Date());
-      // 36h lookback covers any ET offset; filter in memory by day key
-      const windowStart = new Date(Date.now() - 36 * 60 * 60 * 1000);
-      const recentPublished = await this.prisma.article.findMany({
-        where: { authorId: userId, publishedAt: { gte: windowStart }, deletedAt: null, id: { not: articleId } },
-        select: { publishedAt: true },
-      });
-      const todayCount = recentPublished.filter(
-        (a) => a.publishedAt !== null && easternDayKey(a.publishedAt) === todayKey,
-      ).length;
-      if (todayCount >= VERIFIED_ARTICLES_PER_DAY) {
-        throw new HttpException(
-          'You can publish 1 article per day. Upgrade to Premium for unlimited.',
-          HttpStatus.TOO_MANY_REQUESTS,
-        );
-      }
-    }
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const published = await tx.article.update({
-        where: { id: articleId },
-        data: {
-          isDraft: false,
-          crosspostChoices: opts.crosspost,
-          publishedAt: article.publishedAt ?? new Date(),
-          editedAt: article.publishedAt ? new Date() : null,
-          lastSavedAt: new Date(),
-        },
-        include: this.articleIncludes(true, true, userId),
-      }) as ArticleWithAuthor;
-
-      // Seed author self-view synchronously so publish response reflects at least 1 view.
-      if (isFirstPublish) {
-        const seededView = await tx.articleView.createMany({
-          data: [{ articleId, userId }],
-          skipDuplicates: true,
-        });
-        if (seededView.count > 0) {
-          const updatedCounts = await tx.article.update({
-            where: { id: articleId },
-            data: {
-              viewCount: { increment: 1 },
-              totalViewCount: { increment: 1 },
-              weightedViewCount: { increment: LOGGED_IN_VIEW_WEIGHT },
-            },
-            select: { viewCount: true, totalViewCount: true, weightedViewCount: true },
-          });
-          (published as any).viewCount = updatedCounts.viewCount;
-          (published as any).totalViewCount = updatedCounts.totalViewCount;
-          (published as any).weightedViewCount = updatedCounts.weightedViewCount;
-        }
-      }
-      return published;
-    });
-
-    if (isFirstPublish) {
-      await this.crossPostToBoard(userId, updated, opts);
-    }
-
-    // Fire follower notifications only on first publish. The fan-out scales with the author's
-    // follower count, so it runs on the side-effects queue rather than in this process.
-    if (isFirstPublish) {
-      this.sideEffects.dispatch(
-        'article.published',
-        { articleId, authorUserId: userId },
-        { jobId: `article-published-${articleId}` },
-      );
-    }
-
-    void this.cacheInvalidation.bumpFeedGlobal().catch(() => undefined);
-
-    // Notify the WebSub hub so subscribers get real-time feed updates.
-    void this.pingWebsubHub(updated.author?.username ?? null).catch(() => undefined);
-
-    // Enqueue follower article emails on first publish.
-    if (isFirstPublish) {
-      this.jobs
-        .enqueue(JOBS.articlesFollowedArticleEmail, { articleId, authorUserId: userId })
-        .catch((err) => {
-          this.logger.warn(
-            `[email] Failed to enqueue followed-article email job: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        });
-    }
-
-    return toArticleDto(updated, this.r2BaseUrl, { viewerUserId: userId });
+    return publishArticleOn(this, userId, articleId, opts);
   }
 
   /** First publish: optionally start a Board thread for the article, remembering the author's choice. */
-  private async crossPostToBoard(
+  async crossPostToBoard(
     userId: string,
     article: ArticleWithAuthor,
     opts: { postToBoard?: boolean; shareToFeed?: boolean },
@@ -841,7 +615,7 @@ export class ArticlesService {
    * Hub: https://pubsubhubbub.appspot.com
    * Spec: https://www.w3.org/TR/websub/
    */
-  private async pingWebsubHub(authorUsername: string | null): Promise<void> {
+  async pingWebsubHub(authorUsername: string | null): Promise<void> {
     const siteUrl = this.appConfig.frontendBaseUrl()?.replace(/\/$/, '') ?? 'https://menofhunger.com';
     const hubUrl = 'https://pubsubhubbub.appspot.com/publish';
 
@@ -1006,7 +780,7 @@ export class ArticlesService {
 
   // ─── Comments ─────────────────────────────────────────────────────────────────
 
-  private commentIncludes() {
+  commentIncludes() {
     return {
       author: this.articleAuthorSelect(),
       reactions: true,
@@ -1145,79 +919,7 @@ export class ArticlesService {
     articleId: string,
     data: { body: string; parentId?: string | null },
   ) {
-    const viewerCtx = await this.viewer.getViewerOrThrow(userId);
-    if (!this.viewer.isVerified(viewerCtx) && !this.viewer.isPremium(viewerCtx)) {
-      throw new ForbiddenException('Verified membership required to comment.');
-    }
-
-    const normalizedBody = normalizeCommentBody(data.body);
-    assertPublishableText(normalizedBody);
-    const maxCommentLength = this.viewer.isPremium(viewerCtx) ? 1000 : 500;
-    if (normalizedBody.length > maxCommentLength) {
-      throw new BadRequestException(`Comment must be ${maxCommentLength} characters or fewer.`);
-    }
-
-    await this.assertArticleAccessible(articleId, userId);
-
-    if (data.parentId) {
-      const parent = await this.prisma.articleComment.findUnique({ where: { id: data.parentId } });
-      if (!parent || parent.deletedAt) throw new NotFoundException('Parent comment not found.');
-      if (parent.articleId !== articleId) throw new BadRequestException('Parent comment belongs to a different article.');
-      if (parent.parentId !== null) throw new BadRequestException('Cannot reply more than one level deep.');
-    }
-
-    let newCommentCount: number | null = null;
-    const comment = await this.prisma.$transaction(async (tx) => {
-      const c = await tx.articleComment.create({
-        data: {
-          articleId,
-          authorId: userId,
-          body: normalizedBody,
-          parentId: data.parentId ?? null,
-        },
-        include: this.commentIncludes(),
-      });
-      if (data.parentId) {
-        await tx.articleComment.update({
-          where: { id: data.parentId },
-          data: { replyCount: { increment: 1 } },
-        });
-      } else {
-        const updated = await tx.article.update({
-          where: { id: articleId },
-          data: { commentCount: { increment: 1 } },
-          select: { commentCount: true },
-        });
-        newCommentCount = updated.commentCount;
-      }
-      return c;
-    }) as ArticleCommentWithAuthorAndReactions;
-
-    const commentDto = toArticleCommentDto(comment, this.r2BaseUrl, { viewerUserId: userId });
-
-    if (newCommentCount !== null) {
-      this.presenceRealtime.emitArticlesLiveUpdated(articleId, {
-        articleId,
-        version: new Date().toISOString(),
-        reason: 'commentCount',
-        patch: { commentCount: newCommentCount },
-      });
-    }
-
-    this.presenceRealtime.emitArticlesCommentAdded(articleId, { articleId, comment: commentDto });
-    if (newCommentCount !== null) {
-      void this.board.syncArticleThread(articleId, { commentCount: newCommentCount }).catch(() => undefined);
-    }
-
-    this.sideEffects.dispatch('article.comment.created', {
-      articleId,
-      commentId: comment.id,
-      actorUserId: userId,
-      parentCommentId: data.parentId ?? null,
-      mentionUsernames: parseMentionsFromBody(commentDto.body ?? ''),
-    });
-
-    return commentDto;
+    return createArticleCommentOn(this, userId, articleId, data);
   }
 
   async updateComment(userId: string, commentId: string, body: string) {
@@ -1408,7 +1110,7 @@ export class ArticlesService {
 
   // ─── Internal ─────────────────────────────────────────────────────────────────
 
-  private async assertArticleAccessible(articleId: string, viewerUserId?: string | null) {
+  async assertArticleAccessible(articleId: string, viewerUserId?: string | null) {
     const article = await this.prisma.article.findUnique({
       where: { id: articleId },
       select: { id: true, isDraft: true, deletedAt: true, visibility: true, authorId: true },

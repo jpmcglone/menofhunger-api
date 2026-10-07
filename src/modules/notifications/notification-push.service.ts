@@ -1,5 +1,4 @@
 import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import { permitsFollowNotification } from './follow-notification-policy';
 import { Injectable, Logger } from '@nestjs/common';
 import type { NotificationKind } from '@prisma/client';
 import * as webpush from 'web-push';
@@ -16,6 +15,7 @@ import { ApnsPushService } from './apns-push.service';
 import { crewStreakBrokenPushBody } from './crew-streak-broken-copy';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { sendWebPushToRecipientOn, sendKindPushForActorOn } from './notification-push.send';
 export type PushActorContext = {
   id: string;
   username: string | null;
@@ -48,20 +48,6 @@ function withActionColon(value: string): string {
   if (!text) return '';
   return /[:.!?]$/.test(text) ? text : `${text}:`;
 }
-
-/**
- * Person-accountability pushes. Pages inherit operator premium and would otherwise
- * get "have you checked in?" / word / quote on the operator's phone. Operators
- * already receive those on the person account.
- */
-const PERSON_ONLY_PUSH_KINDS = new Set<NotificationKind>([
-  'word_of_the_day',
-  'quote_of_the_day',
-  'checkin_reminder',
-  'on_this_day',
-  'checkin_post',
-  'nudge',
-]);
 
 /**
  * System / non-actor pushes. Their `fallbackTitle` IS the alert title — never reuse it
@@ -102,17 +88,17 @@ function actionWithGroupName(action: string, groupName: string): string {
  */
 @Injectable()
 export class NotificationPushService {
-  private readonly logger = new Logger(NotificationPushService.name);
+  readonly logger = new Logger(NotificationPushService.name);
   private vapidConfigured = false;
 
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly appConfig: AppConfigService,
-    private readonly presence: PresenceService,
-    private readonly preferences: NotificationPreferencesService,
-    private readonly apnsPush: ApnsPushService,
-    private readonly cache: CacheService,
-    private readonly postsRead: PostsReadService,
+    readonly prisma: PrismaService,
+    readonly appConfig: AppConfigService,
+    readonly presence: PresenceService,
+    readonly preferences: NotificationPreferencesService,
+    readonly apnsPush: ApnsPushService,
+    readonly cache: CacheService,
+    readonly postsRead: PostsReadService,
   ) {}
 
   /**
@@ -120,7 +106,7 @@ export class NotificationPushService {
    * in Redis for 5 minutes so fan-out jobs for the same actor (e.g. 10k followers
    * of a new post) avoid N identical DB reads for the same row.
    */
-  private async getActorMini(userId: string): Promise<PushActorContext | null> {
+  async getActorMini(userId: string): Promise<PushActorContext | null> {
     return this.cache.getOrSetNullableJson<PushActorContext>({
       enabled: Boolean(userId),
       key: RedisKeys.pushActorMini(userId),
@@ -135,7 +121,7 @@ export class NotificationPushService {
   }
 
   /** True if at least one push channel (Web Push VAPID or native APNs) can send. */
-  private pushChannelConfigured(): boolean {
+  pushChannelConfigured(): boolean {
     return this.appConfig.vapidConfigured() || this.apnsPush.configured();
   }
 
@@ -660,7 +646,7 @@ export class NotificationPushService {
    * Returns true if a push with this coalesceKey was already sent within the window for this kind.
    * coalesceKey is the resolved push tag (subject-scoped), so distinct subjects each get their own window.
    */
-  private async isPushCoalesced(recipientUserId: string, coalesceKey: string, kind: string): Promise<boolean> {
+  async isPushCoalesced(recipientUserId: string, coalesceKey: string, kind: string): Promise<boolean> {
     const windowMs = PUSH_COALESCE_MS[kind] ?? DEFAULT_COALESCE_MS;
     const since = new Date(Date.now() - windowMs);
     const row = await this.prisma.pushCoalesce.findUnique({
@@ -670,7 +656,7 @@ export class NotificationPushService {
     return row ? row.sentAt >= since : false;
   }
 
-  private async recordPushSent(recipientUserId: string, coalesceKey: string): Promise<void> {
+  async recordPushSent(recipientUserId: string, coalesceKey: string): Promise<void> {
     await this.prisma.pushCoalesce.upsert({
       where: { userId_coalesceKey: { userId: recipientUserId, coalesceKey } },
       create: { userId: recipientUserId, coalesceKey, sentAt: new Date() },
@@ -712,141 +698,14 @@ export class NotificationPushService {
       actorName?: string | null;
       groupInviteId?: string | null;
       postId?: string | null;
-      /** When the recipient is a page, skip this actor if they operate it. */
       actorUserId?: string | null;
-      /** Protected destinations re-authorize immediately before each network delivery. */
       canDeliver?: () => Promise<boolean>;
     },
-  ): Promise<void> {
-    if (!this.pushChannelConfigured()) return;
-    if (params.canDeliver && !await params.canDeliver()) return;
-    const kind = params.kind ?? 'generic';
-
-    const baseUrl =
-      this.appConfig.pushFrontendBaseUrl() ??
-      this.appConfig.allowedOrigins()[0]?.trim() ??
-      'https://menofhunger.com';
-    const safeBase = baseUrl.replace(/\/$/, '');
-    let url = params.url?.trim() || `${safeBase}/notifications`;
-    if (!params.url && params.subjectPostId) {
-      url = `${safeBase}/p/${params.subjectPostId}`;
-    } else if (!params.url && params.subjectUserId) {
-      const subjectUser = await this.prisma.user.findUnique({
-        where: { id: params.subjectUserId },
-        select: { username: true },
-      });
-      const username = (subjectUser?.username ?? '').trim();
-      if (username) {
-        url = `${safeBase}/u/${encodeURIComponent(username)}`;
-      }
-    }
-
-    // Resolve tag before coalesce check so the key is subject-scoped, not kind-only.
-    const defaultTag = params.test ? `notification-test-${Date.now()}` : `notification-${recipientUserId}`;
-    const tag = params.tag?.trim() || defaultTag;
-
-    if (!params.test && (await this.isPushCoalesced(recipientUserId, tag, kind))) {
-      this.logger.debug(`[push] Coalesced ${kind} (tag=${tag}) for user ${recipientUserId}`);
-      return;
-    }
-
-    // Distinguish "explicit empty body" (e.g. reply-nudge that's title-only) from "no body provided"
-    // (legacy callers that want the friendly fallback).
-    let body = params.body === undefined ? 'You have a new notification.' : params.body;
-    if (params.sourceLabel) {
-      body = body ? `${body} · ${params.sourceLabel}` : params.sourceLabel;
-    }
-
-    const recipient = await this.prisma.user.findUnique({
-      where: { id: recipientUserId },
-      select: { accountKind: true, username: true },
-    });
-    if (recipient?.accountKind === 'page' && PERSON_ONLY_PUSH_KINDS.has(kind as NotificationKind)) {
-      this.logger.debug(`[push] Skipping ${kind} for page ${recipientUserId}`);
-      return;
-    }
-    const actorUserId = (params.actorUserId ?? '').trim();
-    const tokenOwners = (
-      await this.tokenOwnersForRecipient(recipientUserId, recipient?.accountKind)
-    ).filter((ownerId) => !actorUserId || ownerId !== actorUserId);
-    if (tokenOwners.length === 0) {
-      this.logger.debug(`[push] No token owners for ${kind} after excluding actor`);
-      return;
-    }
-    const recipientUsername = (recipient?.username ?? '').trim() || null;
-
-    const titleForOwner = (tokenOwnerId: string) => {
-      if (tokenOwnerId === recipientUserId || !recipientUsername) return params.title;
-      return `@${recipientUsername} · ${params.title}`;
-    };
-
-    // iOS / APNs: always deliver. The app's UNUserNotificationCenterDelegate decides
-    // whether to surface a banner when foregrounded — that is a client-side concern.
-    if (this.apnsPush.configured()) {
-      const apnsBody = this.apnsBodyWithVisibleAction({
-        kind,
-        body: body ?? '',
-        subtitle: params.subtitle ?? null,
-        actorUsername: params.actorUsername ?? null,
-      });
-      for (const tokenOwnerId of tokenOwners) {
-        const delivery = this.apnsPush
-          .sendToUser(tokenOwnerId, {
-            title: titleForOwner(tokenOwnerId),
-            body: apnsBody,
-            url,
-            notificationId: params.notificationId ?? null,
-            kind,
-            collapseId: tag,
-            mutableContent: Boolean(params.avatarUrl || params.mediaUrl || params.actorUsername),
-            subtitle: params.subtitle ?? null,
-            threadId: params.threadId ?? null,
-            category: params.category ?? null,
-            avatarUrl: params.avatarUrl ?? null,
-            mediaUrl: params.mediaUrl ?? null,
-            actorUsername: params.actorUsername ?? null,
-            actorName: params.actorName ?? null,
-            groupInviteId: params.groupInviteId ?? null,
-            postId: params.postId ?? null,
-            recipientUserId,
-            recipientUsername,
-            canDeliver: params.canDeliver,
-          })
-          .catch((err) => {
-            if (params.canDeliver) throw err;
-            this.logger.warn(`[apns] Failed to send push (${kind}): ${err instanceof Error ? err.message : String(err)}`);
-          });
-        if (params.canDeliver) await delivery;
-      }
-    }
-
-    for (const tokenOwnerId of tokenOwners) {
-      await this.sendWebPushOnly(tokenOwnerId, {
-        canDeliver: params.canDeliver,
-        payload: JSON.stringify({
-          title: titleForOwner(tokenOwnerId),
-          body,
-          notificationId: params.notificationId ?? undefined,
-          url,
-          tag,
-          kind,
-          icon: params.icon ?? undefined,
-          badge: params.badge ?? '/android-chrome-192x192.png',
-          renotify: Boolean(params.renotify),
-          test: params.test === true,
-          recipientUserId,
-          recipientUsername,
-        }),
-      });
-    }
-
-    if (!params.test) {
-      await this.recordPushSent(recipientUserId, tag).catch(() => {});
-    }
+  ) {
+    return sendWebPushToRecipientOn(this, recipientUserId, params);
   }
-
   /** Pages never own devices — deliver to each operator. Persons keep their own tokens. */
-  private async tokenOwnersForRecipient(
+  async tokenOwnersForRecipient(
     recipientUserId: string,
     accountKind?: string | null,
   ): Promise<string[]> {
@@ -859,7 +718,7 @@ export class NotificationPushService {
   }
 
   /** Web Push delivery to all browser subscriptions; prunes expired (410/404). */
-  private async sendWebPushOnly(
+  async sendWebPushOnly(
     recipientUserId: string,
     params: { payload: string; canDeliver?: () => Promise<boolean> },
   ): Promise<void> {
@@ -1112,7 +971,7 @@ export class NotificationPushService {
     }
   }
 
-  private pushCategory(kind: NotificationKind, hasReplyPost: boolean): string | null {
+  pushCategory(kind: NotificationKind, hasReplyPost: boolean): string | null {
     if ((kind === 'comment' || kind === 'mention') && hasReplyPost) return 'moh.category.reply';
     if (kind === 'follow') return 'moh.category.follow';
     if (kind === 'community_group_invite_received') return 'moh.category.groupInvite';
@@ -1130,7 +989,7 @@ export class NotificationPushService {
    * System kinds must not echo `fallbackTitle` as subtitle — that title already is
    * the bold first line (e.g. "Good morning" / "Good morning").
    */
-  private pushSubtitle(
+  pushSubtitle(
     kind: NotificationKind,
     groupName?: string | null,
     fallbackTitle?: string | null,
@@ -1173,7 +1032,7 @@ export class NotificationPushService {
    * still says what happened (e.g. "Replied to your post:\nWash sheets…").
    * DMs stay message-style (name + body only).
    */
-  private apnsBodyWithVisibleAction(params: {
+  apnsBodyWithVisibleAction(params: {
     kind: string;
     body: string;
     subtitle?: string | null;
@@ -1209,142 +1068,7 @@ export class NotificationPushService {
     url?: string | null;
     notificationId?: string | null;
     sourceLabel?: string;
-  }): Promise<void> {
-    const { recipientUserId, kind, actorUserId } = params;
-    try {
-      const prefs = await this.preferences.getPreferencesInternal(recipientUserId);
-      if (!this.shouldSendPushForKind(prefs, kind)) return;
-      if (!(await permitsFollowNotification({ follow: this.prisma.follow, post: this.postsRead.read }, params))) return;
-      const mediaPostId = params.actorPostId ?? params.subjectPostId ?? null;
-      const threadPostId = params.subjectPostId ?? params.actorPostId ?? null;
-      const [actor, mediaPost, threadPost, group] = await Promise.all([
-        actorUserId ? this.getActorMini(actorUserId) : null,
-        mediaPostId
-          ? this.postsRead.read.findUnique({
-              where: { id: mediaPostId },
-              select: {
-                id: true,
-                deletedAt: true,
-                rootId: true,
-                communityGroupId: true,
-                media: {
-                  where: { deletedAt: null },
-                  orderBy: { position: 'asc' },
-                  take: 1,
-                  select: {
-                    kind: true,
-                    source: true,
-                    r2Key: true,
-                    thumbnailR2Key: true,
-                    url: true,
-                  },
-                },
-              },
-            })
-          : null,
-        threadPostId && threadPostId !== mediaPostId
-          ? this.postsRead.read.findUnique({
-              where: { id: threadPostId },
-              select: { id: true, deletedAt: true, rootId: true },
-            })
-          : null,
-        params.subjectGroupId
-          ? this.prisma.communityGroup.findUnique({
-              where: { id: params.subjectGroupId },
-              select: { slug: true, name: true, avatarImageUrl: true, deletedAt: true },
-            })
-          : null,
-      ]);
-      // Re-check at delivery time: queued pushes may outlive a preference change.
-      const activityGroupId = mediaPost?.communityGroupId;
-      if (activityGroupId && ['comment', 'mention', 'boost', 'repost', 'followed_post', 'community_group_post'].includes(kind)) {
-        const member = await this.prisma.communityGroupMember.findUnique({
-          where: { groupId_userId: { groupId: activityGroupId, userId: recipientUserId } },
-          select: { notificationPreference: true },
-        });
-        if (member?.notificationPreference === 'muted') return;
-        if (member?.notificationPreference === 'repliesAndMentions' && kind !== 'comment' && kind !== 'mention') return;
-      }
-      const pushCopy = this.buildPushCopy({
-        kind,
-        actor,
-        fallbackTitle: params.fallbackTitle ?? null,
-        body: params.body ?? null,
-        subjectArticleId: params.subjectArticleId ?? null,
-      });
-      const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-      const icon = actor
-        ? publicAssetUrl({
-            publicBaseUrl,
-            key: actor.avatarKey,
-            updatedAt: actor.avatarUpdatedAt,
-          })
-        : null;
-      const currentGroup = group?.deletedAt ? null : group;
-      const firstMedia = mediaPost?.deletedAt ? null : mediaPost?.media[0];
-      const mediaKey =
-        firstMedia?.kind === 'video' ? firstMedia.thumbnailR2Key : firstMedia?.r2Key;
-      const mediaUrl =
-        publicAssetUrl({ publicBaseUrl, key: mediaKey ?? null }) ??
-        (firstMedia?.source === 'giphy' ? firstMedia.url?.trim() || null : null);
-      const resolvedThreadPost = threadPost ?? mediaPost;
-      const threadId = params.subjectGroupId
-        ? `group-${params.subjectGroupId}`
-        : kind === 'follow'
-          ? 'notif-follows'
-          : resolvedThreadPost
-            ? `post-${resolvedThreadPost.rootId ?? resolvedThreadPost.id}`
-            : null;
-      const postId = params.subjectArticleId
-        ? null
-        : kind === 'comment' || kind === 'mention'
-          ? params.subjectPostId ?? params.actorPostId ?? null
-          : params.actorPostId ?? params.subjectPostId ?? null;
-      const groupUrl =
-        currentGroup && params.subjectGroupId
-          ? `/g/${currentGroup.slug || params.subjectGroupId}${
-              kind === 'group_join_request' ? '/pending' : ''
-            }`
-          : null;
-      this.sendWebPushToRecipient(recipientUserId, {
-        title: pushCopy.title,
-        body: pushCopy.body,
-        notificationId: params.notificationId ?? undefined,
-        subjectPostId: params.subjectPostId ?? null,
-        subjectUserId: params.subjectUserId ?? null,
-        url: params.url ?? groupUrl,
-        tag: this.buildPushTag({
-          recipientUserId,
-          kind,
-          actorUserId,
-          subjectPostId: params.subjectPostId ?? null,
-          subjectUserId: params.subjectUserId ?? null,
-        }),
-        icon,
-        avatarUrl: icon || currentGroup?.avatarImageUrl?.trim() || null,
-        mediaUrl,
-        subtitle: this.pushSubtitle(
-          kind,
-          currentGroup?.name,
-          params.fallbackTitle ?? null,
-          params.subjectArticleId ?? null,
-        ),
-        threadId,
-        category: this.pushCategory(kind, Boolean(postId)),
-        actorUsername: actor?.username ?? null,
-        actorName: actor?.name ?? null,
-        groupInviteId: params.subjectCommunityGroupInviteId ?? null,
-        postId,
-        badge: '/android-chrome-192x192.png',
-        renotify: true,
-        kind,
-        actorUserId,
-        ...(params.sourceLabel ? { sourceLabel: params.sourceLabel } : {}),
-      }).catch((err) => {
-        this.logger.warn(`[push] Failed to send web push (${kind}): ${err instanceof Error ? err.message : String(err)}`);
-      });
-    } catch (err) {
-      this.logger.debug(`[push] Failed to evaluate push preferences (${kind}): ${err}`);
-    }
+  }) {
+    return sendKindPushForActorOn(this, params);
   }
 }

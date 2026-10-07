@@ -1,4 +1,3 @@
-import { estimateReadingTimeMinutes } from "../../common/dto/article.dto";
 import {
   BadRequestException,
   ForbiddenException,
@@ -25,11 +24,10 @@ import {
   POST_LIST_INCLUDE,
 } from "../../common/prisma-includes/post.include";
 import { createdAtIdCursorWhere } from "../../common/pagination/created-at-id-cursor";
-import { publicAssetUrl } from "../../common/assets/public-asset-url";
+import { listBoardThreadsOn, hydrateBoardThreadsOn } from "./board-threads.query";
 import { USER_LIST_SELECT } from "../../common/prisma-selects/user.select";
 import {
   toBoardCommentDto,
-  toBoardThreadDto,
   toPostDto,
   toUserListDto,
   type BoardCommentContextDto,
@@ -52,9 +50,6 @@ import {
   BOARD_THREADS_PER_HOUR,
   BOARD_TITLE_MAX,
   BOARD_TITLE_MIN,
-  boardRangeStart,
-  decodeOffsetCursor,
-  encodeOffsetCursor,
   normalizeBoardTags,
   normalizeBoardUrl,
   type BoardRange,
@@ -63,12 +58,12 @@ import {
 import { PostsReadService } from '../posts-read/posts-read.service';
 import { PostsWriteService } from '../posts-read/posts-write.service';
 import { slugifyBoardTag } from '../../common/text/slugify';
-type ThreadRow = Prisma.PostGetPayload<{ include: typeof POST_LIST_INCLUDE }>;
+export type ThreadRow = Prisma.PostGetPayload<{ include: typeof POST_LIST_INCLUDE }>;
 type CommentRow = Prisma.PostGetPayload<{ include: typeof POST_BASE_INCLUDE }>;
 
 const EDIT_WINDOW_MS = 30 * 60 * 1000;
 const MAX_EDITS = 3;
-const BOARD_VISIBILITIES: BoardVisibility[] = [
+export const BOARD_VISIBILITIES: BoardVisibility[] = [
   "public",
   "verifiedOnly",
   "premiumOnly",
@@ -107,19 +102,19 @@ export type BoardCreateThreadInput = {
 @Injectable()
 export class BoardService implements OnModuleInit {
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly posts: PostsService,
-    private readonly viewerContext: ViewerContextService,
-    private readonly appConfig: AppConfigService,
-    private readonly realtime: PresenceRealtimeService,
-    private readonly sideEffects: SideEffectsService,
-    private readonly mutes: MutesService,
-    private readonly postsRead: PostsReadService,
-    private readonly postsWrite: PostsWriteService,
+    readonly prisma: PrismaService,
+    readonly posts: PostsService,
+    readonly viewerContext: ViewerContextService,
+    readonly appConfig: AppConfigService,
+    readonly realtime: PresenceRealtimeService,
+    readonly sideEffects: SideEffectsService,
+    readonly mutes: MutesService,
+    readonly postsRead: PostsReadService,
+    readonly postsWrite: PostsWriteService,
   ) {}
 
   /** Authors kept off the viewer's Board lists: blocks in either direction, plus people the viewer muted. */
-  private async hiddenAuthorIds(
+  async hiddenAuthorIds(
     viewer: ViewerContext | null,
     opts: { includeMuted: boolean },
   ): Promise<string[]> {
@@ -176,11 +171,11 @@ export class BoardService implements OnModuleInit {
     }
   }
 
-  private get publicBaseUrl(): string | null {
+  get publicBaseUrl(): string | null {
     return this.appConfig.r2()?.publicBaseUrl ?? null;
   }
 
-  private canRead(
+  canRead(
     viewer: ViewerContext | null,
     row: { userId: string; visibility: PostVisibility },
   ): boolean {
@@ -192,14 +187,14 @@ export class BoardService implements OnModuleInit {
       .includes(row.visibility);
   }
 
-  private readableVisibilities(viewer: ViewerContext | null): PostVisibility[] {
+  readableVisibilities(viewer: ViewerContext | null): PostVisibility[] {
     if (viewer?.siteAdmin) return BOARD_VISIBILITIES;
     return this.viewerContext
       .allowedPostVisibilities(viewer)
       .filter((v) => v !== "onlyMe");
   }
 
-  private canEdit(
+  canEdit(
     viewer: ViewerContext | null,
     row: { userId: string; createdAt: Date; editCount: number },
   ): boolean {
@@ -217,116 +212,7 @@ export class BoardService implements OnModuleInit {
   async listThreads(
     params: BoardListParams,
   ): Promise<{ threads: BoardThreadDto[]; nextCursor: string | null }> {
-    const viewer = await this.viewerContext.getViewer(params.viewerUserId);
-    const limit = Math.max(1, Math.min(50, params.limit));
-    const q = (params.q ?? "").trim().slice(0, 120);
-    const tags = normalizeBoardTags(params.tags).slice(0, BOARD_MAX_TAGS);
-    const authorUsername = (params.authorUsername ?? "").trim();
-
-    const and: Prisma.PostWhereInput[] = [
-      { kind: "board", parentId: null, deletedAt: null, isDraft: false },
-      authorUsername
-        ? {
-            user: {
-              bannedAt: null,
-              username: { equals: authorUsername, mode: "insensitive" },
-            },
-          }
-        : { user: { bannedAt: null } },
-      {
-        visibility:
-          params.visibility === "all"
-            ? { in: BOARD_VISIBILITIES }
-            : params.visibility,
-      },
-    ];
-    const threadWhere: Prisma.BoardThreadWhereInput = {
-      ...(tags.length ? { tags: { hasSome: tags } } : {}),
-      ...(params.domain
-        ? {
-            domain: params.domain
-              .trim()
-              .toLowerCase()
-              .replace(/^www\./, ""),
-          }
-        : {}),
-    };
-    if (Object.keys(threadWhere).length)
-      and.push({ boardThread: { is: threadWhere } });
-    // The Board is site-wide: only visibility tier and the viewer's own hides shape the list, never follows.
-    if (params.hiddenOnly) {
-      if (!viewer) return { threads: [], nextCursor: null };
-      and.push({ boardHides: { some: { userId: viewer.id } } });
-    } else if (viewer && !authorUsername) {
-      and.push({ boardHides: { none: { userId: viewer.id } } });
-    }
-    // A muted member's own Board tab still lists their posts; blocks hide them everywhere.
-    const hiddenAuthors = await this.hiddenAuthorIds(viewer, {
-      includeMuted: !authorUsername,
-    });
-    if (hiddenAuthors.length) and.push({ userId: { notIn: hiddenAuthors } });
-    if (q) {
-      and.push({
-        OR: [
-          {
-            boardThread: {
-              is: { title: { contains: q, mode: "insensitive" } },
-            },
-          },
-          // Text matches only for threads the viewer can read, so search can't probe gated bodies.
-          {
-            body: { contains: q, mode: "insensitive" },
-            visibility: { in: this.readableVisibilities(viewer) },
-          },
-        ],
-      });
-    }
-    const where: Prisma.PostWhereInput = { AND: and };
-
-    let rows: ThreadRow[];
-    let nextCursor: string | null = null;
-
-    if (params.sort === "new") {
-      const cursorWhere = await createdAtIdCursorWhere({
-        cursor: params.cursor,
-        lookup: (id) =>
-          this.postsRead.read.findUnique({
-            where: { id },
-            select: { id: true, createdAt: true },
-          }),
-      });
-      rows = await this.postsRead.read.findMany({
-        where: cursorWhere ? { AND: [where, cursorWhere] } : where,
-        include: POST_LIST_INCLUDE,
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: limit + 1,
-      });
-      if (rows.length > limit) {
-        rows = rows.slice(0, limit);
-        nextCursor = rows[rows.length - 1]?.id ?? null;
-      }
-    } else {
-      const offset = decodeOffsetCursor(params.cursor);
-      const start = params.range ? boardRangeStart(params.range) : null;
-      // Top matches the visible vote count. A range only filters creation time.
-      rows = await this.postsRead.read.findMany({
-        where: start ? { AND: [where, { createdAt: { gte: start } }] } : where,
-        include: POST_LIST_INCLUDE,
-        orderBy: [
-          { boostCount: "desc" },
-          { createdAt: "desc" },
-          { id: "desc" },
-        ],
-        skip: offset,
-        take: limit + 1,
-      });
-      if (rows.length > limit) {
-        rows = rows.slice(0, limit);
-        nextCursor = encodeOffsetCursor(offset + limit);
-      }
-    }
-
-    return { threads: await this.hydrateThreads(viewer, rows), nextCursor };
+    return listBoardThreadsOn(this, params);
   }
 
   async getThread(
@@ -359,7 +245,7 @@ export class BoardService implements OnModuleInit {
   }
 
   /** Per thread: live comments by others (excluding hidden authors) newer than the viewer's last visit. */
-  private async newCommentCounts(
+  async newCommentCounts(
     viewer: ViewerContext | null,
     rows: ThreadRow[],
     lastSeen: Map<string, Date>,
@@ -388,7 +274,7 @@ export class BoardService implements OnModuleInit {
     );
   }
 
-  private async unreadActivity(viewer: ViewerContext | null, ids: string[]) {
+  async unreadActivity(viewer: ViewerContext | null, ids: string[]) {
     const result = new Map<string, { kind: NonNullable<BoardThreadDto['unreadActivity']>; commentIds: Set<string> }>();
     if (!viewer) return result;
     const excludedActors = [viewer.id, ...await this.hiddenAuthorIds(viewer, { includeMuted: true })];
@@ -424,113 +310,11 @@ export class BoardService implements OnModuleInit {
     return result;
   }
 
-  private async hydrateThreads(
+  async hydrateThreads(
     viewer: ViewerContext | null,
     rows: ThreadRow[],
   ): Promise<BoardThreadDto[]> {
-    if (rows.length === 0) return [];
-    const ids = rows.map((r) => r.id);
-    const [boosted, bookmarks, lastSeen, hidden, unread] = await Promise.all([
-      viewer
-        ? this.posts.viewerBoostedPostIds({
-            viewerUserId: viewer.id,
-            postIds: ids,
-          })
-        : Promise.resolve(new Set<string>()),
-      viewer
-        ? this.posts.viewerBookmarksByPostId({
-            viewerUserId: viewer.id,
-            postIds: ids,
-          })
-        : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
-      viewer
-        ? this.posts.viewerLastSeenAtByPostId({
-            openedOnly: true,
-            viewerUserId: viewer.id,
-            postIds: ids,
-          })
-        : Promise.resolve(new Map<string, Date>()),
-      viewer
-        ? this.prisma.boardHide.findMany({
-            where: { userId: viewer.id, postId: { in: ids } },
-            select: { postId: true },
-          })
-        : Promise.resolve([] as Array<{ postId: string }>),
-      this.unreadActivity(viewer, ids),
-    ]);
-    const hiddenIds = new Set(hidden.map((h) => h.postId));
-    const newCountById = await this.newCommentCounts(viewer, rows, lastSeen);
-    const articleIds = rows
-      .map((r) => r.articleId)
-      .filter((id): id is string => Boolean(id));
-    const readingTimeByArticleId = new Map(
-      articleIds.length > 0
-        ? (
-            await this.prisma.article.findMany({
-              where: { id: { in: articleIds } },
-              select: { id: true, body: true },
-            })
-          ).map((a) => [a.id, estimateReadingTimeMinutes(a.body)] as const)
-        : [],
-    );
-
-    return rows
-      .filter((row) => row.boardThread)
-      .map((row) => {
-        const canAccess = this.canRead(viewer, row);
-        const postDto = toPostDto(
-          row as unknown as PostWithAuthorAndMedia,
-          this.publicBaseUrl,
-          {
-            viewerHasBoosted: boosted.has(row.id),
-            viewerHasBookmarked: bookmarks.has(row.id),
-            viewerCanAccess: canAccess,
-            ...(viewer ? { viewerHasViewed: lastSeen.has(row.id) } : {}),
-          },
-        );
-        const dto = toBoardThreadDto(postDto, row.boardThread!, {
-          viewerCanAccess: canAccess,
-          viewerHidden: hiddenIds.has(row.id),
-          viewerCanEdit: this.canEdit(viewer, row),
-          articleId: row.articleId ?? null,
-        });
-        if (viewer) {
-          dto.unreadActivity = canAccess ? unread.get(row.id)?.kind ?? null : null;
-          dto.unreadCommentCount = canAccess ? unread.get(row.id)?.commentIds.size ?? 0 : 0;
-          dto.viewerLastSeenAt = lastSeen.get(row.id)?.toISOString() ?? null;
-          dto.newCommentCount =
-            canAccess && lastSeen.has(row.id)
-              ? (newCountById.get(row.id) ?? 0)
-              : null;
-        }
-        const readingTime =
-          canAccess && row.articleId
-            ? readingTimeByArticleId.get(row.articleId)
-            : undefined;
-        if (readingTime) dto.readingTimeMinutes = readingTime;
-        if (canAccess && !dto.image && row.article?.thumbnailR2Key) {
-          const url = publicAssetUrl({
-            publicBaseUrl: this.publicBaseUrl,
-            key: row.article.thumbnailR2Key,
-          });
-          if (url) {
-            dto.image = {
-              id: `article-${row.article.id}`,
-              kind: "image",
-              source: "upload",
-              url,
-              mp4Url: null,
-              thumbnailUrl: null,
-              width: null,
-              height: null,
-              durationSeconds: null,
-              alt: row.article.title,
-              deletedAt: null,
-            };
-          }
-        }
-        return dto;
-      });
+    return hydrateBoardThreadsOn(this, viewer, rows);
   }
 
   async createThread(

@@ -1,13 +1,7 @@
 {
   "controllersUsingPrisma": [],
   "postTableOutsidePostsModule": [],
-  "filesOverMaxLines": [
-    "modules/admin/admin-analytics.read.ts",
-    "modules/admin/admin-image-review.service.ts",
-    "modules/articles/articles.service.ts",
-    "modules/board/board.service.ts",
-    "modules/notifications/notification-push.service.ts"
-  ],
+  "filesOverMaxLines": [],
   "duplicateEscapeHtml": [],
   "duplicateSlugify": []
 }
