@@ -9,6 +9,8 @@ import { NotificationsController } from './notifications.controller';
 import { NotificationsCleanupCron } from './notifications-cleanup.cron';
 import { NotificationsOrphanCleanupCron } from './notifications-orphan-cleanup.cron';
 import { NotificationsEmailCron } from './notifications-email.cron';
+import { NotificationsEmailSupportService } from './notifications-email-support.service';
+import { NotificationsEmailWeeklyService } from './notifications-email-weekly.service';
 import { OnboardingNudgeEmailCron } from './onboarding-nudge-email.cron';
 import { NotificationsReplyNudgeCron } from './notifications-reply-nudge.cron';
 import { NotificationsService } from './notifications.service';
@@ -47,6 +49,8 @@ import { OnThisDayCron } from './on-this-day.cron';
     NotificationSideEffectsHandler,
     NotificationsCleanupCron,
     NotificationsOrphanCleanupCron,
+    NotificationsEmailSupportService,
+    NotificationsEmailWeeklyService,
     NotificationsEmailCron,
     OnboardingNudgeEmailCron,
     NotificationsReplyNudgeCron,
