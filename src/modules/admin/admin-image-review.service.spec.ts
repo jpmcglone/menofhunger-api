@@ -517,6 +517,39 @@ describe("profile and publication media ownership", () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { surface: "profile avatar", assetKey: "avatars/user/photo.webp", owner: "user", field: "avatarKey", primaryType: "user" },
+    { surface: "profile banner", assetKey: "covers/user/banner.webp", owner: "user", field: "bannerKey", primaryType: "user" },
+    { surface: "group avatar", assetKey: "uploads/user/group-images/avatar.webp", owner: "communityGroup", field: "avatarImageUrl", primaryType: "group" },
+    { surface: "group cover", assetKey: "uploads/user/group-images/cover.webp", owner: "communityGroup", field: "coverImageUrl", primaryType: "group" },
+    { surface: "crew avatar", assetKey: "uploads/user/crew-images/avatar.webp", owner: "crew", field: "avatarImageUrl", primaryType: "crew" },
+    { surface: "crew cover", assetKey: "uploads/user/crew-images/cover.webp", owner: "crew", field: "coverImageUrl", primaryType: "crew" },
+  ] as const)(
+    "protects the shared banner/avatar editor's $surface and releases it once unreferenced",
+    async ({ assetKey, owner, field, primaryType }) => {
+      const { prisma, service } = setup(assetKey);
+      const row =
+        owner === "user"
+          ? { id: "user", username: "john", avatarKey: null, avatarVideoKey: null, bannerKey: null, [field]: assetKey }
+          : { id: owner, slug: owner, name: "Iron Brothers", avatarImageUrl: null, coverImageUrl: null, [field]: assetKey };
+      prisma[owner].findMany.mockResolvedValue([row]);
+
+      expect((await service.getById("asset")).asset.primaryType).toBe(primaryType);
+      expect((await service.list({ limit: 30, cursor: null, onlyOrphans: true })).items).toEqual([]);
+      await expect(
+        service.deleteById({ id: "asset", adminUserId: "admin", reason: "cleanup", onlyOrphans: true }),
+      ).rejects.toThrow("no longer an orphan");
+      expect(
+        (await service.deleteManyByIds({ ids: ["asset"], adminUserId: "admin", reason: "cleanup", onlyOrphans: true })).deleted,
+      ).toBe(0);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+
+      prisma[owner].findMany.mockResolvedValue([]);
+      expect((await service.getById("asset")).asset.primaryType).toBe("orphan");
+      expect((await service.list({ limit: 30, cursor: null, onlyOrphans: true })).items).toHaveLength(1);
+    },
+  );
+
   it("finds legacy CDN references even in batches larger than forty assets", async () => {
     const { prisma, service } = setup();
     prisma.mediaAsset.findMany.mockResolvedValue(
