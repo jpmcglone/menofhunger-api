@@ -16,6 +16,7 @@ import { TickerService } from '../cashtags/ticker.service';
 import type { UserListRelationship } from '../../common/dto/user.dto';
 import type { CashtagResultDto } from '../../common/dto';
 import { POST_BASE_INCLUDE, POST_LIST_INCLUDE } from '../../common/prisma-includes/post.include';
+import { buildPostVisibilityWhere } from '../../common/posts/post-visibility';
 import { excludeBoardOnlyWhere } from '../posts/posts-query-builders';
 import { articleAuthorInclude } from '../../common/dto/article.dto';
 import { toCommunityGroupShellDto, type CommunityGroupShellDto } from '../../common/dto/community-group.dto';
@@ -1066,9 +1067,7 @@ export class SearchService {
     const readableGroupPostWhere = this.readableGroupPostWhere(viewer);
 
     // Never include onlyMe posts in search results (even for the viewer).
-    const visibilityWhere: Prisma.PostWhereInput = viewer?.id
-      ? { visibility: { in: allowed } }
-      : { visibility: 'public' };
+    const visibilityWhere = buildPostVisibilityWhere({ viewerUserId: viewer?.id ?? null, allowed });
     // Always exclude flat reposts from search; their content is redundant with the original post.
     const kindWhere: Prisma.PostWhereInput = kind ? ({ kind } as Prisma.PostWhereInput) : { kind: { not: 'repost' } };
 

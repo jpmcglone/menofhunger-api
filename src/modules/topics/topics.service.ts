@@ -7,6 +7,7 @@ import { type TopicCategoryDto, type TopicDto } from '../../common/dto';
 import { PostsService } from '../posts/posts.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
+import { buildPostVisibilityWhere } from '../../common/posts/post-visibility';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { POST_BASE_INCLUDE } from '../../common/prisma-includes/post.include';
 
@@ -249,11 +250,11 @@ export class TopicsService {
 
     const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
     const allowed = this.allowedVisibilitiesForViewer(viewer);
-    const visibilityWhere: Prisma.PostWhereInput = viewer?.id
-      ? {
-          OR: [{ visibility: { in: allowed } }, { userId: viewer.id, visibility: 'onlyMe' }],
-        }
-      : { visibility: 'public' };
+    const visibilityWhere = buildPostVisibilityWhere({
+      viewerUserId: viewer?.id ?? null,
+      allowed,
+      authorOverride: 'includeOnlyMe',
+    });
 
     const cursorWhere = await createdAtIdCursorWhere({
       cursor,
@@ -321,11 +322,11 @@ export class TopicsService {
 
     const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
     const allowed = this.allowedVisibilitiesForViewer(viewer);
-    const visibilityWhere: Prisma.PostWhereInput = viewer?.id
-      ? {
-          OR: [{ visibility: { in: allowed } }, { userId: viewer.id, visibility: 'onlyMe' }],
-        }
-      : { visibility: 'public' };
+    const visibilityWhere = buildPostVisibilityWhere({
+      viewerUserId: viewer?.id ?? null,
+      allowed,
+      authorOverride: 'includeOnlyMe',
+    });
 
     const cursorWhere = await createdAtIdCursorWhere({
       cursor,

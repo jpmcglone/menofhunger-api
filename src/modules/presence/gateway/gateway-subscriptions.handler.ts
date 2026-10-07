@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { isPostVisibleToViewer } from '../../../common/posts/post-visibility';
 import type { Socket } from 'socket.io';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CommunityGroupReadAccessService } from '../../viewer/community-group-read-access.service';
@@ -78,9 +79,7 @@ export class ContentSubscriptionsHandler {
       const isSelf = Boolean(viewerId && row.userId === viewerId);
 
       // Tier gate (applies to all posts, including group posts).
-      if (vis === 'onlyMe' && !isSelf) continue;
-      if (vis === 'verifiedOnly' && !viewerIsVerified && !isSelf) continue;
-      if (vis === 'premiumOnly' && !viewerIsPremium && !isSelf) continue;
+      if (!isPostVisibleToViewer({ visibility: vis, isSelf, viewerIsVerified, viewerIsPremium })) continue;
 
       // Group membership gate (group posts require active membership or open-group access).
       if (gid && !isSelf && !readableGroupIds.has(gid)) continue;
@@ -216,9 +215,7 @@ export class ContentSubscriptionsHandler {
       if (!row) continue;
       const vis = String((row as any).visibility ?? '');
       const isSelf = Boolean(viewerId && row.authorId === viewerId);
-      if (vis === 'onlyMe' && !isSelf) continue;
-      if (vis === 'verifiedOnly' && !viewerIsVerified && !isSelf) continue;
-      if (vis === 'premiumOnly' && !viewerIsPremium && !isSelf) continue;
+      if (!isPostVisibleToViewer({ visibility: vis, isSelf, viewerIsVerified, viewerIsPremium })) continue;
 
       subs.add(articleId);
       accepted.push(articleId);

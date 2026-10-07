@@ -21,6 +21,7 @@ import {
   type ViewerContext,
 } from "../viewer/viewer-context.service";
 import { AppConfigService } from "../app/app-config.service";
+import { buildPostVisibilityWhere } from "../../common/posts/post-visibility";
 import { createdAtIdCursorWhere } from "../../common/pagination/created-at-id-cursor";
 import { toCommunityGroupPreviewDto } from "../../common/dto/community-group.dto";
 import type { CommunityGroupPreviewDto } from "../../common/dto/community-group.dto";
@@ -576,13 +577,7 @@ export class PostsFeedQueryService {
     // When user explicitly filters by a specific visibility, respect that filter even for their own posts.
     const visibilityWhere =
       viewerUserId && visibility === "all"
-        ? ({
-            OR: [
-              baseVisibility,
-              // Author sees own posts (e.g. after tier downgrade), but never include only-me outside /only-me.
-              { userId: viewerUserId, visibility: { not: "onlyMe" } },
-            ],
-          } as Prisma.PostWhereInput)
+        ? buildPostVisibilityWhere({ viewerUserId, allowed, authorOverride: "excludeOnlyMe" })
         : baseVisibility;
 
     if (authorUserIds && authorUserIds.length === 0) {
