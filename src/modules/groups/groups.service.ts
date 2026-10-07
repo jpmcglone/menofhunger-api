@@ -29,6 +29,7 @@ import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 import { slugifyHandle } from '../../common/text/slugify';
 const FEATURED_CACHE_TTL_SECONDS = 120;
 
@@ -115,6 +116,7 @@ export class GroupsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly postsRead: PostsReadService,
+    private readonly postsWrite: PostsWriteService,
     private readonly posts: PostsService,
     private readonly appConfig: AppConfigService,
     private readonly sideEffects: SideEffectsService,
@@ -1130,11 +1132,11 @@ export class GroupsService {
 
     const now = new Date();
     await this.prisma.$transaction(async (tx) => {
-      await tx.post.updateMany({
+      await this.postsWrite.writeOn(tx).updateMany({
         where: { communityGroupId: params.groupId, pinnedInGroupAt: { not: null } },
         data: { pinnedInGroupAt: null },
       });
-      await tx.post.update({
+      await this.postsWrite.writeOn(tx).update({
         where: { id: postId },
         data: { pinnedInGroupAt: now },
       });
@@ -1151,7 +1153,7 @@ export class GroupsService {
     if (!isOwner && !params.isSiteAdmin) {
       throw new ForbiddenException('Only the group owner can unpin posts.');
     }
-    await this.prisma.post.updateMany({
+    await this.postsWrite.write.updateMany({
       where: { communityGroupId: params.groupId, pinnedInGroupAt: { not: null } },
       data: { pinnedInGroupAt: null },
     });

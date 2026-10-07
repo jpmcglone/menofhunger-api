@@ -22,6 +22,7 @@ import {
 } from './pickax-content';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 export type PickaxQueueResult =
   | { status: 'queued'; mode: CrosspostMode }
   | { status: 'skipped'; reason: string };
@@ -40,6 +41,7 @@ export class PickaxCrosspostService {
     private readonly api: PickaxApiClient,
     private readonly realtime: PresenceRealtimeService,
     private readonly postsRead: PostsReadService,
+    private readonly postsWrite: PostsWriteService,
   ) {}
 
   // ─── Request path ──────────────────────────────────────────────────────────
@@ -300,7 +302,7 @@ export class PickaxCrosspostService {
     if (remoteId) {
       const pickaxUrl = mode === 'link' || kind === 'post' ? pickaxPostUrl(remoteId) : pickaxArticleUrl(remoteId);
       if (kind === 'post') {
-        await this.prisma.post.updateMany({ where: { id: localId }, data: { pickaxUrl, pickaxError: null } });
+        await this.postsWrite.write.updateMany({ where: { id: localId }, data: { pickaxUrl, pickaxError: null } });
       } else {
         await this.prisma.article.updateMany({ where: { id: localId }, data: { pickaxUrl, pickaxError: null } });
       }
@@ -316,7 +318,7 @@ export class PickaxCrosspostService {
   ): Promise<void> {
     const note = message.slice(0, 500);
     if (target.kind === 'post') {
-      await this.prisma.post.updateMany({ where: { id: target.localId }, data: { pickaxError: note } });
+      await this.postsWrite.write.updateMany({ where: { id: target.localId }, data: { pickaxError: note } });
     } else {
       await this.prisma.article.updateMany({ where: { id: target.localId }, data: { pickaxError: note } });
     }

@@ -2,6 +2,7 @@ import { XPublishingService } from "./x-publishing.service";
 import { xSourceHash } from "./x-publishing-plan";
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 function fixture() {
   const source = {
     body: "Hello",
@@ -94,7 +95,7 @@ function fixture() {
     {} as any,
     {} as any,
     realtime,
-    { recordShared: jest.fn(), settle: jest.fn() } as any, new PostsReadService(prisma as never));
+    { recordShared: jest.fn(), settle: jest.fn() } as any, new PostsReadService(prisma as never), new PostsWriteService(prisma as never));
   return {
     service,
     source,

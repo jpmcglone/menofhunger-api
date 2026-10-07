@@ -1,6 +1,7 @@
 import { BoardService } from "./board.service";
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 const author = {
   id: "author",
   username: "james",
@@ -123,7 +124,7 @@ function setup(viewer: Record<string, unknown> | null, row = threadRow()) {
     } as any,
     realtime as any,
     sideEffects as any,
-    mutes as any, new PostsReadService(prisma as any as never));
+    mutes as any, new PostsReadService(prisma as any as never), new PostsWriteService(prisma as any as never));
   return { service, prisma, posts, realtime, sideEffects, mutes };
 }
 

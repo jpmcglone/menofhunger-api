@@ -4,6 +4,7 @@ import { PickaxApiError } from './pickax-api.client';
 import { PickaxCrosspostService } from './pickax-crosspost.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 type PostRow = Record<string, unknown>;
 
 function postRow(overrides: PostRow = {}): PostRow {
@@ -89,7 +90,7 @@ function harness(opts: { post?: PostRow; connected?: boolean } = {}) {
     appConfig as never,
     connections as never,
     api as never,
-    realtime as never, new PostsReadService(prisma as never as never));
+    realtime as never, new PostsReadService(prisma as never as never), new PostsWriteService(prisma as never as never));
 
   return { service, prisma, api, connections, sideEffects, dispatched, postUpdates, crosspostUpserts, realtime };
 }

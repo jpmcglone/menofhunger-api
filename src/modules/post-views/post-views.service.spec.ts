@@ -1,6 +1,7 @@
 import { PostViewsService } from './post-views.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 describe('PostViewsService.markViewed', () => {
   function makeService(opts?: { createdCount?: number; impressionCount?: number; lastSeenCount?: number }) {
     const createdCount = opts?.createdCount ?? 0;
@@ -73,7 +74,7 @@ describe('PostViewsService.markViewed', () => {
       cacheInvalidation as any,
       presenceRealtime as any,
       posthog as any,
-      notifications as any, new PostsReadService(prisma as any as never));
+      notifications as any, new PostsReadService(prisma as any as never), new PostsWriteService(prisma as any as never));
     return { service, prisma, tx, redis, cacheInvalidation, presenceRealtime, posthog, notifications };
   }
 
@@ -323,7 +324,7 @@ describe('PostViewsService.markViewedBatch', () => {
       cacheInvalidation as any,
       presenceRealtime as any,
       posthog as any,
-      notifications as any, new PostsReadService(prisma as any as never));
+      notifications as any, new PostsReadService(prisma as any as never), new PostsWriteService(prisma as any as never));
     return {
       service,
       prisma,

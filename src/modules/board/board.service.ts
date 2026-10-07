@@ -61,6 +61,7 @@ import {
 } from "./board.utils";
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 import { slugifyBoardTag } from '../../common/text/slugify';
 type ThreadRow = Prisma.PostGetPayload<{ include: typeof POST_LIST_INCLUDE }>;
 type CommentRow = Prisma.PostGetPayload<{ include: typeof POST_BASE_INCLUDE }>;
@@ -114,6 +115,7 @@ export class BoardService implements OnModuleInit {
     private readonly sideEffects: SideEffectsService,
     private readonly mutes: MutesService,
     private readonly postsRead: PostsReadService,
+    private readonly postsWrite: PostsWriteService,
   ) {}
 
   /** Authors kept off the viewer's Board lists: blocks in either direction, plus people the viewer muted. */
@@ -167,7 +169,7 @@ export class BoardService implements OnModuleInit {
       return Boolean(excerpt && body && body === excerpt);
     });
     if (mirrored.length) {
-      await this.prisma.post.updateMany({
+      await this.postsWrite.write.updateMany({
         where: { id: { in: mirrored.map((t) => t.id) } },
         data: { body: "" },
       });
@@ -698,7 +700,7 @@ export class BoardService implements OnModuleInit {
     if (threads.length === 0) return;
     const ids = threads.map((t) => t.id);
     if (patch.deleted) {
-      await this.prisma.post.updateMany({
+      await this.postsWrite.write.updateMany({
         where: { id: { in: ids } },
         data: { deletedAt: new Date() },
       });
@@ -716,7 +718,7 @@ export class BoardService implements OnModuleInit {
     if (patch.visibility && patch.visibility !== "onlyMe")
       postData.visibility = patch.visibility;
     if (Object.keys(postData).length)
-      await this.prisma.post.updateMany({
+      await this.postsWrite.write.updateMany({
         where: { id: { in: ids } },
         data: postData,
       });
@@ -738,7 +740,7 @@ export class BoardService implements OnModuleInit {
       const commentCount = await this.postsRead.read.count({
         where: { rootId: id, deletedAt: null, NOT: { id } },
       });
-      await this.prisma.post.update({ where: { id }, data: { commentCount } });
+      await this.postsWrite.write.update({ where: { id }, data: { commentCount } });
     }
   }
 
@@ -796,7 +798,7 @@ export class BoardService implements OnModuleInit {
         isSiteAdmin: viewer.siteAdmin,
       });
     } else if (Object.keys(data).length) {
-      await this.prisma.post.update({
+      await this.postsWrite.write.update({
         where: { id: row.id },
         data: { editedAt: new Date(), editCount: { increment: 1 } },
       });

@@ -38,6 +38,7 @@ import { LOGGED_IN_VIEW_WEIGHT } from '../views/view-tracking.utils';
 import { easternDayKey } from '../../common/time/eastern-day-key';
 import { slugifyArticleTitle } from '../../common/text/slugify';
 import { MENTION_USER_SELECT } from '../../common/prisma-selects/user.select';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 
 const VERIFIED_ARTICLES_PER_DAY = 1;
 
@@ -98,6 +99,7 @@ export class ArticlesService {
     private readonly sideEffects: SideEffectsService,
     private readonly articleViews: ArticleViewsService,
     private readonly board: BoardService,
+    private readonly postsWrite: PostsWriteService,
   ) {}
 
   private get r2BaseUrl(): string | null {
@@ -1377,7 +1379,7 @@ export class ArticlesService {
       );
     }
 
-    const post = await this.prisma.post.create({
+    const post = await this.postsWrite.write.create({
       data: {
         userId,
         body: body.trim(),

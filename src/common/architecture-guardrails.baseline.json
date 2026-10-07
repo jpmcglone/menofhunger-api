@@ -1,16 +1,6 @@
 {
   "controllersUsingPrisma": [],
-  "postTableOutsidePostsModule": [
-    "modules/articles/articles.service.ts",
-    "modules/board/board.service.ts",
-    "modules/fitness/fitness.service.ts",
-    "modules/groups/groups.service.ts",
-    "modules/marvin/services/marvin-bot-identity.service.ts",
-    "modules/pickax/pickax-crosspost.service.ts",
-    "modules/post-views/post-views.service.ts",
-    "modules/x/x-crosspost.service.ts",
-    "modules/x/x-publishing.service.ts"
-  ],
+  "postTableOutsidePostsModule": [],
   "filesOverMaxLines": [
     "modules/admin/admin-analytics.read.ts",
     "modules/admin/admin-image-review.service.ts",

@@ -2,6 +2,7 @@ import { XCrosspostService } from "./x-crosspost.service";
 import { X_REFERENCE_PRICES } from "./integration-budget.policy";
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 describe("durable X Article publishing", () => {
   function harness() {
     const source = {
@@ -81,7 +82,7 @@ describe("durable X Article publishing", () => {
       connections as any,
       api as any,
       realtime as any,
-      budgets as any, new PostsReadService(prisma as any as never));
+      budgets as any, new PostsReadService(prisma as any as never), new PostsWriteService(prisma as any as never));
     return { service, row, source, api, budgets, policy, prisma };
   }
   it("persists the draft before the publish request and settles one publication", async () => {

@@ -3,6 +3,7 @@ import { PostViewsService } from './post-views.service';
 import { PostsTopicsBackfillCron } from '../posts/posts-topics-backfill.cron';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 // This gate is deliberately limited to check-database.sh's disposable database.
 const url = process.env.MOH_ERASURE_FIXTURE_DATABASE_URL;
 const enabled = url && new URL(url).hostname === '127.0.0.1' && new URL(url).pathname === '/moh_erasure_fixture';
@@ -16,7 +17,7 @@ const enabled = url && new URL(url).hostname === '127.0.0.1' && new URL(url).pat
     { del: async () => undefined, setString: async () => true } as any,
     { bumpForYouUser: async () => undefined } as any,
     { emitPostsLiveUpdated: jest.fn(), emitPostsLiveUpdatedToUser: jest.fn() } as any,
-    analytics as any, notifications as any, new PostsReadService(db as any as never));
+    analytics as any, notifications as any, new PostsReadService(db as any as never), new PostsWriteService(db as any as never));
   let userId: string;
   let ids: string[];
   const anon = 'sentry_batch_browser';

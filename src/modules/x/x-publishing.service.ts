@@ -28,6 +28,7 @@ import {
 import type { XPublishingWorkspaceDto } from "../../common/dto/integrations.dto";
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 @Injectable()
 export class XPublishingService {
   constructor(
@@ -42,6 +43,7 @@ export class XPublishingService {
     private readonly realtime: PresenceRealtimeService,
     private readonly usage: XUsageService,
     private readonly postsRead: PostsReadService,
+    private readonly postsWrite: PostsWriteService,
   ) {}
 
   private async source(userId: string, postId: string) {
@@ -425,7 +427,7 @@ export class XPublishingService {
       }
       await guard();
       const xUrl = `https://x.com/i/status/${delivered[0]}`;
-      await this.prisma.post.updateMany({
+      await this.postsWrite.write.updateMany({
         where: { id: row.resourceId },
         data: { xUrl, xError: null },
       });
@@ -457,7 +459,7 @@ export class XPublishingService {
         where: { id: copy.id },
         data: { lastError: message },
       });
-      await this.prisma.post.updateMany({
+      await this.postsWrite.write.updateMany({
         where: { id: row.resourceId },
         data: { xError: message },
       });

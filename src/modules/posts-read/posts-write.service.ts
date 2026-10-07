@@ -20,4 +20,9 @@ export class PostsWriteService {
   get write(): PostWriteDelegate {
     return this.prisma.post;
   }
+
+  /** Same delegate on a transaction client so pin/counter writes stay atomic. */
+  writeOn(client: { post: PostWriteDelegate }): PostWriteDelegate {
+    return client.post;
+  }
 }

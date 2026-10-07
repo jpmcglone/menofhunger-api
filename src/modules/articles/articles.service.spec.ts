@@ -38,6 +38,7 @@ function makeService(opts?: { allowedVisibilities?: Array<'public' | 'verifiedOn
     { dispatch: jest.fn() } as any,
     { viewerViewedArticleIds: jest.fn().mockResolvedValue(new Set()) } as any,
     { syncArticleThread: jest.fn().mockResolvedValue(undefined), createArticleThread: jest.fn().mockResolvedValue(null) } as any,
+    { write: prisma.post } as any,
   );
 
   return { service, prisma, viewer };
@@ -164,6 +165,7 @@ function makeAuthoringService(tier: TierOpts = {}) {
     { dispatch: jest.fn() } as any,
     { viewerViewedArticleIds: jest.fn().mockResolvedValue(new Set()) } as any,
     board,
+    { write: prisma.post } as any,
   );
 
   return { service, prisma, viewer, board };

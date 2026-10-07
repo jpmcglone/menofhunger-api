@@ -3,6 +3,7 @@ import { XApiError } from "./x-api.client";
 import { XCrosspostService } from "./x-crosspost.service";
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 type Row = Record<string, unknown> | null;
 
 function postRow(overrides: Record<string, unknown> = {}) {
@@ -131,7 +132,7 @@ function harness(
     connections as never,
     api as never,
     realtime as never,
-    budgets as never, new PostsReadService(prisma as never as never));
+    budgets as never, new PostsReadService(prisma as never as never), new PostsWriteService(prisma as never as never));
   return {
     service,
     prisma,

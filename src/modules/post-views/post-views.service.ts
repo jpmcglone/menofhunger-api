@@ -18,6 +18,7 @@ import {
 } from '../views/view-tracking.utils';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 const BREAKDOWN_TTL_SECONDS = 60;
 const BATCH_MAX = 50;
 
@@ -70,6 +71,7 @@ export class PostViewsService {
     private readonly posthog: PosthogService,
     private readonly notifications: NotificationsService,
     private readonly postsRead: PostsReadService,
+    private readonly postsWrite: PostsWriteService,
   ) {}
 
   /**
@@ -337,7 +339,7 @@ export class PostViewsService {
       };
     }
 
-    const updated = await this.prisma.post.update({
+    const updated = await this.postsWrite.write.update({
       where: { id: pid },
       data: {
         ...(viewerIncrement !== 0 ? { viewerCount: { increment: viewerIncrement } } : {}),

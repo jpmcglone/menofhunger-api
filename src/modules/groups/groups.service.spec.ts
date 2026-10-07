@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import { GroupsService } from './groups.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 // ─── Deps factory ────────────────────────────────────────────────────────────
 //
 // GroupsService has 5 collaborators. For the privacy-transition tests below we
@@ -57,7 +58,7 @@ function makeService(prismaOverrides: Record<string, any> = {}) {
 
   const marvIdentity: any = { cachedMarvUserId: jest.fn(() => null), getMarvUserId: jest.fn(async () => null) };
   const presenceRealtime: any = { emitGroupMarvChanged: jest.fn(), emitGroupNotificationPreferencesChanged: jest.fn(), emitGroupChannelChanged: jest.fn() };
-  const service = new GroupsService(prisma, new PostsReadService(prisma as never), posts, appConfig, sideEffects, redis, marvIdentity, presenceRealtime);
+  const service = new GroupsService(prisma, new PostsReadService(prisma as never), new PostsWriteService(prisma as never), posts, appConfig, sideEffects, redis, marvIdentity, presenceRealtime);
   return { service, prisma, presenceRealtime, sideEffects };
 }
 
@@ -1203,7 +1204,7 @@ describe('GroupsService.addMarvToGroup', () => {
     const sideEffects: any = { dispatch: jest.fn() };
     const redis: any = {};
     const presenceRealtime: any = { emitGroupMarvChanged: jest.fn(), emitGroupNotificationPreferencesChanged: jest.fn(), emitGroupChannelChanged: jest.fn() };
-    const service = new GroupsService(prisma, new PostsReadService(prisma as never), posts, appConfig, sideEffects, redis, marvIdentityLocal, presenceRealtime);
+    const service = new GroupsService(prisma, new PostsReadService(prisma as never), new PostsWriteService(prisma as never), posts, appConfig, sideEffects, redis, marvIdentityLocal, presenceRealtime);
     return { service, memberCreate, memberUpdate, groupUpdate, inviteUpdateMany, transactionFn, presenceRealtime };
   }
 
@@ -1290,7 +1291,7 @@ describe('GroupsService.removeMember — Marv realtime', () => {
     const posts: any = {};
     const appConfig: any = { r2: jest.fn(() => null) };
     const redis: any = {};
-    const service = new GroupsService(prisma, new PostsReadService(prisma as never), posts, appConfig, sideEffects, redis, marvIdentityLocal, presenceRealtime);
+    const service = new GroupsService(prisma, new PostsReadService(prisma as never), new PostsWriteService(prisma as never), posts, appConfig, sideEffects, redis, marvIdentityLocal, presenceRealtime);
     return { service, presenceRealtime, sideEffects };
   }
 

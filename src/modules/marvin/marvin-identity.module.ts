@@ -13,8 +13,8 @@ import { MarvinBotIdentityService } from './services/marvin-bot-identity.service
  * him in a thread — otherwise the enqueue gates fall back to env-only resolution
  * and silently no-op when `MARV_USER_ID` isn't pinned in `.env`.
  *
- * `MarvinBotIdentityService` only depends on `PrismaService` (global) and
- * `AppConfigService` (global), so we expose it as its own `@Global()` provider.
+ * `MarvinBotIdentityService` only depends on global providers (`PrismaService`,
+ * `AppConfigService`, `PostsWriteService`), so we expose it as its own `@Global()` provider.
  * `MessagesService` / `PostsService` can inject it directly without creating a
  * dependency cycle.
  */

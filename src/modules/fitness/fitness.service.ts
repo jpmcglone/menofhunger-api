@@ -24,6 +24,7 @@ import { vo2maxShareSnapshot } from './fitness-share-snapshot';
 import { stravaRawIsComplete } from './fitness-strava.service';
 import type { Prisma } from '@prisma/client';
 import { MENTION_USER_SELECT } from '../../common/prisma-selects/user.select';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 
 const MANUAL_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 /** Re-fetch recent Strava activities so a late upload after lastSyncAt is not skipped. */
@@ -122,6 +123,7 @@ export class FitnessService {
     private readonly ingest: FitnessIngestService,
     private readonly appConfig: AppConfigService,
     private readonly redis: RedisService,
+    private readonly postsWrite: PostsWriteService,
   ) {}
 
   // ─── Page ────────────────────────────────────────────────────────────────────
@@ -740,7 +742,7 @@ export class FitnessService {
       data: { userId, shareType, activityId: activityId ?? null, bodyMetricId: bodyMetricId ?? null, goalId: goalId ?? null, snapshot: snapshot as any },
     });
 
-    const post = await this.prisma.post.create({
+    const post = await this.postsWrite.write.create({
       data: {
         userId,
         body: body.trim(),

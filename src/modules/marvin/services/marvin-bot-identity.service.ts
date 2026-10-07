@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppConfigService } from '../../app/app-config.service';
+import { PostsWriteService } from '../../posts-read/posts-write.service';
 import { MARV_BOT_TYPE } from '../marvin.constants';
 
 /**
@@ -28,6 +29,7 @@ export class MarvinBotIdentityService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
+    private readonly postsWrite: PostsWriteService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -129,7 +131,7 @@ export class MarvinBotIdentityService implements OnModuleInit {
     this.logger.log(`[marv] Seeded Marv bot user (id=${created.id}, username=${username}).`);
 
     // Seed an introductory post so Marv's profile isn't empty on first run.
-    await this.prisma.post.create({
+    await this.postsWrite.write.create({
       data: {
         userId: created.id,
         body: 'Hello, men!',

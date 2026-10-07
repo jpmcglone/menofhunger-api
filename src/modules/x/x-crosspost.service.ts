@@ -25,6 +25,7 @@ import { XApiClient, XApiError } from "./x-api.client";
 import { XConnectionService, monthStartUtc } from "./x-connection.service";
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsWriteService } from '../posts-read/posts-write.service';
 export type XQueueResult =
   | { status: "queued"; mode: CrosspostMode }
   | { status: "skipped"; reason: string };
@@ -70,6 +71,7 @@ export class XCrosspostService {
     private readonly realtime: PresenceRealtimeService,
     private readonly budgets: IntegrationBudgetService,
     private readonly postsRead: PostsReadService,
+    private readonly postsWrite: PostsWriteService,
   ) {}
 
   async requestPostCrosspost(
@@ -776,7 +778,7 @@ export class XCrosspostService {
       });
       const xUrl = `https://x.com/${encodeURIComponent(username)}/status/${encodeURIComponent(remoteId)}`;
       if (kind === "post") {
-        await this.prisma.post.updateMany({
+        await this.postsWrite.write.updateMany({
           where: { id: localId },
           data: { xUrl, xError: null },
         });
@@ -806,7 +808,7 @@ export class XCrosspostService {
           data: { lastError: uncertain },
         });
         if (kind === "post")
-          await this.prisma.post.updateMany({
+          await this.postsWrite.write.updateMany({
             where: { id: localId },
             data: { xError: uncertain },
           });
@@ -989,7 +991,7 @@ export class XCrosspostService {
     message: string,
   ): Promise<void> {
     if (kind === "post") {
-      await this.prisma.post.updateMany({
+      await this.postsWrite.write.updateMany({
         where: { id: localId },
         data: { xError: message },
       });
