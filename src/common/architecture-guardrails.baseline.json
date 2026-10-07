@@ -4,12 +4,9 @@
   "filesOverMaxLines": [
     "modules/admin/admin-analytics.read.ts",
     "modules/admin/admin-image-review.service.ts",
-    "modules/app/app-config.service.ts",
     "modules/articles/articles.service.ts",
     "modules/board/board.service.ts",
-    "modules/follows/follows.service.ts",
-    "modules/notifications/notification-push.service.ts",
-    "modules/notifications/notification-query.service.ts"
+    "modules/notifications/notification-push.service.ts"
   ],
   "duplicateEscapeHtml": [],
   "duplicateSlugify": []
