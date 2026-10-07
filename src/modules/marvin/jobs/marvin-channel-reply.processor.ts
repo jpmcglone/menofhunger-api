@@ -70,7 +70,6 @@ export class MarvinChannelReplyProcessor {
     const claim = `marvin-channel-${input.messageId}`;
     try { await this.prisma.marvinIdempotencyKey.create({ data: { key: claim } }); }
     catch (error) { if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return; throw error; }
-    const typing = this.showTyping(input, authorized.grant.botId);
     const controller = new AbortController();
     let checking = false;
     const heartbeat = setInterval(() => {
@@ -80,6 +79,7 @@ export class MarvinChannelReplyProcessor {
     }, 1000);
     let held = 0, delivered = false;
     let ownerId: string | undefined;
+    let typing: { stop: () => void } = { stop: () => undefined };
     const requested = settings?.preferredMode ?? 'auto';
     const evidence = new Map<string, ChannelMarvEvidence>();
     try {
@@ -110,6 +110,7 @@ export class MarvinChannelReplyProcessor {
       const cost = this.credits.costForMode(routed.mode);
       const reserve = cost + this.credits.threadContextSurcharge(60);
       await this.credits.reserve(ownerId, reserve); held = reserve;
+      typing = this.showTyping(input, authorized.grant.botId);
       let remainingInputTokens = Math.max(0, (limits.privateMaxInputTokens ?? 4000) - this.routing.estimateTokens(authorized.trigger.body) - 1000);
       const collect = async (query = '') => {
         const rows = await this.scope.retrieve(input, authorized.grant, query);

@@ -172,20 +172,11 @@ export class MarvinPublicReplyProcessor {
     const cfg = this.appConfig.marvBot();
     if (!cfg.enabled) {
       this.logger.log('[marv] public-reply EXIT reason=marv_disabled');
-      this.emitMarvTypingStop(postId);
       return;
     }
 
-    // Show "@marv is replying…" for the rest of this job. Queued / thinking /
-    // composing all look the same. Same `posts:typing` event humans use.
+    // Resolve Marv's id for membership checks. Typing waits until a thread reply is committed.
     const marvUserIdForTyping = this.identity.cachedMarvUserId() ?? (await this.identity.getMarvUserId());
-    if (marvUserIdForTyping) {
-      stopTyping = this.startTypingHeartbeat({
-        postId,
-        marvUserId: marvUserIdForTyping,
-        username: cfg.username,
-      }).stop;
-    }
     const settings = await this.prisma.marvinUserSettings.findUnique({
       where: { userId: requestingUserId },
       select: { preferredMode: true, disabledByAdmin: true },
@@ -549,7 +540,6 @@ export class MarvinPublicReplyProcessor {
       reservedHeld = reservedCost;
     } catch (err) {
       if (err instanceof InsufficientMarvCreditsError) {
-        stopTyping();
         this.logger.log(
           `[marv] public-reply EXIT reason=no_credits_at_reserve balance=${err.currentCredits} reserved=${reservedCost}`,
         );
@@ -575,6 +565,16 @@ export class MarvinPublicReplyProcessor {
         return;
       }
       throw err;
+    }
+
+    // Credits are held and every earlier gate (no reply, rate limit, canned notes) has passed.
+    // Start typing only now, so the room never sees "@marv is typing" for a reply that will not be sent.
+    if (marvUserIdForTyping) {
+      stopTyping = this.startTypingHeartbeat({
+        postId,
+        marvUserId: marvUserIdForTyping,
+        username: cfg.username,
+      }).stop;
     }
 
     const refundHeld = async () => {
@@ -947,28 +947,6 @@ export class MarvinPublicReplyProcessor {
    * event humans use. Queued / thinking / composing all emit `replying`. Always
    * call `stop()` so the indicator never gets stuck.
    */
-  /** Clears a queued "Marv is replying" pulse when this job will not reply. */
-  private emitMarvTypingStop(postId: string): void {
-    const marvUserId = this.identity.cachedMarvUserId();
-    if (!postId || !marvUserId) return;
-    try {
-      this.presenceRealtime.emitPostsTyping(postId, {
-        postId,
-        user: {
-          id: marvUserId,
-          username: this.appConfig.marvBot().username,
-          verifiedStatus: 'manual',
-          premium: true,
-          premiumPlus: false,
-          isOrganization: false,
-        },
-        typing: false,
-      });
-    } catch {
-      // best-effort
-    }
-  }
-
   private startTypingHeartbeat(args: {
     postId: string;
     marvUserId: string;

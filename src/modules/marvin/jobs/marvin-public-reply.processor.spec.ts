@@ -8,6 +8,7 @@ import {
   MARV_DEFAULT_SMART_MODEL,
 } from '../marvin-models';
 
+import { PostsReadService } from '../../posts-read/posts-read.service';
 function p2002(): Error {
   return new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
     code: 'P2002',
@@ -226,7 +227,7 @@ function makeProcessor(opts?: {
     })),
     // Delegate to the real (pure) selection so vision tests exercise the shared code path.
     selectImageMedia: (ctx: any, opts: any) =>
-      new MarvinThreadContextService({} as any, {} as any).selectImageMedia(ctx, opts),
+      new MarvinThreadContextService({} as any, {} as any, new PostsReadService({} as any as never)).selectImageMedia(ctx, opts),
   };
   const linkMetadata: any = { previewLinks: jest.fn(async () => []) };
   const presenceRealtime: any = { emitPostsTyping: jest.fn() };
@@ -292,6 +293,7 @@ describe('MarvinPublicReplyProcessor reply gate', () => {
     expect(m.usage.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 'no_reply_needed', creditsSpent: 0 }),
     );
+    expect(m.presenceRealtime.emitPostsTyping).not.toHaveBeenCalled();
   });
 
   it('replies as usual when Jev is unsure', async () => {
@@ -597,40 +599,24 @@ describe('MarvinPublicReplyProcessor', () => {
       ]);
     });
 
-    it('emits then clears typing on the canned not-configured path', async () => {
+    it('stays quiet on the canned not-configured path', async () => {
       const m = makeProcessor({ aiConfigured: false });
       await m.processor.process({
         postId: 'p-1',
         rootPostId: 'r-1',
         requestingUserId: 'u-requester',
       });
-      const calls = m.presenceRealtime.emitPostsTyping.mock.calls;
-      expect(calls[0]).toEqual([
-        'p-1',
-        { postId: 'p-1', user: typingUser, typing: true, status: 'replying' },
-      ]);
-      expect(calls[calls.length - 1]).toEqual([
-        'p-1',
-        { postId: 'p-1', user: typingUser, typing: false },
-      ]);
+      expect(m.presenceRealtime.emitPostsTyping).not.toHaveBeenCalled();
     });
 
-    it('emits then clears typing on the out-of-credits path', async () => {
+    it('stays quiet on the out-of-credits path', async () => {
       const m = makeProcessor({ credits: 1 });
       await m.processor.process({
         postId: 'p-1',
         rootPostId: 'r-1',
         requestingUserId: 'u-requester',
       });
-      const calls = m.presenceRealtime.emitPostsTyping.mock.calls;
-      expect(calls[0]).toEqual([
-        'p-1',
-        { postId: 'p-1', user: typingUser, typing: true, status: 'replying' },
-      ]);
-      expect(calls[calls.length - 1]).toEqual([
-        'p-1',
-        { postId: 'p-1', user: typingUser, typing: false },
-      ]);
+      expect(m.presenceRealtime.emitPostsTyping).not.toHaveBeenCalled();
     });
   });
 

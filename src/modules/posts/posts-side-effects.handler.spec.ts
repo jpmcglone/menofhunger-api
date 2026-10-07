@@ -846,15 +846,8 @@ describe('PostsSideEffectsHandler maybeEnqueueMarvReply', () => {
       expect.objectContaining({ postId: 'p-reply', requestingUserId: 'alice' }),
       expect.any(Object),
     );
-    expect(deps.presenceRealtime.emitPostsTyping).toHaveBeenCalledWith(
-      'p-reply',
-      expect.objectContaining({
-        postId: 'p-reply',
-        typing: true,
-        status: 'replying',
-        user: expect.objectContaining({ id: 'marv-id', username: 'marv' }),
-      }),
-    );
+    // Typing waits until the worker commits to a thread reply. Queuing is not that decision.
+    expect(deps.presenceRealtime.emitPostsTyping).not.toHaveBeenCalled();
   });
 
   it.each(['yeah I agree', 'Is this sufficient @benwisdom?'])('does not enqueue a direct reply to Marv without a body mention: %s', async (body) => {
