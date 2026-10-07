@@ -1,4 +1,4 @@
-import { PrismaService } from '../prisma/prisma.service';
+import { PartnerAccessService } from './partner-access.service';
 import { randomBytes } from 'node:crypto';
 import { RedisService } from '../redis/redis.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -52,13 +52,13 @@ export class PartnerGuard implements CanActivate {
 @UseGuards(PartnerGuard)
 @Controller('partner')
 export class PartnerController {
-  constructor(private readonly reads: PartnerReadService, private readonly rate: PartnerRateService, private readonly redis: RedisService, private readonly cfg: AppConfigService, private readonly prisma: PrismaService) {}
+  constructor(private readonly reads: PartnerReadService, private readonly rate: PartnerRateService, private readonly redis: RedisService, private readonly cfg: AppConfigService, private readonly access: PartnerAccessService) {}
   @Post('connection/continue') @HttpCode(200) @Scope('account:read') @Result(PartnerContinuationDto)
   @ApiBody({ schema: { type: 'object', required: ['externalAccountId'], properties: { externalAccountId: { type: 'string', minLength: 1, maxLength: 200 } } } })
   async continuePairing(@Req() req: PartnerRequest, @Body() body: unknown) {
     if (req.partner.client.platform !== 'pickax') throw new ForbiddenException();
     const input = z.object({ externalAccountId: z.string().min(1).max(200) }).strict().parse(body);
-    const connection = await this.prisma.pickaxConnection.findUnique({ where: { userId: req.partner.grant.userId } });
+    const connection = await this.access.pickaxConnection(req.partner.grant.userId);
     if (connection?.status === 'active' && connection.pickaxUserId === input.externalAccountId && connection.authorizedByUserId === req.partner.grant.operatorUserId) {
       return { data: { url: `${this.cfg.frontendBaseUrl()}/settings/integrations`, expiresIn: 0 } };
     }

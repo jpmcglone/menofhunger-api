@@ -1,6 +1,6 @@
 import { Controller, Get, Logger, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
-import { PrismaService } from '../prisma/prisma.service';
+import { DatabaseHealthService } from './database-health.service';
 import { AppConfigService } from '../app/app-config.service';
 import { RedisService } from '../redis/redis.service';
 import { AdminGuard } from '../admin/admin.guard';
@@ -11,7 +11,7 @@ export class HealthController {
   private readonly logger = new Logger(HealthController.name);
 
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly db: DatabaseHealthService,
     private readonly appConfig: AppConfigService,
     private readonly redis: RedisService,
   ) {}
@@ -78,7 +78,7 @@ export class HealthController {
   private async checkDb(): Promise<{ status: 'ok' | 'down'; latencyMs: number }> {
     const startedAt = Date.now();
     try {
-      await this.prisma.$queryRaw`SELECT 1`;
+      await this.db.ping();
       return { status: 'ok', latencyMs: Date.now() - startedAt };
     } catch (err) {
       this.logger.error(`Database health check failed: ${err instanceof Error ? err.message : String(err)}`);

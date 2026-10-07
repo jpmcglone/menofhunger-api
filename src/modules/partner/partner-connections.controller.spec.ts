@@ -1,4 +1,5 @@
 import { PartnerConnectionsController } from './partner-connections.controller';
+import { PartnerConnectionsService } from './partner-connections.service';
 
 describe('connected app status', () => {
   function harness() {
@@ -6,7 +7,7 @@ describe('connected app status', () => {
     const client = { id: 'client', name: 'Partner', active: true };
     const access: any = { assertAccount: jest.fn(async () => ({})) };
     const prisma: any = { partnerGrant: { findMany: jest.fn(async () => [grant]) }, partnerClient: { findMany: jest.fn(async () => [client]) } };
-    return { grant, client, access, controller: new PartnerConnectionsController(prisma, access) };
+    return { grant, client, access, controller: new PartnerConnectionsController(new PartnerConnectionsService(prisma, access)) };
   }
   it('shows removed operator authority as paused instead of active access', async () => {
     const h = harness(); h.access.assertAccount.mockRejectedValue(new Error('Operator removed'));

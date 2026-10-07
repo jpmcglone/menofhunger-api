@@ -14,6 +14,9 @@ export class PartnerAccessService {
     if (account.accountKind === 'page' && !(await this.prisma.userPageOperator.findUnique({ where: { operatorUserId_pageUserId: { operatorUserId, pageUserId: userId } } }))) throw new ForbiddenException('A current page operator must reconnect this app.');
     return account;
   }
+  pickaxConnection(userId: string) {
+    return this.prisma.pickaxConnection.findUnique({ where: { userId } });
+  }
   async grant(id: string, clientId?: string) {
     const grant = await this.prisma.partnerGrant.findUnique({ where: { id } });
     if (!grant || grant.revokedAt || grant.expiresAt <= new Date() || (clientId && grant.clientId !== clientId)) throw new UnauthorizedException('Connection expired or revoked.');

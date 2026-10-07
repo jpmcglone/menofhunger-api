@@ -18,6 +18,11 @@ import { DelegationReadsService } from "./delegation/delegation-reads.service";
 import { IntegrationAdminController } from "../x/integration-admin.controller";
 import { AvatarVideoModule } from "../uploads/avatar-video.module";
 import { AdminEngagementService } from "./admin-engagement.service";
+import { AdminMaintenanceService } from "./admin-maintenance.service";
+import { AdminSiteConfigService } from "./admin-site-config.service";
+import { AdminSearchService } from "./admin-search.service";
+import { AdminReferralService } from "./admin-referral.service";
+import { AdminCrewsService } from "./admin-crews.service";
 import { AdminAssistantController } from "./admin-assistant.controller";
 import { AdminAssistantService } from "./admin-assistant.service";
 import { Module } from "@nestjs/common";
@@ -150,6 +155,11 @@ import { AdminOperationsController } from "./admin-operations.controller";
     DelegationTriageService,
     DelegationCron,
     AdminEngagementService,
+    AdminSearchService,
+    AdminMaintenanceService,
+    AdminSiteConfigService,
+    AdminReferralService,
+    AdminCrewsService,
     AdminServiceStatusService,
     AdminAssistantService,
     AdminGuard,

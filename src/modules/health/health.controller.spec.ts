@@ -1,17 +1,16 @@
 import { HealthController } from './health.controller';
 import type { AppConfigService } from '../app/app-config.service';
-import type { PrismaService } from '../prisma/prisma.service';
+import type { DatabaseHealthService } from './database-health.service';
 import type { RedisService } from '../redis/redis.service';
 
 describe('HealthController.health', () => {
   function makeHealthController(opts?: { dbOk?: boolean; redisOk?: boolean }) {
     const httpRes = { status: jest.fn(), setHeader: jest.fn() };
     const prisma = {
-      $queryRaw: jest.fn(async () => {
+      ping: jest.fn(async () => {
         if (opts?.dbOk === false) throw new Error('db down');
-        return 1;
       }),
-    } as unknown as PrismaService;
+    } as unknown as DatabaseHealthService;
     const redis = {
       raw: () => ({
         ping: jest.fn(async () => {
@@ -62,7 +61,7 @@ describe('HealthController.healthConfig', () => {
       ...overrides,
     } as unknown as AppConfigService;
 
-    const prisma = {} as PrismaService;
+    const prisma = {} as DatabaseHealthService;
     const redis = {} as RedisService;
 
     return new HealthController(prisma, appConfig, redis);
