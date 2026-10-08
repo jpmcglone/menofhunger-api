@@ -236,14 +236,13 @@ describe('SearchService.recordUserSearch', () => {
     expect(prisma.userSearch.create).toHaveBeenCalledTimes(1);
   });
 
-  it('collapses a typing prefix into the latest text search', async () => {
+  it('keeps each committed query, including a shorter prefix', async () => {
     const { service, prisma, rows } = makeRecordService();
     await service.recordUserSearch({ userId: 'u1', query: 'pe' });
     await service.recordUserSearch({ userId: 'u1', query: 'penn' });
     await service.recordUserSearch({ userId: 'u1', query: 'Pennsylvania' });
-    expect(prisma.userSearch.create).toHaveBeenCalledTimes(1);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].query).toBe('Pennsylvania');
+    expect(prisma.userSearch.create).toHaveBeenCalledTimes(3);
+    expect(rows.map((row) => row.query)).toEqual(['pe', 'penn', 'Pennsylvania']);
   });
 
   it('keeps a different query typed in the same minute', async () => {

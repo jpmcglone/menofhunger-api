@@ -26,6 +26,8 @@ const searchSchema = z.object({
   type: z.enum(['posts', 'users', 'bookmarks', 'all', 'articles', 'hashtags', 'taxonomy', 'cashtags', 'groups']).optional(),
   // Source hint for analytics/search-history recording.
   source: z.enum(['explore', 'external']).optional(),
+  // Set by the client only after debounce settles or the user submits the query.
+  record: z.enum(['1', 'true']).optional(),
   // Posts-only: filter by kind (e.g. allow "check-ins only" in search UI)
   kind: z.enum(['regular', 'checkin']).optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -218,7 +220,7 @@ export class SearchController {
         compute: buildMixedResponse,
       });
 
-      if (viewerUserId && q.length >= 2 && (parsed.source === 'explore' || parsed.source === 'external')) {
+      if (viewerUserId && q.length >= 2 && parsed.record && (parsed.source === 'explore' || parsed.source === 'external')) {
         void this.search.recordUserSearch({ userId: viewerUserId, query: q }).catch(() => {});
         this.posthog.capture(viewerUserId, 'search_performed', {
           query: q.toLowerCase(),
