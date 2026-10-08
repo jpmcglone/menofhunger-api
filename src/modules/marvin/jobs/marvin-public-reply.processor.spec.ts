@@ -231,6 +231,7 @@ function makeProcessor(opts?: {
   };
   const linkMetadata: any = { previewLinks: jest.fn(async () => []) };
   const presenceRealtime: any = { emitPostsTyping: jest.fn() };
+  const platform: any = { briefing: jest.fn(async () => 'Public Men of Hunger briefing.') };
 
   const processor = new MarvinPublicReplyProcessor(
     prisma,
@@ -250,6 +251,7 @@ function makeProcessor(opts?: {
     linkMetadata,
     presenceRealtime,
     new PostsReadService(prisma as never),
+    platform,
     opts?.jev,
   );
 
@@ -269,6 +271,8 @@ function makeProcessor(opts?: {
     threadContext,
     linkMetadata,
     presenceRealtime,
+    platform,
+    promptBuilder,
   };
 }
 
@@ -529,6 +533,10 @@ describe('MarvinPublicReplyProcessor', () => {
     expect(recordedCall.errorCode).toBeUndefined();
     expect(m.ai.respond).toHaveBeenCalledWith(
       expect.objectContaining({ elevateReasoning: false }),
+    );
+    expect(m.platform.briefing).toHaveBeenCalledWith({});
+    expect(m.promptBuilder.build).toHaveBeenCalledWith(
+      expect.objectContaining({ platformBriefing: 'Public Men of Hunger briefing.' }),
     );
   });
 

@@ -2,23 +2,18 @@ import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import type { AnalyticsRange } from '../../common/dto/admin-analytics.dto';
 import { MarvinAIService, MarvinAINotConfiguredError } from '../marvin/services/marvin-ai.service';
 
-const MAX_JSON_CHARS = 160_000;
-const SERIES_KEEP = 30;
-
-const SERIES_KEYS = [
-  'signups',
-  'posts',
-  'aiPosts',
-  'checkins',
-  'messages',
-  'aiMessages',
-  'follows',
-] as const;
-
 export type AdminAnalyticsBriefInput = {
   range: AnalyticsRange;
   analytics: Record<string, unknown>;
   referrals?: Record<string, unknown> | null;
+};
+
+const RANGE_DAYS: Record<AnalyticsRange, number | null> = {
+  '7d': 7,
+  '30d': 30,
+  '3m': 90,
+  '1y': 365,
+  all: null,
 };
 
 @Injectable()
@@ -32,27 +27,30 @@ export class AdminAnalyticsBriefService {
       throw new ServiceUnavailableException('Marv is not configured on this server.');
     }
 
-    const snapshot = compactSnapshot(input);
-    const json = JSON.stringify(snapshot);
+    const snapshot = rangeDigest(input);
+    const period = snapshot.selectedRange;
     const developerNote = [
-      'The admin is asking how the Men of Hunger platform is doing.',
-      `The selected analytics range is ${input.range}.`,
-      'The user message is a JSON snapshot of the admin analytics page they already loaded.',
-      'Do not use tools. Do not invent numbers that are not in the JSON.',
-      'Write a short plain-language briefing: what is healthy, what is weak, and one or two things to watch.',
-      'No preamble, no markdown headings. A few short paragraphs or tight bullets.',
+      'You are briefing a Men of Hunger administrator on the analytics range they selected.',
+      `The selected scope is ${period.label}${period.startDate ? `, ${period.startDate} through ${period.endDate}` : `, through ${period.endDate}`}.`,
+      'Brief only selectedRange. That object already sums the full loaded range, including channel messages and group feed posts.',
+      'notTheSelectedRange holds other windows. MAU, creator share, and 30-day retention are always the last 30 days. Activation is lifetime. Paying subscribers, total users, and referrals are the current or all-time snapshot.',
+      'If you mention a figure from notTheSelectedRange, name its window. Do not call the selected range "this month" unless the range is 30d.',
+      'A group is active in this scope only when it is listed under groupsWithFeedPosts or channels.groupsByChannelMessages. A group that is missing had no feed posts and no listed channel messages in this scope. Do not call it active from memory.',
+      'Include channel conversation, not only the group feed.',
+      'Do not use tools. Do not invent numbers.',
+      'Write a short plain briefing: what is healthy, what is weak, and what to watch. A few short paragraphs. No markdown headings.',
     ].join(' ');
 
     let result;
     try {
       result = await this.ai.respond({
-        source: 'catch_up',
+        source: 'admin_console',
         mode: 'regular',
         developerNote,
-        userMessage: json,
+        userMessage: JSON.stringify(snapshot),
         dispatchTool: async () => 'Tools are disabled for this admin briefing. Use only the JSON.',
         toolContext: { requesterUserId: adminUserId },
-        cacheKey: `admin:analytics-brief:${input.range}`,
+        cacheKey: `admin:analytics-brief:v2:${input.range}`,
       });
     } catch (err) {
       if (err instanceof MarvinAINotConfiguredError) {
@@ -72,50 +70,160 @@ export class AdminAnalyticsBriefService {
   }
 }
 
-function compactSnapshot(input: AdminAnalyticsBriefInput): Record<string, unknown> {
-  const analytics = { ...input.analytics };
-  for (const key of SERIES_KEYS) {
-    const series = analytics[key];
-    if (Array.isArray(series) && series.length > SERIES_KEEP) {
-      analytics[key] = series.slice(-SERIES_KEEP);
-    }
-  }
+function rangeDigest(input: AdminAnalyticsBriefInput) {
+  const analytics = input.analytics;
+  const summary = asRecord(analytics.summary);
+  const engagement = asRecord(analytics.engagement);
+  const groups = asRecord(analytics.groups);
+  const channels = asRecord(analytics.channels);
+  const board = asRecord(analytics.board);
   const coins = asRecord(analytics.coins);
-  if (coins && Array.isArray(coins.minted) && coins.minted.length > SERIES_KEEP) {
-    analytics.coins = { ...coins, minted: coins.minted.slice(-SERIES_KEEP) };
-  }
   const articles = asRecord(analytics.articles);
-  if (articles) {
-    const next = { ...articles };
-    if (Array.isArray(next.published) && next.published.length > SERIES_KEEP) {
-      next.published = next.published.slice(-SERIES_KEEP);
-    }
-    if (Array.isArray(next.views) && next.views.length > SERIES_KEEP) {
-      next.views = next.views.slice(-SERIES_KEEP);
-    }
-    analytics.articles = next;
-  }
-  const ai = asRecord(analytics.ai);
-  if (ai && Array.isArray(ai.interactions) && ai.interactions.length > SERIES_KEEP) {
-    analytics.ai = { ...ai, interactions: ai.interactions.slice(-SERIES_KEEP) };
-  }
+  const monetization = asRecord(analytics.monetization);
+  const asOf = typeof analytics.asOf === 'string' ? analytics.asOf : null;
 
-  const referrals = input.referrals ? { ...input.referrals } : null;
-  if (referrals && Array.isArray(referrals.recruitsOverTime) && referrals.recruitsOverTime.length > SERIES_KEEP) {
-    referrals.recruitsOverTime = referrals.recruitsOverTime.slice(-SERIES_KEEP);
+  return {
+    selectedRange: {
+      ...periodFor(input.range, asOf),
+      averageDailyActiveUsers: num(summary?.dau),
+      signups: sumSeries(analytics.signups),
+      posts: sumSeries(analytics.posts),
+      checkins: sumSeries(analytics.checkins),
+      directMessages: sumSeries(analytics.messages),
+      follows: sumSeries(analytics.follows),
+      articlesPublished: sumSeries(articles?.published),
+      coinsMinted: num(coins?.mintedInRange),
+      coinsTransferred: num(coins?.transferredInRange),
+      boardThreads: num(board?.threadsInRange),
+      boardComments: num(board?.commentsInRange),
+      groups: feedGroups(groups),
+      channels: channelActivity(channels),
+    },
+    notTheSelectedRange: {
+      note: 'Do not describe these as the selected range.',
+      last30Days: {
+        mau: num(summary?.mau),
+        d30RetentionPct: engagement?.d30RetentionPct ?? null,
+        d30CohortSize: num(engagement?.d30CohortSize),
+        d30RetainedCount: num(engagement?.d30RetainedCount),
+        creatorCount: num(engagement?.creatorCount),
+        creatorMauCount: num(engagement?.creatorMauCount),
+        creatorPct: engagement?.creatorPct ?? null,
+      },
+      lifetime: {
+        totalUsers: num(summary?.totalUsers),
+        activationPct: engagement?.activationPct ?? null,
+        activationCount: num(engagement?.activationCount),
+        activationEligibleCount: num(engagement?.activationEligibleCount),
+        connectedUserCount: num(engagement?.connectedUserCount),
+        connectedUserPct: engagement?.connectedUserPct ?? null,
+        groupsThatExist: num(groups?.activeGroups),
+      },
+      currentSubscribers: monetization
+        ? {
+            payingPremium: num(monetization.payingPremium),
+            payingPremiumPlus: num(monetization.payingPremiumPlus),
+            compedPremium: num(monetization.compedPremium),
+            compedPremiumPlus: num(monetization.compedPremiumPlus),
+          }
+        : null,
+      referralsAllTime: input.referrals
+        ? { totalRecruits: input.referrals.totalRecruits ?? null }
+        : null,
+    },
+  };
+}
+
+function periodFor(range: AnalyticsRange, asOfIso: string | null) {
+  const parsed = asOfIso ? new Date(asOfIso) : new Date();
+  const end = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  const endDate = end.toISOString().slice(0, 10);
+  const days = RANGE_DAYS[range];
+  if (days == null) {
+    return { range, label: 'all time', startDate: null as string | null, endDate, dayCount: null as number | null };
   }
+  const start = new Date(end.getTime() - days * 86_400_000);
+  const label =
+    range === '7d'
+      ? 'the last 7 days'
+      : range === '30d'
+        ? 'the last 30 days'
+        : range === '3m'
+          ? 'the last 3 months (90 days)'
+          : 'the last year (365 days)';
+  return { range, label, startDate: start.toISOString().slice(0, 10), endDate, dayCount: days };
+}
 
-  const snapshot: Record<string, unknown> = { range: input.range, analytics, referrals };
-  const json = JSON.stringify(snapshot);
-  if (json.length <= MAX_JSON_CHARS) return snapshot;
+function feedGroups(groups: Record<string, unknown> | null) {
+  const rows = Array.isArray(groups?.topGroups) ? groups.topGroups : [];
+  const groupsWithFeedPosts = rows.flatMap((row) => {
+    const record = asRecord(row);
+    const posts = num(record?.rootPostsInRange) ?? 0;
+    if (!record || posts <= 0) return [];
+    return [{
+      name: record.name ?? null,
+      slug: record.slug ?? null,
+      rootPostsInRange: posts,
+      replyRate24hPct: record.replyRate24hPct ?? null,
+    }];
+  });
+  return {
+    groupRootPostsInRange: num(groups?.groupRootPostsInRange),
+    groupRepliesInRange: num(groups?.groupRepliesInRange),
+    newMembershipsInRange: num(groups?.newActiveMembershipsInRange),
+    groupsWithFeedPosts,
+  };
+}
 
-  // Last-resort trim: drop remaining series so the model still gets KPIs.
-  for (const key of SERIES_KEYS) delete analytics[key];
-  if (coins) analytics.coins = { ...coins, minted: [] };
-  if (articles) analytics.articles = { ...articles, published: [], views: [] };
-  if (ai) analytics.ai = { ...ai, interactions: [] };
-  if (referrals) referrals.recruitsOverTime = [];
-  return { range: input.range, analytics, referrals };
+function channelActivity(channels: Record<string, unknown> | null) {
+  const rows = Array.isArray(channels?.topChannels) ? channels.topChannels : [];
+  const byGroup = new Map<string, { groupName: string; groupSlug: string; messagesInRange: number }>();
+  const topChannels = rows.flatMap((row) => {
+    const record = asRecord(row);
+    if (!record) return [];
+    const messages = num(record.messagesInRange) ?? 0;
+    const slug = String(record.groupSlug ?? '');
+    const existing = byGroup.get(slug) ?? {
+      groupName: String(record.groupName ?? slug),
+      groupSlug: slug,
+      messagesInRange: 0,
+    };
+    existing.messagesInRange += messages;
+    byGroup.set(slug, existing);
+    return [{
+      groupName: record.groupName ?? null,
+      groupSlug: record.groupSlug ?? null,
+      channelName: record.channelName ?? null,
+      messagesInRange: messages,
+      sendersInRange: num(record.sendersInRange),
+    }];
+  });
+  return {
+    messagesInRange: num(channels?.messagesInRange),
+    threadRepliesInRange: num(channels?.threadRepliesInRange),
+    sendersInRange: num(channels?.sendersInRange),
+    channelsWithActivityInRange: num(channels?.channelsWithActivityInRange),
+    marvRepliesInRange: num(channels?.marvRepliesInRange),
+    topChannels,
+    groupsByChannelMessages: [...byGroup.values()].sort((a, b) => b.messagesInRange - a.messagesInRange),
+  };
+}
+
+function sumSeries(value: unknown): number | null {
+  if (!Array.isArray(value)) return null;
+  let total = 0;
+  let any = false;
+  for (const point of value) {
+    const count = num(asRecord(point)?.count);
+    if (count == null) continue;
+    total += count;
+    any = true;
+  }
+  return any ? total : null;
+}
+
+function num(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

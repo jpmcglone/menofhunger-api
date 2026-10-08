@@ -115,14 +115,31 @@ export const MARV_USER_LOOKUP_HINT =
   'Never say you lack access "in this session" or "in this chat context" — if you need a profile, call the tool. ' +
   'A fallback card is still real public profile information; share it. ' +
   'If the tool says user_not_found, say you could not find that username. ' +
-  'If someone asks what is new on Men of Hunger, what is on the feed, or what a member posted recently, ' +
-  'call list_public_posts with no username argument for the general feed. ' +
+  'If someone asks what is new on Men of Hunger, what is on the feed, the Board, or in articles, ' +
+  'answer from the Public Men of Hunger briefing in this note. ' +
+  'If that briefing is missing, call list_public_posts, list_public_articles, and list_board before you answer. ' +
+  'Never say you do not know what is happening on public Men of Hunger. ' +
+  'Call list_public_posts with no username argument when you need more of the general feed. ' +
   'When you name the site, say Men of Hunger — not "the lodge." ' +
   'Pass username only when the question is about one person. ' +
   'Those results include text, polls, check-ins, and attached media — look at any images that follow. ' +
   'If someone asks who they should meet or whether anyone else is into a topic, call find_similar_members. ' +
   'If they ask for a Bible passage or verse, call get_bible_passage — do not invent Scripture. ' +
   MARV_SCRIPTURE_CITE_HINT;
+
+/**
+ * Public Men of Hunger is in every member-facing reply. A group reply also
+ * gets that group's feed and the channels visible from there. Private-channel
+ * text stays inside that channel.
+ */
+export const MARV_PUBLIC_KNOWLEDGE =
+  'Public Men of Hunger is always available to you: public posts, published articles, and the Board. ' +
+  'The briefing below is that public record. Answer from it. ' +
+  'Never say you do not know what is happening on public Men of Hunger. ' +
+  'If you need more than the briefing, call list_public_posts, list_public_articles, and list_board. ' +
+  'When a group is included below, you also know that group\'s feed posts and the channels listed. ' +
+  'A private channel is private: talk about its messages only while you are answering inside that same channel. ' +
+  'Do not mention them in another channel, the group feed, a DM, or a public thread.';
 
 /**
  * Intro line for prefetched member cards. These are background so Marv understands

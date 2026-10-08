@@ -1,9 +1,19 @@
 # Marv scoped memory
 
 Member replies can recall relevant source statements from MoH. The current question
-and conversation remain primary; memory is an optional tool, not a feed of recent
-happenings appended to every prompt. This is a source index with author/topic
-metadata, not neural-network training or generated personality summaries.
+and conversation remain primary; memory is an optional tool, not the live public
+briefing. This is a source index with author/topic metadata, not neural-network
+training or generated personality summaries.
+
+## Public briefing
+
+Every member-facing reply (a public thread, a DM, and a group channel) includes a
+short live briefing of public posts, published articles, and Board threads. Marv
+answers what is happening on public Men of Hunger from that briefing. He does not
+say he does not know. Inside a group, the same briefing adds that group's feed
+posts and recent messages from channels he can see. A private channel's messages
+appear only in a reply inside that channel. Personal memory stays off in channel
+replies. The briefing is loaded live for the reply; it is not the memory index.
 
 ## Boundaries
 

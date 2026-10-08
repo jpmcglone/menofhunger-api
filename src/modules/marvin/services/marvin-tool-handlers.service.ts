@@ -18,6 +18,7 @@ import { AppConfigService } from '../../app/app-config.service';
 import { resolveMarvVisionUrl } from './marvin-vision-media';
 
 import { PostsReadService } from '../../posts-read/posts-read.service';
+import { MarvinPlatformContextService } from './marvin-platform-context.service';
 const RECENT_MESSAGES_DEFAULT = 10;
 const RECENT_MESSAGES_MAX = 30;
 const SIMILAR_MEMBERS_DEFAULT = 5;
@@ -56,6 +57,12 @@ const PUBLIC_POSTS_MAX = 8;
 const listPublicPostsSchema = z.object({
   username: optionalLodgeHandleSchema,
   limit: z.coerce.number().int().min(1).max(PUBLIC_POSTS_MAX).optional(),
+});
+const listLimitSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(PUBLIC_POSTS_MAX).optional(),
+});
+const searchGroupChannelsSchema = z.object({
+  query: z.string().trim().min(1).max(200),
 });
 const getPostThreadRecentMessagesSchema = z.object({
   rootPostId: z.string().min(1).max(50),
@@ -132,6 +139,7 @@ export class MarvinToolHandlersService {
     private readonly personal: MarvinPersonalService,
     private readonly participation: MarvinParticipationService,
     private readonly postsRead: PostsReadService,
+    private readonly platform: MarvinPlatformContextService,
   ) {}
 
   async dispatch(name: string, args: unknown, ctx: MarvAIToolCallContext): Promise<string> {
@@ -171,6 +179,14 @@ export class MarvinToolHandlersService {
         return await this.getPost(args, ctx);
       case 'list_public_posts':
         return await this.listPublicPosts(args);
+      case 'list_public_articles':
+        return await this.listPublicArticles(args);
+      case 'list_board':
+        return await this.listBoard(args);
+      case 'list_group_feed':
+        return await this.listGroupFeed(args, ctx);
+      case 'search_group_channels':
+        return await this.searchGroupChannels(args, ctx);
       case 'get_post_thread_recent_messages':
         return await this.getPostThreadRecentMessages(args, ctx);
       case 'get_post_thread_summary':
@@ -423,6 +439,52 @@ export class MarvinToolHandlersService {
         };
       },
     });
+  }
+
+  private async listPublicArticles(rawArgs: unknown): Promise<unknown> {
+    const parsed = listLimitSchema.safeParse(rawArgs ?? {});
+    if (!parsed.success) return { error: 'invalid_args' };
+    const { articles } = await this.platform.listPublicArticles(parsed.data.limit ?? 4);
+    return {
+      articles,
+      note: articles.length === 0 ? 'No published public articles on Men of Hunger.' : 'Published public articles on Men of Hunger.',
+    };
+  }
+
+  private async listBoard(rawArgs: unknown): Promise<unknown> {
+    const parsed = listLimitSchema.safeParse(rawArgs ?? {});
+    if (!parsed.success) return { error: 'invalid_args' };
+    const { threads } = await this.platform.listBoard(parsed.data.limit ?? 5);
+    return {
+      threads,
+      note: threads.length === 0 ? 'Nothing recent on the public Board.' : 'Public Board threads on Men of Hunger.',
+    };
+  }
+
+  private async listGroupFeed(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {
+    const parsed = listLimitSchema.safeParse(rawArgs ?? {});
+    if (!parsed.success) return { error: 'invalid_args' };
+    const groupId = (ctx.groupId ?? '').trim();
+    if (!groupId) {
+      return {
+        error: 'not_in_a_group',
+        posts: [],
+        note: 'This conversation is not inside a group. Public Men of Hunger is in the briefing and list_public_posts.',
+      };
+    }
+    const { posts } = await this.platform.listGroupFeed(groupId, parsed.data.limit ?? 6);
+    return { posts, note: 'Feed posts in this group only.' };
+  }
+
+  private async searchGroupChannels(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {
+    const parsed = searchGroupChannelsSchema.safeParse(rawArgs);
+    if (!parsed.success) return { error: 'invalid_query' };
+    const groupId = (ctx.groupId ?? '').trim();
+    if (!groupId) return { error: 'not_in_a_group', messages: [] };
+    return this.platform.searchChannels(
+      { groupId, channelId: ctx.channelId, privateChannel: ctx.privateChannel },
+      parsed.data.query,
+    );
   }
 
   private publicMediaBaseUrl(): string | null {

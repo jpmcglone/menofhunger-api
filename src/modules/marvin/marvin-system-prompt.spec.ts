@@ -11,6 +11,9 @@ describe('MARV_SYSTEM_PROMPT', () => {
     expect(MARV_SYSTEM_PROMPT).toContain('Never steel-man a false religion');
     expect(MARV_SYSTEM_PROMPT).toContain('get_user_context_card');
     expect(MARV_SYSTEM_PROMPT).toContain('get_post_thread_summary');
+    expect(MARV_SYSTEM_PROMPT).toContain('Never say you do not know what is happening on public Men of Hunger');
+    expect(MARV_SYSTEM_PROMPT).toContain('list_public_articles');
+    expect(MARV_SYSTEM_PROMPT).toContain('A private channel\'s messages stay inside that channel');
     expect(MARV_ADMIN_INSTRUCTIONS).not.toContain('80 words');
   });
 });

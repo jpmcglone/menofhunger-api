@@ -28,29 +28,63 @@ describe('AdminAnalyticsBriefService', () => {
     expect(result.brief).toBe('DAU is up. Watch activation.');
     expect(respond).toHaveBeenCalledWith(
       expect.objectContaining({
-        source: 'catch_up',
+        source: 'admin_console',
         mode: 'regular',
         toolContext: { requesterUserId: 'admin-1' },
       }),
     );
     const userMessage = String(respond.mock.calls[0][0].userMessage);
+    const note = String(respond.mock.calls[0][0].developerNote);
     expect(userMessage).toContain('"range":"30d"');
     expect(userMessage).toContain('"totalUsers":12');
     expect(userMessage).toContain('"totalRecruits":3');
+    expect(note).toContain('the last 30 days');
+    expect(note).toContain('channel');
   });
 
-  it('keeps only the newest series points when the snapshot is long', async () => {
+  it('sums the full selected range and keeps quiet groups out of the active list', async () => {
     const { service, respond } = build();
     const signups = Array.from({ length: 80 }, (_, i) => ({ bucket: `d${i}`, count: i }));
     await service.brief('admin-1', {
-      range: '1y',
-      analytics: { signups },
+      range: '3m',
+      analytics: {
+        asOf: '2026-10-08T16:00:00.000Z',
+        summary: { mau: 42, totalUsers: 71, dau: 11 },
+        signups,
+        groups: {
+          activeGroups: 4,
+          groupRootPostsInRange: 9,
+          topGroups: [
+            { name: 'NoFat', slug: 'nofat', rootPostsInRange: 0, memberCount: 40 },
+            { name: 'Lodge', slug: 'lodge', rootPostsInRange: 9, memberCount: 12 },
+          ],
+        },
+        channels: {
+          messagesInRange: 120,
+          topChannels: [
+            { groupName: 'Lodge', groupSlug: 'lodge', channelName: 'general', messagesInRange: 80, sendersInRange: 6 },
+          ],
+        },
+      },
     });
     const snapshot = JSON.parse(String(respond.mock.calls[0][0].userMessage)) as {
-      analytics: { signups: Array<{ bucket: string }> };
+      selectedRange: {
+        label: string;
+        signups: number;
+        averageDailyActiveUsers: number;
+        groups: { groupsWithFeedPosts: Array<{ name: string }> };
+        channels: { messagesInRange: number; groupsByChannelMessages: Array<{ groupSlug: string }> };
+      };
+      notTheSelectedRange: { last30Days: { mau: number } };
     };
-    expect(snapshot.analytics.signups).toHaveLength(30);
-    expect(snapshot.analytics.signups[0]?.bucket).toBe('d50');
+    expect(snapshot.selectedRange.label).toBe('the last 3 months (90 days)');
+    expect(snapshot.selectedRange.signups).toBe(3160);
+    expect(snapshot.selectedRange.averageDailyActiveUsers).toBe(11);
+    expect(snapshot.selectedRange.groups.groupsWithFeedPosts.map((group) => group.name)).toEqual(['Lodge']);
+    expect(snapshot.selectedRange.channels.messagesInRange).toBe(120);
+    expect(snapshot.selectedRange.channels.groupsByChannelMessages[0]?.groupSlug).toBe('lodge');
+    expect(snapshot.notTheSelectedRange.last30Days.mau).toBe(42);
+    expect(String(respond.mock.calls[0][0].developerNote)).toContain('the last 3 months');
   });
 
   it('throws when Marv is not configured', async () => {

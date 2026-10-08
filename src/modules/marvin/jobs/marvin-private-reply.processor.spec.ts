@@ -201,6 +201,7 @@ function makeProcessor(opts?: {
   // The cached marv id is used for the typing heartbeat to avoid a DB round-trip
   // on the hot path. Tests set it explicitly so the heartbeat actually emits.
   identity.cachedMarvUserId = jest.fn(() => 'marv-id');
+  const platform: any = { briefing: jest.fn(async () => 'Public Men of Hunger briefing.') };
 
   const processor = new MarvinPrivateReplyProcessor(
     prisma,
@@ -216,6 +217,7 @@ function makeProcessor(opts?: {
     canned,
     presenceRealtime,
     linkMetadata,
+    platform,
   );
 
   return {
@@ -233,6 +235,8 @@ function makeProcessor(opts?: {
     sessionStateFindUnique,
     sessionStateUpdateMany,
     appConfig,
+    platform,
+    promptBuilder,
   };
 }
 
@@ -327,6 +331,10 @@ describe('MarvinPrivateReplyProcessor', () => {
     expect(recordedCall.errorCode).toBeUndefined();
     expect(m.ai.respond).toHaveBeenCalledWith(
       expect.objectContaining({ elevateReasoning: false }),
+    );
+    expect(m.platform.briefing).toHaveBeenCalledWith();
+    expect(m.promptBuilder.build).toHaveBeenCalledWith(
+      expect.objectContaining({ platformBriefing: 'Public Men of Hunger briefing.' }),
     );
   });
 

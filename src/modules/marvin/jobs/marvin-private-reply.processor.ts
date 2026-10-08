@@ -9,6 +9,7 @@ import { MarvinAIService, MarvinAINotConfiguredError } from '../services/marvin-
 import { MarvinBotIdentityService } from '../services/marvin-bot-identity.service';
 import { MarvinCannedRepliesService } from '../services/marvin-canned-replies.service';
 import { MarvinCreditService, InsufficientMarvCreditsError } from '../services/marvin-credit.service';
+import { MarvinPlatformContextService } from '../services/marvin-platform-context.service';
 import { MarvinPromptBuilderService } from '../services/marvin-prompt-builder.service';
 import { MarvinRoutingService } from '../services/marvin-routing.service';
 import { MarvinToolHandlersService } from '../services/marvin-tool-handlers.service';
@@ -65,6 +66,7 @@ export class MarvinPrivateReplyProcessor {
     private readonly canned: MarvinCannedRepliesService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly linkMetadata: LinkMetadataService,
+    private readonly platform: MarvinPlatformContextService,
   ) {}
 
   /**
@@ -516,6 +518,8 @@ export class MarvinPrivateReplyProcessor {
     });
     const referencedUsernames = referencedMemberCards.map((c) => c.username);
 
+    const platformBriefing = await this.platform.briefing();
+
     const built = this.promptBuilder.build({
       source: 'private_session',
       requester: {
@@ -532,6 +536,7 @@ export class MarvinPrivateReplyProcessor {
       linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,
       hasGifAttached: hasGifAttached || undefined,
       hasImagesAttached: imageUrls.length > 0 || undefined,
+      platformBriefing,
     });
     // Show "Marv is typing…" to the user while the AI call is in flight. The
     // call can take 5–15s with tool loops, so we heartbeat below the client's

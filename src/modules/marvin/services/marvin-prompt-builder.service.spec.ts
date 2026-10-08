@@ -15,6 +15,15 @@ const baseInput = {
 };
 
 describe('MarvinPromptBuilderService', () => {
+  it('keeps the public Men of Hunger briefing next to the question', () => {
+    const { developerNote } = makeService().build({
+      ...baseInput,
+      platformBriefing: 'Public Men of Hunger right now:\n- @ada: hello',
+    });
+    expect(developerNote).toContain('Public Men of Hunger right now:');
+    expect(developerNote).toContain('@ada: hello');
+  });
+
   it('tells public-thread Marv to stay silent when the request is addressed to someone else', () => {
     const { developerNote } = makeService().build(baseInput);
     expect(developerNote).toContain(MARV_THREAD_ADDRESSEE);

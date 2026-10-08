@@ -866,12 +866,12 @@ export async function readAdminAnalytics(
           g.slug,
           g.name,
           g."memberCount" AS member_count,
-          COALESCE(p.root_cnt, 0)::bigint AS root_posts_in_range,
-          COALESCE(p.answered_cnt, 0)::bigint AS roots_with_reply_24h
+          p.root_cnt AS root_posts_in_range,
+          p.answered_cnt AS roots_with_reply_24h
         FROM "CommunityGroup" g
-        LEFT JOIN per_group p ON p.gid = g.id
+        INNER JOIN per_group p ON p.gid = g.id
         WHERE g."deletedAt" IS NULL
-        ORDER BY COALESCE(p.root_cnt, 0) DESC, g."memberCount" DESC, g.name ASC
+        ORDER BY p.root_cnt DESC, g."memberCount" DESC, g.name ASC
         LIMIT 12
       `),
   ]);

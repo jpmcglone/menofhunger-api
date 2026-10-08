@@ -163,6 +163,11 @@ export type MarvPromptInput = {
    * Tells the model to look at them rather than summarizing captions alone.
    */
   hasImagesAttached?: boolean;
+  /**
+   * Live public Men of Hunger, plus this group when the reply is inside one.
+   * Present on every member-facing reply so Marv does not claim he cannot see the platform.
+   */
+  platformBriefing?: string;
 };
 
 export type MarvBuiltPrompt = {
@@ -288,6 +293,10 @@ export class MarvinPromptBuilderService {
       lines.push(
         'NOTE: One or more GIFs were attached as images. You are seeing a single still frame per GIF — describe what is visible in that frame; do not assume motion or animation.',
       );
+    }
+
+    if (input.platformBriefing?.trim()) {
+      lines.push(input.platformBriefing.trim());
     }
 
     if (input.linkPreviews && input.linkPreviews.length > 0) {

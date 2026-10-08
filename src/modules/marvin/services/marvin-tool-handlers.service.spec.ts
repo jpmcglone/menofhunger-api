@@ -105,6 +105,12 @@ function makeService() {
   };
   const jobs: any = { enqueue: jest.fn(async () => undefined) };
   const appConfig: any = { r2: jest.fn(() => ({ publicBaseUrl: 'https://cdn.test' })) };
+  const platform: any = {
+    listPublicArticles: jest.fn(async () => ({ articles: [{ title: 'On fasting' }] })),
+    listBoard: jest.fn(async () => ({ threads: [{ title: 'A link' }] })),
+    listGroupFeed: jest.fn(async () => ({ posts: [{ body: 'group post' }] })),
+    searchChannels: jest.fn(async () => ({ messages: [{ channel: 'general', body: 'hello' }] })),
+  };
   const svc = new MarvinToolHandlersService(prisma,
     identity,
     fake.cache,
@@ -113,8 +119,9 @@ function makeService() {
     jobs,
     appConfig,
     {} as any,
-    {} as any, new PostsReadService(prisma as never));
-  return { svc, prisma, identity, cache: fake, contextCard, scripture, jobs, appConfig };
+    {} as any, new PostsReadService(prisma as never),
+    platform);
+  return { svc, prisma, identity, cache: fake, contextCard, scripture, jobs, appConfig, platform };
 }
 
 const baseCtx: MarvAIToolCallContext = {
@@ -533,5 +540,25 @@ describe('MarvinToolHandlersService.dispatch', () => {
       expect(missing.error).toBe('user_not_found');
       expect(missing.posts).toEqual([]);
     });
+  });
+
+  it('reads articles and the Board from the platform briefing, and refuses a group feed outside a group', async () => {
+    const { svc, platform } = makeService();
+    const articles = JSON.parse(await svc.dispatch('list_public_articles', {}, baseCtx));
+    expect(articles.articles[0].title).toBe('On fasting');
+    const board = JSON.parse(await svc.dispatch('list_board', {}, baseCtx));
+    expect(board.threads[0].title).toBe('A link');
+    const outside = JSON.parse(await svc.dispatch('list_group_feed', { groupId: 'attacker' }, baseCtx));
+    expect(outside.error).toBe('not_in_a_group');
+    expect(platform.listGroupFeed).not.toHaveBeenCalled();
+    const inside = JSON.parse(await svc.dispatch('list_group_feed', { groupId: 'attacker' }, { ...baseCtx, groupId: 'real-group' }));
+    expect(inside.posts[0].body).toBe('group post');
+    expect(platform.listGroupFeed).toHaveBeenCalledWith('real-group', 6);
+    const searched = JSON.parse(await svc.dispatch('search_group_channels', { query: 'hunger' }, { ...baseCtx, groupId: 'real-group', privateChannel: false }));
+    expect(searched.messages[0].channel).toBe('general');
+    expect(platform.searchChannels).toHaveBeenCalledWith(
+      { groupId: 'real-group', channelId: undefined, privateChannel: false },
+      'hunger',
+    );
   });
 });

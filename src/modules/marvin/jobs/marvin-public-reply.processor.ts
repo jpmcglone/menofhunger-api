@@ -12,6 +12,7 @@ import { MarvinAIService, MarvinAINotConfiguredError } from '../services/marvin-
 import { MarvinBotIdentityService } from '../services/marvin-bot-identity.service';
 import { MarvinCannedRepliesService } from '../services/marvin-canned-replies.service';
 import { MarvinCreditService, InsufficientMarvCreditsError } from '../services/marvin-credit.service';
+import { MarvinPlatformContextService } from '../services/marvin-platform-context.service';
 import { MarvinPromptBuilderService, type MarvThreadPost } from '../services/marvin-prompt-builder.service';
 import { MarvinRoutingService } from '../services/marvin-routing.service';
 import { MarvinJevService } from '../services/marvin-jev.service';
@@ -90,6 +91,7 @@ export class MarvinPublicReplyProcessor {
     private readonly linkMetadata: LinkMetadataService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly postsRead: PostsReadService,
+    private readonly platform: MarvinPlatformContextService,
     @Optional() private readonly jev?: MarvinJevService,
   ) {}
 
@@ -604,6 +606,8 @@ export class MarvinPublicReplyProcessor {
     });
     const referenced = referencedMemberCards.map((c) => c.username);
 
+    const platformBriefing = await this.platform.briefing(postGroupId ? { groupId: postGroupId } : {});
+
     const built = this.promptBuilder.build({
       source: 'public_thread',
       requester: {
@@ -629,6 +633,7 @@ export class MarvinPublicReplyProcessor {
       linkPreviews: linkPreviews.length > 0 ? linkPreviews : undefined,
       hasGifAttached: hasGifAttached || undefined,
       hasImagesAttached: imageUrls.length > 0 || undefined,
+      platformBriefing,
     });
     const aiStartedAt = Date.now();
     this.logger.log(
@@ -651,6 +656,7 @@ export class MarvinPublicReplyProcessor {
           triggeringPostId: post.id,
           requesterUserId: requesterRow.id,
           requesterUsername: requesterRow.username,
+          ...(postGroupId ? { groupId: postGroupId } : {}),
         },
         cacheKey: `marv:public:${rootPostId}`,
         elevateReasoning: MarvinRoutingService.shouldElevateReasoning(routed),

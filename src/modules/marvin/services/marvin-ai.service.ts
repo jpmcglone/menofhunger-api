@@ -40,6 +40,12 @@ export type MarvAIToolCallContext = {
   requesterMessageId?: string;
   /** @handle of the requesting user — attached to OpenAI response metadata for per-user spend visibility. */
   requesterUsername?: string | null;
+  /** Server-owned group for this reply. Never taken from model arguments. */
+  groupId?: string;
+  /** Server-owned channel when the reply is inside one. */
+  channelId?: string;
+  /** True only when this reply is being delivered inside that private channel. */
+  privateChannel?: boolean;
 };
 
 export type MarvAIToolDispatcher = (

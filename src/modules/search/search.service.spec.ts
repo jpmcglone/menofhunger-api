@@ -205,6 +205,11 @@ describe('SearchService.recordUserSearch', () => {
           rows.push(row);
           return row;
         }),
+        update: jest.fn(async (args: any) => {
+          const row = rows.find((item) => item.id === args.where.id);
+          Object.assign(row, args.data);
+          return row;
+        }),
       },
     };
     const service = new SearchService(prisma, new PostsReadService(prisma as never),
@@ -229,6 +234,23 @@ describe('SearchService.recordUserSearch', () => {
     await service.recordUserSearch({ userId: 'u1', query: 'hello' });
     await service.recordUserSearch({ userId: 'u1', query: 'hello' });
     expect(prisma.userSearch.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('collapses a typing prefix into the latest text search', async () => {
+    const { service, prisma, rows } = makeRecordService();
+    await service.recordUserSearch({ userId: 'u1', query: 'pe' });
+    await service.recordUserSearch({ userId: 'u1', query: 'penn' });
+    await service.recordUserSearch({ userId: 'u1', query: 'Pennsylvania' });
+    expect(prisma.userSearch.create).toHaveBeenCalledTimes(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].query).toBe('Pennsylvania');
+  });
+
+  it('keeps a different query typed in the same minute', async () => {
+    const { service, prisma } = makeRecordService();
+    await service.recordUserSearch({ userId: 'u1', query: 'Pennsylvania' });
+    await service.recordUserSearch({ userId: 'u1', query: 'groups' });
+    expect(prisma.userSearch.create).toHaveBeenCalledTimes(2);
   });
 
   it('creates a row for a profile tap with targetUserId', async () => {

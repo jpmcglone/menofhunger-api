@@ -849,16 +849,29 @@ export class SearchService {
     const normalized = query.toLowerCase().replace(/\s+/g, ' ').trim();
     if (!normalized) return;
 
-    // Tight dedupe: skip repeated identical text searches within 30 min.
+    // Identical text within 30 min is one search. A prefix typed in the last
+    // two minutes is the same search still being typed, so replace that row
+    // instead of keeping "pe", "penn", "Pennsylvania" as separate reviews.
     const latest = await this.prisma.userSearch.findFirst({
       where: { userId: params.userId, targetUserId: null, targetGroupId: null },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      select: { query: true, createdAt: true },
+      select: { id: true, query: true, createdAt: true },
     });
     if (latest) {
       const latestNormalized = String(latest.query ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
       const ageMs = Date.now() - latest.createdAt.getTime();
       if (latestNormalized === normalized && ageMs < 1000 * 60 * 30) return;
+      const sameTyping =
+        ageMs < 1000 * 60 * 2 &&
+        latestNormalized.length >= 2 &&
+        (latestNormalized.startsWith(normalized) || normalized.startsWith(latestNormalized));
+      if (sameTyping) {
+        await this.prisma.userSearch.update({
+          where: { id: latest.id },
+          data: { query, createdAt: new Date() },
+        });
+        return;
+      }
     }
 
     await this.prisma.userSearch.create({

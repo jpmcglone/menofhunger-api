@@ -17,9 +17,11 @@ function setup() {
   const ai = { respond: jest.fn(async (_request: { signal: AbortSignal }) => ({ text: 'An answer.' })) };
   const messages = { broadcast: jest.fn() }, effects = { dispatch: jest.fn() };
   const presence = { emitGroupChannelTyping: jest.fn() };
-  const processor = new MarvinChannelReplyProcessor(db as never, config as never, scope as never, {} as never, messages as never, {} as never, effects as never, credits as never, routing as never, ai as never, usage as never, presence as never);
+  const platform = { briefing: jest.fn(async () => 'Public Men of Hunger briefing.') };
+  const tools = { dispatch: jest.fn(async () => '{"posts":[{"body":"hi"}]}') };
+  const processor = new MarvinChannelReplyProcessor(db as never, config as never, scope as never, {} as never, messages as never, {} as never, effects as never, credits as never, routing as never, ai as never, usage as never, platform as never, tools as never, presence as never);
   const deliver = jest.spyOn(processor as never, 'deliver' as never).mockResolvedValue({ id: 'reply', created: true } as never);
-  return { processor, db, scope, credits, ai, deliver, effects, usage, presence };
+  return { processor, db, scope, credits, ai, deliver, effects, usage, presence, platform, tools };
 }
 describe('MARV channel generation lifecycle', () => {
   beforeEach(() => jest.useFakeTimers());
@@ -34,12 +36,18 @@ describe('MARV channel generation lifecycle', () => {
     await processor.process(input);
     expect(credits.refund).toHaveBeenCalledWith('owner', 62); expect(deliver).not.toHaveBeenCalled();
   });
-  it('uses only the scoped tool and no previous response or personal memory input', async () => {
-    const { processor, ai, credits, deliver } = setup(); await processor.process(input);
-    const request = ai.respond.mock.calls[0][0] as unknown as { channelTools: { name: string }[]; previousResponseId?: string; memoryQuestion?: string; dispatchTool: (name: string, args: unknown) => Promise<string> };
-    expect(request.channelTools.map(tool => tool.name)).toEqual(['search_group_channels']);
+  it('answers from public Men of Hunger and this group, and still withholds personal memory', async () => {
+    const { processor, ai, credits, deliver, platform, tools } = setup(); await processor.process(input);
+    const request = ai.respond.mock.calls[0][0] as unknown as { channelTools: { name: string }[]; developerNote: string; previousResponseId?: string; memoryQuestion?: string; dispatchTool: (name: string, args: unknown) => Promise<string> };
+    expect(request.channelTools.map(tool => tool.name)).toEqual(['search_group_channels', 'list_public_posts', 'list_public_articles', 'list_board', 'list_group_feed']);
+    expect(platform.briefing).toHaveBeenCalledWith({ groupId: 'group', channelId: 'channel', privateChannel: false });
+    expect(request.developerNote).toContain('Public Men of Hunger briefing.');
+    expect(request.developerNote).not.toContain('Use only the supplied channel history');
     expect(request.previousResponseId).toBeUndefined(); expect(request.memoryQuestion).toBeUndefined();
+    expect(await request.dispatchTool('list_public_posts', {})).toContain('hi');
+    expect(tools.dispatch).toHaveBeenCalledWith('list_public_posts', {}, expect.objectContaining({ groupId: 'group', channelId: 'channel', privateChannel: false }));
     expect(await request.dispatchTool('get_personal_memory', {})).toContain('tool_unavailable');
+    expect(await request.dispatchTool('get_my_recent_chat_messages', {})).toContain('tool_unavailable');
     expect(credits.settle).toHaveBeenCalledWith('owner', 62, 2); expect(deliver).toHaveBeenCalled();
   });
   it('cancels an in-flight provider request after access loss and refunds', async () => {
