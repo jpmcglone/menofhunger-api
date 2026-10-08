@@ -1,4 +1,5 @@
 import { marvChannelSourceWhere } from '../../group-channels/channel-marv-scope.service';
+import { PostsPublicRecordService } from '../../posts/posts-public-record.service';
 import { MARV_PUBLIC_KNOWLEDGE } from '../marvin-prompt-instructions';
 import { MarvinPlatformContextService, renderMarvPlatformBriefing } from './marvin-platform-context.service';
 
@@ -14,7 +15,7 @@ function prismaMock(): any {
 describe('MarvinPlatformContextService', () => {
   it('loads public posts, articles, and the Board, and does not read channels outside a group', async () => {
     const prisma = prismaMock();
-    const service = new MarvinPlatformContextService(prisma as never);
+    const service = new MarvinPlatformContextService(prisma as never, new PostsPublicRecordService(prisma as never));
     const note = await service.briefing();
     expect(note).toContain(MARV_PUBLIC_KNOWLEDGE);
     expect(note).toContain('Public posts:');
@@ -45,7 +46,7 @@ describe('MarvinPlatformContextService', () => {
   it('adds the current group feed and normal channels, and leaves the current channel to its own history', async () => {
     const prisma = prismaMock();
     prisma.communityGroup.findFirst.mockResolvedValue({ name: 'tesr' });
-    const service = new MarvinPlatformContextService(prisma as never);
+    const service = new MarvinPlatformContextService(prisma as never, new PostsPublicRecordService(prisma as never));
     const note = await service.briefing({ groupId: 'g1', channelId: 'general', privateChannel: false });
     expect(note).toContain('This group "tesr"');
     expect(prisma.post.findMany).toHaveBeenCalledWith(
@@ -75,7 +76,7 @@ describe('MarvinPlatformContextService', () => {
   it('keeps a private channel out of every other reply, including a sibling channel in the same group', async () => {
     const prisma = prismaMock();
     prisma.communityGroup.findFirst.mockResolvedValue({ name: 'tesr' });
-    const service = new MarvinPlatformContextService(prisma as never);
+    const service = new MarvinPlatformContextService(prisma as never, new PostsPublicRecordService(prisma as never));
     await service.briefing({ groupId: 'g1', channelId: 'secret', privateChannel: true });
     const where = prisma.message.findMany.mock.calls[0][0].where.conversation.groupChannel;
     expect(where).toEqual({
@@ -94,7 +95,7 @@ describe('MarvinPlatformContextService', () => {
 
   it('does not read a deleted group, and a failed load still forbids claiming ignorance', async () => {
     const prisma = prismaMock();
-    const service = new MarvinPlatformContextService(prisma as never);
+    const service = new MarvinPlatformContextService(prisma as never, new PostsPublicRecordService(prisma as never));
     await service.briefing({ groupId: 'gone' });
     expect(prisma.message.findMany).not.toHaveBeenCalled();
 

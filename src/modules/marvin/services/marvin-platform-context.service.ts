@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { marvChannelSourceWhere } from '../../group-channels/channel-marv-scope.service';
+import { PostsPublicRecordService } from '../../posts/posts-public-record.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MARV_PUBLIC_KNOWLEDGE } from '../marvin-prompt-instructions';
 
@@ -95,7 +96,10 @@ export function renderMarvPlatformBriefing(input: {
 export class MarvinPlatformContextService {
   private readonly logger = new Logger(MarvinPlatformContextService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly postsRecord: PostsPublicRecordService,
+  ) {}
 
   /** Always returns a note Marv can answer from. A database miss does not become "I don't know." */
   async briefing(scope: MarvPlatformScope = {}): Promise<string> {
@@ -133,42 +137,19 @@ export class MarvinPlatformContextService {
   }
 
   async listBoard(limit = BOARD): Promise<{ threads: BoardRow[] }> {
-    const rows = await this.prisma.post.findMany({
-      where: { ...publicRootWhere(), kind: 'board' },
-      orderBy: { createdAt: 'desc' },
-      take: clamp(limit),
-      select: {
-        body: true,
-        createdAt: true,
-        user: { select: { username: true } },
-        boardThread: { select: { title: true } },
-      },
-    });
+    const rows = await this.postsRecord.recentBoardThreads(clamp(limit));
     return {
       threads: rows.map((row) => ({
-        author: row.user.username,
+        author: row.author,
         createdAt: row.createdAt,
-        title: row.boardThread?.title || clip(row.body),
-        body: row.boardThread?.title ? row.body : '',
+        title: row.title || clip(row.body),
+        body: row.title ? row.body : '',
       })),
     };
   }
 
   async listGroupFeed(groupId: string, limit = GROUP_POSTS): Promise<{ posts: PublicPostRow[] }> {
-    const rows = await this.prisma.post.findMany({
-      where: {
-        deletedAt: null,
-        isDraft: false,
-        communityGroupId: groupId,
-        parentId: null,
-        visibility: { not: 'onlyMe' },
-        user: { bannedAt: null },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: clamp(limit),
-      select: { body: true, createdAt: true, user: { select: { username: true } } },
-    });
-    return { posts: rows.map((row) => ({ author: row.user.username, createdAt: row.createdAt, body: row.body })) };
+    return { posts: await this.postsRecord.recentGroupPosts(groupId, clamp(limit)) };
   }
 
   /**
@@ -212,13 +193,7 @@ export class MarvinPlatformContextService {
   }
 
   private async recentPublicPosts(): Promise<PublicPostRow[]> {
-    const rows = await this.prisma.post.findMany({
-      where: { ...publicRootWhere(), kind: { not: 'board' } },
-      orderBy: { createdAt: 'desc' },
-      take: PUBLIC_POSTS,
-      select: { body: true, createdAt: true, user: { select: { username: true } } },
-    });
-    return rows.map((row) => ({ author: row.user.username, createdAt: row.createdAt, body: row.body }));
+    return this.postsRecord.recentPublicPosts(PUBLIC_POSTS);
   }
 
   private async groupSection(groupId: string, scope: MarvPlatformScope) {
@@ -259,17 +234,6 @@ export class MarvinPlatformContextService {
       ...(omitCurrent && channelId ? { NOT: { id: channelId } } : {}),
     };
   }
-}
-
-function publicRootWhere(): Prisma.PostWhereInput {
-  return {
-    deletedAt: null,
-    isDraft: false,
-    visibility: 'public',
-    parentId: null,
-    communityGroupId: null,
-    user: { bannedAt: null },
-  };
 }
 
 function channelSelect() {

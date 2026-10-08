@@ -11,6 +11,7 @@ import { XModule } from '../x/x.module';
 import { DraftsController } from './drafts.controller';
 import { PollsService } from './polls.service';
 import { PostsController } from './posts.controller';
+import { PostsPublicRecordService } from './posts-public-record.service';
 import { PostsPollResultsReadyCron } from './posts-poll-results-ready.cron';
 import { PostsPopularScoreCron } from './posts-popular-score.cron';
 import { PostsTopicsBackfillCron } from './posts-topics-backfill.cron';
@@ -69,6 +70,7 @@ import { ScheduledPostsPublishCron } from './scheduled-posts-publish.cron';
     // when Redis is unreachable.
     PostsSideEffectsHandler,
     PollsService,
+    PostsPublicRecordService,
     PostsPopularScoreCron,
     PostsTopicsBackfillCron,
     PostsTopicsClassifyService,
@@ -77,7 +79,7 @@ import { ScheduledPostsPublishCron } from './scheduled-posts-publish.cron';
     ScheduledPostsService,
     ScheduledPostsPublishCron,
   ],
-  exports: [ScheduledPostsService, PostsService, PollsService, PostsPopularScoreCron, PostsTopicsBackfillCron, PostsTopicsClassifyService, PostsPollResultsReadyCron, ScheduledPostsPublishCron],
+  exports: [ScheduledPostsService, PostsService, PollsService, PostsPublicRecordService, PostsPopularScoreCron, PostsTopicsBackfillCron, PostsTopicsClassifyService, PostsPollResultsReadyCron, ScheduledPostsPublishCron],
 })
 export class PostsModule {}
 
