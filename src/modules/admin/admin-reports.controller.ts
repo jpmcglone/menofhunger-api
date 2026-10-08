@@ -14,6 +14,7 @@ const listSchema = z.object({
   reason: z.enum(['spam', 'harassment', 'hate', 'sexual', 'violence', 'illegal', 'other']).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
   cursor: z.string().optional(),
+  sort: z.enum(['newest', 'likely']).optional(),
 });
 
 export const updateSchema = z.object({
@@ -41,6 +42,7 @@ export class AdminReportsController {
       targetType: parsed.targetType,
       reason: parsed.reason,
       q: parsed.q,
+      sort: parsed.sort,
     });
 
     return {

@@ -409,6 +409,8 @@ export class PostsMutationEditsService {
           body: nextBody,
           topics,
           topicsClassifiedAt: null,
+          replyPrompt: null,
+          replyPromptClassifiedAt: null,
           hashtags,
           hashtagCasings,
           cashtags,
@@ -570,6 +572,7 @@ export class PostsMutationEditsService {
       topics: [...prevTopics, ...nextTopics],
     });
     void this.topicsClassify.enqueueIfNeeded(id);
+    if (post.kind === "regular") this.sideEffects.dispatch("post.replyPrompt.classify", { postId: id });
 
     // Realtime: update body/edited markers for live subscribers (best-effort).
     try {

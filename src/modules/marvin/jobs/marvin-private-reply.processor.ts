@@ -559,6 +559,8 @@ export class MarvinPrivateReplyProcessor {
         userMessage: built.userMessage,
         memoryQuestion: text,
         imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
+        // DM attachments are never noted; only a post's photo Marv loads with get_post can be.
+        imageNotes: {},
         dispatchTool: (name, args, ctx) => this.tools.dispatch(name, args, ctx),
         toolContext: {
           conversationId,

@@ -33,6 +33,7 @@ function makeService(opts?: {
   webSearchEnabled?: boolean;
   apiKey?: string;
   memory?: { prepare: jest.Mock; recall: jest.Mock };
+  imageNotes?: { candidateForPost: jest.Mock; record: jest.Mock };
 }) {
   const appConfig: any = {
     marvOpenAI: jest.fn(() => ({
@@ -53,7 +54,7 @@ function makeService(opts?: {
       maxOutputTokens: 1024,
     })),
   };
-  return new MarvinAIService(appConfig, { marvinUserSettings: { findUnique: jest.fn(async () => ({ aiConsentAt: opts?.consent === false ? null : new Date(), aiConsentVersion: AI_CONSENT_VERSION })), upsert: jest.fn(async () => ({})) }, post: { findFirst: jest.fn(async () => null) } } as any, (opts?.memory ?? { prepare: jest.fn(async () => null), recall: jest.fn(async () => ({ memories: [] })) }) as any);
+  return new MarvinAIService(appConfig, { marvinUserSettings: { findUnique: jest.fn(async () => ({ aiConsentAt: opts?.consent === false ? null : new Date(), aiConsentVersion: AI_CONSENT_VERSION })), upsert: jest.fn(async () => ({})) }, post: { findFirst: jest.fn(async () => null) } } as any, (opts?.memory ?? { prepare: jest.fn(async () => null), recall: jest.fn(async () => ({ memories: [] })) }) as any, opts?.imageNotes as any);
 }
 
 function makeSuccessResponse(text: string) {
@@ -503,5 +504,85 @@ describe('scoped memory in the response pipeline', () => {
     mockResponsesCreate.mockResolvedValueOnce(makeSuccessResponse('Answer'));
     await makeService({ memory }).respond({ ...baseReq, memoryQuestion: 'Follow up', previousResponseId: 'stale-chain' });
     expect(mockResponsesCreate.mock.calls[0][0].previous_response_id).toBeUndefined();
+  });
+});
+
+describe('MarvinAIService photo search notes', () => {
+  const candidate = { r2Key: 'posts/a.jpg', postId: 'p1', imageUrl: 'https://cdn.test/posts/a.jpg' };
+  const noteCall = (note: string, id = 'n1') => ({ id: 'r1', status: 'completed', output: [
+    { type: 'function_call', call_id: id, name: 'record_image_note', arguments: JSON.stringify({ note }) },
+  ] });
+  function hooks(over: Partial<{ candidateForPost: jest.Mock; record: jest.Mock }> = {}) {
+    return {
+      candidateForPost: jest.fn(async () => candidate),
+      record: jest.fn(async () => true),
+      ...over,
+    };
+  }
+  const imageReq = { ...baseReq, imageUrls: [candidate.imageUrl], imageNotes: { focalPostId: 'p1' } };
+
+  beforeEach(() => {
+    mockResponsesCreate.mockReset();
+    mockResponsesCreate.mockResolvedValue(makeSuccessResponse('Nice bench.'));
+  });
+
+  it('offers the note tool and rule only when the viewed photo has a candidate', async () => {
+    const imageNotes = hooks();
+    await makeService({ imageNotes }).respond(imageReq);
+    const sent = mockResponsesCreate.mock.calls[0][0];
+    expect(imageNotes.candidateForPost).toHaveBeenCalledWith('p1', [candidate.imageUrl]);
+    expect(sent.tools.some((t: any) => t.name === 'record_image_note')).toBe(true);
+    expect(sent.input.find((i: any) => i.role === 'developer').content).toContain('record_image_note');
+  });
+
+  it('adds nothing when there is no candidate, vision is off, or the caller did not opt in', async () => {
+    for (const [svcOpts, req] of [
+      [{ imageNotes: hooks({ candidateForPost: jest.fn(async () => null) }) }, imageReq],
+      [{ imageNotes: hooks(), visionEnabled: false }, imageReq],
+      [{ imageNotes: hooks() }, { ...baseReq, imageUrls: [candidate.imageUrl] }],
+      [{ imageNotes: hooks() }, { ...imageReq, source: 'admin_console' as const, adminTools: [] }],
+    ] as const) {
+      mockResponsesCreate.mockClear();
+      await makeService(svcOpts as any).respond(req as any);
+      const sent = mockResponsesCreate.mock.calls[0][0];
+      expect(sent.tools.some((t: any) => t.name === 'record_image_note')).toBe(false);
+      expect(JSON.stringify(sent.input)).not.toContain('record_image_note');
+    }
+  });
+
+  it('records the model note once and keeps it out of the member tool dispatcher', async () => {
+    const imageNotes = hooks();
+    const dispatchTool = jest.fn(async () => '{}');
+    mockResponsesCreate.mockResolvedValueOnce(noteCall('A red bench press in a garage gym', 'n1'))
+      .mockResolvedValueOnce(noteCall('A second try', 'n2'))
+      .mockResolvedValueOnce(makeSuccessResponse('Nice bench.'));
+    const result = await makeService({ imageNotes }).respond({ ...imageReq, dispatchTool });
+    expect(imageNotes.record).toHaveBeenCalledTimes(1);
+    expect(imageNotes.record).toHaveBeenCalledWith(candidate, 'A red bench press in a garage gym');
+    expect(dispatchTool).not.toHaveBeenCalled();
+    expect(result.text).toBe('Nice bench.');
+  });
+
+  it('allows a bounded retry after an unusable note and stops at two attempts', async () => {
+    const imageNotes = hooks({ record: jest.fn(async () => false) });
+    mockResponsesCreate.mockResolvedValueOnce(noteCall('x', 'n1'))
+      .mockResolvedValueOnce(noteCall('y', 'n2'))
+      .mockResolvedValueOnce(noteCall('z', 'n3'))
+      .mockResolvedValueOnce(makeSuccessResponse('Done.'));
+    await makeService({ imageNotes }).respond(imageReq);
+    expect(imageNotes.record).toHaveBeenCalledTimes(2);
+  });
+
+  it('offers one note for a photo shown by get_post', async () => {
+    const imageNotes = hooks({ candidateForPost: jest.fn(async () => candidate) });
+    const dispatchTool = jest.fn(async () => JSON.stringify({ id: 'p9', imageUrls: [candidate.imageUrl] }));
+    mockResponsesCreate.mockResolvedValueOnce({ id: 'r1', status: 'completed', output: [
+      { type: 'function_call', call_id: 'g1', name: 'get_post', arguments: '{"postId":"p9"}' },
+    ] }).mockResolvedValueOnce(noteCall('Sunrise over a lake', 'n1')).mockResolvedValueOnce(makeSuccessResponse('Pretty.'));
+    await makeService({ imageNotes }).respond({ ...baseReq, imageNotes: {}, dispatchTool });
+    expect(imageNotes.candidateForPost).toHaveBeenCalledWith('p9', [candidate.imageUrl]);
+    const second = mockResponsesCreate.mock.calls[1][0];
+    expect(second.tools.some((t: any) => t.name === 'record_image_note')).toBe(true);
+    expect(imageNotes.record).toHaveBeenCalledWith(candidate, 'Sunrise over a lake');
   });
 });

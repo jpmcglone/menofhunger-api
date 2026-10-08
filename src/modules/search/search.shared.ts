@@ -62,6 +62,10 @@ export const POST_SCORE = {
   authorNameAnyWord: 30,
   semanticBase: 40,
   semanticSpan: 20,
+  /** Added to a post's relevance when the query looks like a person lookup and the author matches. */
+  personIntentBoost: 25,
+  /** Max ranking points (in the relevance*10 scale) for a brand-new post on "latest" queries. */
+  recentIntentBoost: 200,
 } as const;
 
 export const ARTICLE_SCORE = {
@@ -84,6 +88,25 @@ export type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: bool
 
 // Same shape as the feed so Board, article, fitness, and poll posts render fully in results and bookmarks.
 export const SEARCH_POST_INCLUDE = POST_LIST_INCLUDE;
+
+/**
+ * True when Marv's note for one of the post's photos matches the query. Embed inside a post FTS
+ * query that aliases Post as `p` and the parsed query as `q.tsq`. A video's note is keyed by its poster.
+ */
+export const POST_MEDIA_NOTE_MATCH_SQL = Prisma.sql`EXISTS (
+  SELECT 1 FROM "PostMedia" pm
+  JOIN "MediaSearchNote" n ON n."r2Key" IN (pm."r2Key", pm."thumbnailR2Key")
+  WHERE pm."postId" = p."id" AND pm."deletedAt" IS NULL
+    AND to_tsvector('english', n."note") @@ q.tsq
+)`;
+
+/** Words of the query found in a photo note: 2 = all (or the whole phrase), 1 = some, 0 = none. */
+export function noteMatchLevel(note: string, qLower: string, words: string[]): 0 | 1 | 2 {
+  const text = note.toLowerCase();
+  if (qLower && text.includes(qLower)) return 2;
+  if (words.length > 0 && words.every((w) => text.includes(w))) return 2;
+  return words.some((w) => text.includes(w)) ? 1 : 0;
+}
 export const SEARCH_ARTICLE_INCLUDE = {
   author: { select: articleAuthorInclude },
   reactions: true,

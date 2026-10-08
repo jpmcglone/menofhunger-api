@@ -145,6 +145,8 @@ export type PostDto = {
   /** Author-only: why X rejected the last cross-post attempt. */
   xError?: string | null;
   topics: string[];
+  /** Root posts only: Jev's read that the post asks a question or invites discussion. Drives the reply nudge. */
+  replyPrompt?: 'question' | 'discussion' | null;
   /** User-created hashtags parsed from body text (lowercase, without '#'). */
   hashtags: string[];
   /** Validated cashtag symbols parsed from body text (uppercase, without '$', e.g. "SPY"). */
@@ -596,6 +598,7 @@ export function toPostDto(
     xUrl: isPostDeleted ? null : ((post as { xUrl?: string | null }).xUrl ?? null),
     xError: opts?.viewerIsAuthor ? ((post as { xError?: string | null }).xError ?? null) : null,
     topics: Array.isArray(post.topics) ? post.topics : [],
+    replyPrompt: isPostDeleted || post.parentId ? null : ((post as { replyPrompt?: 'question' | 'discussion' | null }).replyPrompt ?? null),
     hashtags: isPostDeleted ? [] : (Array.isArray(post.hashtags) ? post.hashtags : []),
     cashtags: isPostDeleted ? [] : (Array.isArray((post as any).cashtags) ? (post as any).cashtags : []),
     boostCount: post.boostCount,

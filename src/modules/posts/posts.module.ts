@@ -15,6 +15,7 @@ import { PostsPollResultsReadyCron } from './posts-poll-results-ready.cron';
 import { PostsPopularScoreCron } from './posts-popular-score.cron';
 import { PostsTopicsBackfillCron } from './posts-topics-backfill.cron';
 import { PostsTopicsClassifyService } from './posts-topics-classify.service';
+import { PostsReplyPromptService } from './posts-reply-prompt.service';
 import { PostsService } from './posts.service';
 import { PostsDraftsService } from './posts-drafts.service';
 import { PostsEngagementService } from './posts-engagement.service';
@@ -71,6 +72,7 @@ import { ScheduledPostsPublishCron } from './scheduled-posts-publish.cron';
     PostsPopularScoreCron,
     PostsTopicsBackfillCron,
     PostsTopicsClassifyService,
+    PostsReplyPromptService,
     PostsPollResultsReadyCron,
     ScheduledPostsService,
     ScheduledPostsPublishCron,

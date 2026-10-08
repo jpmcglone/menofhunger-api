@@ -64,6 +64,37 @@ describe('EmbeddingsService', () => {
     expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
 
+  it('embeds a photo post with no caption from its Marv note', async () => {
+    create.mockResolvedValue(reply(1));
+    const prisma: any = {
+      post: { findFirst: jest.fn(async () => ({ id: 'p1', body: '', hashtags: [], media: [{ r2Key: 'posts/a.jpg', thumbnailR2Key: null }] })) },
+      mediaSearchNote: { findMany: jest.fn(async () => [{ note: 'A red barbell on a rack' }]) },
+      $queryRaw: jest.fn(async () => []),
+      $executeRaw: jest.fn(async () => 1),
+    };
+    await make({}, prisma).indexPost('p1');
+    expect(create.mock.calls.at(-1)?.[0].input).toEqual([postText('', [], ['A red barbell on a rack'])]);
+    expect(prisma.$executeRaw).toHaveBeenCalled();
+  });
+
+  it('does not index a thin photo post that has no note', async () => {
+    const prisma: any = {
+      post: { findFirst: jest.fn(async () => ({ id: 'p1', body: '', hashtags: [], media: [{ r2Key: 'posts/a.jpg', thumbnailR2Key: null }] })) },
+      mediaSearchNote: { findMany: jest.fn(async () => []) },
+      $executeRaw: jest.fn(async () => 1),
+    };
+    await make({}, prisma).indexPost('p1');
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1); // removes any stale vector, nothing is embedded
+  });
+
+  it('indexPostIfMissing leaves an existing vector alone', async () => {
+    create.mockClear();
+    const prisma: any = { $queryRaw: jest.fn(async () => [{ ok: 1 }]), post: { findFirst: jest.fn() } };
+    await expect(make({}, prisma).indexPostIfMissing('p1')).resolves.toBe(false);
+    expect(prisma.post.findFirst).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('removes the vector when a post stops being indexable', async () => {
     const prisma: any = { post: { findFirst: jest.fn(async () => null) }, $executeRaw: jest.fn(async () => 1) };
     await make({}, prisma).indexPost('gone');
@@ -74,6 +105,7 @@ describe('EmbeddingsService', () => {
 describe('embedding text helpers', () => {
   it('builds stable text and hashes', () => {
     expect(postText(' hi ', ['a', 'b'])).toBe('hi\n#a #b');
+    expect(postText('', [], [' A bench ', ''])).toBe('Photo: A bench');
     expect(groupText('Lifters', 'Train together')).toBe('Lifters. Train together');
     expect(userText('Dad of three', ['fitness', 'unknown_topic'])).toContain('Interests:');
     expect(hashText('x')).toBe(hashText('x'));
@@ -83,5 +115,16 @@ describe('embedding text helpers', () => {
   it('round-trips a vector literal', () => {
     expect(parseVector(vectorLiteral([0.5, -1, 2]))).toEqual([0.5, -1, 2]);
     expect(parseVector('not json')).toBeNull();
+  });
+});
+
+describe('isWorthEmbedding', () => {
+  it('skips one-liners and keeps real thoughts', () => {
+    const { isWorthEmbedding } = require('./embeddings.service');
+    expect(isWorthEmbedding('Amen!')).toBe(false);
+    expect(isWorthEmbedding('Amen amen amen amen amen')).toBe(true);
+    expect(isWorthEmbedding('🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏🙏')).toBe(false);
+    expect(isWorthEmbedding('Anyone tried cold plunges for recovery?')).toBe(true);
+    expect(isWorthEmbedding(null)).toBe(false);
   });
 });

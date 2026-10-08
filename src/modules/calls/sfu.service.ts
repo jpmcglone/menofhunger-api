@@ -139,7 +139,14 @@ export class SfuService {
     if (request.action === 'open') {
       if (connection?.connectionId === request.connectionId && connection.seatId === seatId)
         return connection.invalid ? failure('connection_expired', 'Reconnect this call.') : {};
-      if (connection) await this.provider.closeAll(connection.sessionId);
+      // Replacing a connection must never be blocked by cleaning up the one it supersedes; a stale
+      // provider session idles out on its own. Otherwise one failed cleanup wedges every retry.
+      if (connection) {
+        await this.provider.closeAll(connection.sessionId).catch((error: unknown) => {
+          const reason = error instanceof SfuProviderError ? error.message : 'internal';
+          this.logger.warn(`[calls] SFU cleanup of replaced connection failed reason=${reason}`);
+        });
+      }
       const result = await this.provider.request('POST', '/sessions/new');
       if (!result.sessionId) throw new Error('Missing session');
       connection = {

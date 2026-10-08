@@ -29,6 +29,11 @@ enum PostVisibility {
   onlyMe
 }
 
+enum PostReplyPrompt {
+  question
+  discussion
+}
+
 enum PostKind {
   regular
   checkin
@@ -1564,6 +1569,12 @@ model Post {
    * Keeps the cron from re-paying OpenAI for the same empty post.
    */
   topicsClassifiedAt        DateTime?
+  /**
+   * Jev's read on a root post: it asks something ("question") or invites others to weigh in
+   * ("discussion"). Null when it does neither or has not been read yet. Drives the reply nudge.
+   */
+  replyPrompt               PostReplyPrompt?
+  replyPromptClassifiedAt   DateTime?
   embedding                 PostEmbedding?
   /**
    * User-created hashtags (parsed from body) used for search/autocomplete. Stored lowercase.
@@ -2071,6 +2082,18 @@ model MediaContentHash {
   durationSeconds Int?
   bytes           Int?
   createdAt       DateTime      @default(now())
+}
+
+// Short literal description of an uploaded image (or video poster) that Marv already viewed on a paid vision turn.
+// Read only by post search. Keyed by file, so reused uploads share one note. Deleted with the R2 object.
+model MediaSearchNote {
+  r2Key     String   @id
+  note      String   @db.VarChar(200)
+  // Post the note was written for; informational (search joins through PostMedia).
+  postId    String?
+  createdAt DateTime @default(now())
+
+  @@index([postId])
 }
 
 // Admin indexed view of all R2-backed media objects (including orphans).
@@ -2837,6 +2860,15 @@ model Report {
   resolvedByAdminId String?
   resolvedByAdmin   User?   @relation("Report_resolvedBy", fields: [resolvedByAdminId], references: [id], onDelete: SetNull)
 
+  // Jev's first opinion on whether the report is real (a hint for ordering the queue, never a decision).
+  jevScoredAt   DateTime?
+  jevValidScore Float?
+  jevHarmScore  Float?
+  jevCategory   String?   @db.VarChar(24)
+  // max(valid, harm); the admin queue's "most likely real first" order.
+  jevPriority   Float?
+
+  @@index([status, jevPriority])
   @@index([createdAt, id])
   @@index([status, createdAt])
   @@index([targetType, createdAt])

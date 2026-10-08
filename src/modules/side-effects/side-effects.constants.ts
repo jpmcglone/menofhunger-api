@@ -58,6 +58,19 @@ export interface SideEffectPayloads {
   "post.deleted": {
     postId: string;
   };
+  /** Marv wrote a search note for a photo he was already viewing; index it for search. */
+  "media.searchNote.recorded": {
+    postId: string;
+    r2Key: string;
+  };
+  /** A member's report was filed; give it Jev's first opinion for the admin queue order. */
+  "report.score": {
+    reportId: string;
+  };
+  /** Read whether a root post asks a question or invites discussion (Jev), for the reply nudge. */
+  "post.replyPrompt.classify": {
+    postId: string;
+  };
   /** Set a Board post's tags from its title, text, and links (AI). Re-run when its content changes. */
   "board.thread.tag": {
     threadId: string;

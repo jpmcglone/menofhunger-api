@@ -250,6 +250,7 @@ export class AdminImageReviewService {
         // S3 deletion is idempotent. Keep the durable receipt until every operation succeeds.
         await s3.send(new DeleteObjectCommand({ Bucket: this.bucketForKey(key), Key: key }));
         await this.prisma.mediaContentHash.deleteMany({ where: { r2Key: key } });
+        await this.prisma.mediaSearchNote.deleteMany({ where: { r2Key: key } });
         await this.prisma.mediaAsset.deleteMany({ where: { r2Key: key } });
       }
     }
@@ -629,6 +630,7 @@ export class AdminImageReviewService {
 
       // Prevent future "same file" uploads from reusing this tombstoned key.
       await tx.mediaContentHash.deleteMany({ where: { r2Key } });
+      await tx.mediaSearchNote.deleteMany({ where: { r2Key } });
 
       // ── PostMedia: tombstone rows where this is the main asset ─────────────
       const postMediaDirect = await tx.postMedia.findMany({

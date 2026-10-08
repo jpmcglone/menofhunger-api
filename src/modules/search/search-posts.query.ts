@@ -3,10 +3,13 @@ import { POST_BASE_INCLUDE } from '../../common/prisma-includes/post.include';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { queryToTopicValues } from '../../common/topics/topic-utils';
 import { buildPostVisibilityWhere } from '../../common/posts/post-visibility';
+import type { SearchIntent } from '../typesafe/jev-search-intent.service';
 import type { SearchService } from './search.service';
 import {
+  POST_MEDIA_NOTE_MATCH_SQL,
   POST_SCORE,
   SEARCH_POST_INCLUDE,
+  noteMatchLevel,
   SEMANTIC_MAX_DISTANCE,
   SEMANTIC_RESCUE_BELOW,
   TOPIC_RESCUE_BELOW,
@@ -211,6 +214,11 @@ export async function searchPostsOn(host: SearchService, params: { viewerUserId:
   }
 
   const fetchSize = Math.min(200, limit * 10);
+  // Started now so the Jev call overlaps the keyword query; null (unavailable/slow) keeps default ranking.
+  const intentPromise: Promise<SearchIntent | null> =
+    host.jevIntent && hashtags.length === 0 && phrases.length === 0 && qMatchBase.length >= 3
+      ? host.jevIntent.intentFor(qMatchBase).catch(() => null)
+      : Promise.resolve(null);
   const useFts = qMatchExpanded.length >= 3;
   let raw: SearchPostRow[] = [];
 
@@ -250,6 +258,7 @@ export async function searchPostsOn(host: SearchService, params: { viewerUserId:
               COALESCE(u."username", '') || ' ' || COALESCE(u."name", '') || ' ' || COALESCE(u."bio", '')
             ) @@ q.tsq
           )
+          OR ${POST_MEDIA_NOTE_MATCH_SQL}
           ${topicsSql}
           ${hashtagOrSql}
         )
@@ -265,7 +274,7 @@ export async function searchPostsOn(host: SearchService, params: { viewerUserId:
         })
       : [];
   } else {
-    const matchWhere = host.postSearchMatchWhere(qMatchExpanded, words);
+    const matchWhere = host.postSearchMatchWhere(qMatchExpanded, words, await host.mediaNoteKeysFor(qMatchExpanded, words));
     const topicWhere: Prisma.PostWhereInput =
       topicValues.length > 0 ? ({ topics: { hasSome: topicValues } } as Prisma.PostWhereInput) : {};
     const baseWhere: Prisma.PostWhereInput =
@@ -305,7 +314,10 @@ export async function searchPostsOn(host: SearchService, params: { viewerUserId:
 
   // Few hits and no topic recognised: let Jev map the wording to a topic ("gym" -> fitness) and add those posts.
   // Same visibility filters as above, and topics exist only on public, ungrouped posts.
-  if (raw.length < TOPIC_RESCUE_BELOW && topicValues.length === 0 && hashtags.length === 0 && phrases.length === 0 && words.length > 0 && qMatchBase.length >= 3) {
+  const intent = await intentPromise;
+  // A subject query ("grief", "fasting") is worth topic matching even when keywords found a few posts.
+  const topicRescueBelow = intent?.kind === 'topic' ? SEMANTIC_RESCUE_BELOW : TOPIC_RESCUE_BELOW;
+  if (raw.length < topicRescueBelow && topicValues.length === 0 && hashtags.length === 0 && phrases.length === 0 && words.length > 0 && qMatchBase.length >= 3) {
     const rescued = await host.jevTopics?.topicsFor(qMatchBase, 'search query').catch(() => null);
     if (rescued?.length) {
       const extra = await host.postsRead.read.findMany({
@@ -350,6 +362,15 @@ export async function searchPostsOn(host: SearchService, params: { viewerUserId:
     }
   }
 
+  // Photo notes Marv wrote: rank a post by how well its note fits, like body text.
+  const noteKeys = [...new Set(raw.flatMap((p) => (p.media ?? []).flatMap((m) => [m.r2Key, m.thumbnailR2Key])).filter((k): k is string => Boolean(k)))];
+  const noteRows = noteKeys.length
+    ? await Promise.resolve()
+        .then(() => host.prisma.mediaSearchNote.findMany({ where: { r2Key: { in: noteKeys } }, select: { r2Key: true, note: true } }))
+        .catch(() => [])
+    : [];
+  const noteByKey = new Map(noteRows.map((n) => [n.r2Key, n.note] as const));
+
   const postIds = raw.map((p) => p.id);
   await host.posts.ensureBoostScoresFresh(postIds);
   const popularityByPostId = await host.posts.computeScoresForPostIds(postIds);
@@ -378,6 +399,15 @@ export async function searchPostsOn(host: SearchService, params: { viewerUserId:
         score = Math.max(score, topicScore);
       }
     }
+    if (noteByKey.size > 0) {
+      for (const m of p.media ?? []) {
+        const note = noteByKey.get(m.r2Key ?? '') ?? noteByKey.get(m.thumbnailR2Key ?? '');
+        if (!note) continue;
+        const level = noteMatchLevel(note, qLower, words);
+        if (level === 2) score = Math.max(score, POST_SCORE.bodyAllWords);
+        else if (level === 1) score = Math.max(score, POST_SCORE.bodyAnyWord);
+      }
+    }
     if (un === qLower) score = Math.max(score, POST_SCORE.authorExactUsername);
     if (nm === qLower) score = Math.max(score, POST_SCORE.authorExactName);
     if (words.some((w) => body.includes(w))) score = Math.max(score, POST_SCORE.bodyAnyWord);
@@ -385,7 +415,19 @@ export async function searchPostsOn(host: SearchService, params: { viewerUserId:
     if (words.some((w) => nm.includes(w))) score = Math.max(score, POST_SCORE.authorNameAnyWord);
     const closeness = semanticById.get(p.id);
     if (closeness !== undefined) score = Math.max(score, POST_SCORE.semanticBase + closeness * POST_SCORE.semanticSpan);
+    // Person-style queries lean toward that author's posts.
+    if (intent?.kind === 'person' && score > 0 && (un === qLower || nm === qLower || words.some((w) => un.includes(w) || nm.includes(w)))) {
+      score += POST_SCORE.personIntentBoost;
+    }
     return score;
+  }
+
+  // "latest"/"today" style queries: fresh posts earn up to recencyBoost, fading over a few days.
+  const nowMs = Date.now();
+  function recencyBonus(p: (typeof raw)[0]): number {
+    if (!intent?.wantsRecent) return 0;
+    const ageDays = Math.max(0, (nowMs - p.createdAt.getTime()) / 86_400_000);
+    return POST_SCORE.recentIntentBoost * Math.exp(-ageDays / 3);
   }
 
   const sorted = [...raw].sort((a, b) => {
@@ -398,8 +440,8 @@ export async function searchPostsOn(host: SearchService, params: { viewerUserId:
     }
     const popA = popularityByPostId.get(a.id) ?? 0;
     const popB = popularityByPostId.get(b.id) ?? 0;
-    const scoreA = relA * 10 + Math.log10(1 + popA);
-    const scoreB = relB * 10 + Math.log10(1 + popB);
+    const scoreA = relA * 10 + Math.log10(1 + popA) + (relA > 0 ? recencyBonus(a) : 0);
+    const scoreB = relB * 10 + Math.log10(1 + popB) + (relB > 0 ? recencyBonus(b) : 0);
     if (scoreA !== scoreB) return scoreB - scoreA;
     return b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id);
   });

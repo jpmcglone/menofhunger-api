@@ -10,6 +10,7 @@ import { PostsReadService } from '../posts-read/posts-read.service';
 export type EmbeddingKind = 'post' | 'group' | 'user';
 
 const MIN_POST_CHARS = 24;
+const MIN_POST_WORDS = 4;
 const MAX_TEXT_CHARS = 2_000;
 const QUERY_CACHE_MAX = 500;
 const QUERY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -144,6 +145,7 @@ export class EmbeddingsService {
         AND p."deletedAt" IS NULL AND p."isDraft" = false AND p."kind" <> 'repost'
         AND p."visibility" <> 'onlyMe'
         AND length(btrim(COALESCE(p."body", ''))) >= ${MIN_POST_CHARS}
+        AND cardinality(regexp_split_to_array(btrim(COALESCE(p."body", '')), '\\s+')) >= ${MIN_POST_WORDS}
       ORDER BY p."createdAt" DESC
       LIMIT ${take}`;
     out.posts = await this.store('post', posts.map((p) => ({ id: p.id, text: postText(p.body, p.hashtags) })));
@@ -293,10 +295,27 @@ export class EmbeddingsService {
   private async postCandidate(postId: string): Promise<Candidate | null> {
     const post = await this.postsRead.read.findFirst({
       where: { id: postId, deletedAt: null, isDraft: false, kind: { not: 'repost' }, visibility: { not: 'onlyMe' } },
-      select: { id: true, body: true, hashtags: true },
+      select: {
+        id: true, body: true, hashtags: true,
+        media: { where: { deletedAt: null }, select: { r2Key: true, thumbnailR2Key: true }, orderBy: { position: 'asc' }, take: 8 },
+      },
     });
-    if (!post || (post.body ?? '').trim().length < MIN_POST_CHARS) return null;
-    return { id: post.id, text: postText(post.body, post.hashtags) };
+    if (!post) return null;
+    const keys = (post.media ?? []).flatMap((m) => [m.r2Key, m.thumbnailR2Key]).filter((k): k is string => Boolean(k));
+    // Photo notes Marv wrote let a photo post with little or no text enter the index.
+    const notes = keys.length
+      ? (await this.prisma.mediaSearchNote.findMany({ where: { r2Key: { in: keys } }, select: { note: true } })).map((n) => n.note)
+      : [];
+    if (!isWorthEmbedding(post.body) && notes.length === 0) return null;
+    return { id: post.id, text: postText(post.body, post.hashtags, notes) };
+  }
+
+  /** Embeds a post only when it has no vector yet. A post that already has one keeps it. */
+  async indexPostIfMissing(postId: string): Promise<boolean> {
+    const have = await this.prisma.$queryRaw<Array<{ ok: number }>>`SELECT 1 AS ok FROM "PostEmbedding" WHERE "postId" = ${postId}`;
+    if (have.length > 0) return false;
+    await this.indexPost(postId);
+    return true;
   }
 
   private async groupCandidate(groupId: string): Promise<Candidate | null> {
@@ -352,9 +371,20 @@ function eligibleUserSql(): Prisma.Sql {
     AND u."bannedAt" IS NULL AND u."deletionRequestedAt" IS NULL`;
 }
 
-export function postText(body: string | null, hashtags: string[] | null): string {
+/**
+ * Free gate before spending embedding tokens: skips "Amen!", emoji-only and other one-liners nobody
+ * searches for. (A Jev gate would cost more per token than the embedding it is guarding.)
+ */
+export function isWorthEmbedding(body: string | null): boolean {
+  const text = (body ?? '').trim();
+  if (text.length < MIN_POST_CHARS) return false;
+  return text.split(/\s+/).length >= MIN_POST_WORDS;
+}
+
+export function postText(body: string | null, hashtags: string[] | null, notes: string[] = []): string {
   const tags = (hashtags ?? []).slice(0, 8).map((t) => `#${t}`).join(' ');
-  return [(body ?? '').trim(), tags].filter(Boolean).join('\n').slice(0, MAX_TEXT_CHARS);
+  const photos = notes.map((n) => n.trim()).filter(Boolean).slice(0, 4).join(' ');
+  return [(body ?? '').trim(), tags, photos ? `Photo: ${photos}` : ''].filter(Boolean).join('\n').slice(0, MAX_TEXT_CHARS);
 }
 
 export function groupText(name: string, description: string): string {

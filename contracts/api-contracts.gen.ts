@@ -3046,6 +3046,8 @@ export type PostDto = {
   /** Author-only: why X rejected the last cross-post attempt. */
   xError?: string | null;
   topics: string[];
+  /** Root posts only: Jev's read that the post asks a question or invites discussion. Drives the reply nudge. */
+  replyPrompt?: 'question' | 'discussion' | null;
   /** User-created hashtags parsed from body text (lowercase, without '#'). */
   hashtags: string[];
   /** Validated cashtag symbols parsed from body text (uppercase, without '$', e.g. "SPY"). */
@@ -3554,6 +3556,8 @@ export type PostsLiveUpdatedPayloadDto = {
     /** Updated poll state (vote counts + viewer flags) after a vote is cast. */
     poll: PostPollDto | null;
     /** Public permalink of a cross-posted copy. Omitted means unchanged. */
+    /** Jev finished reading a root post: it asks a question or invites discussion. */
+    replyPrompt: 'question' | 'discussion' | null;
     pickaxUrl: string | null;
     xUrl: string | null;
     /**
@@ -3878,6 +3882,8 @@ export type ReportAdminDto = ReportDto & {
   subjectArticle: { id: string; title: string; slug: string; deletedAt: string | null } | null;
   adminNote: string | null;
   resolvedAt: string | null;
+  /** Jev's first opinion (a hint for queue order, never a decision). Null until scored. */
+  jevOpinion: { validScore: number | null; harmScore: number | null; category: string | null; priority: number } | null;
   reporter: {
     id: string;
     username: string | null;

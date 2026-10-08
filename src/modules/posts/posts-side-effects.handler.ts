@@ -101,6 +101,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       requestedMarvMode: null,
     }, payload.recipientIds));
     this.registry.register('post.deleted', (payload) => this.onPostDeleted(payload));
+    this.registry.register('media.searchNote.recorded', (payload) => this.onSearchNoteRecorded(payload));
     this.registry.register('post.engagement.changed', (payload) => this.onEngagementChanged(payload));
     this.registry.register('post.quote.changed', (payload) => this.onQuoteChanged(payload));
   }
@@ -249,6 +250,22 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     ]);
   }
 
+  // ─── media.searchNote.recorded ────────────────────────────────────────
+
+  /**
+   * Marv described a photo he was already viewing. Keyword search reads the note directly; here the
+   * post also gets Jev topics when it has none (public only) and a first embedding when it has no vector.
+   */
+  private async onSearchNoteRecorded(payload: SideEffectPayloads['media.searchNote.recorded']): Promise<void> {
+    const postId = (payload.postId ?? '').trim();
+    const r2Key = (payload.r2Key ?? '').trim();
+    if (!postId || !r2Key) return;
+    const note = await this.prisma.mediaSearchNote.findUnique({ where: { r2Key }, select: { note: true } });
+    if (!note) return;
+    await this.topicsClassify.classifyFromImageNote(postId, note.note);
+    await this.embeddings?.indexPostIfMissing(postId);
+  }
+
   // ─── post.created ─────────────────────────────────────────────────────
 
   private async onPostCreated(payload: SideEffectPayloads['post.created'], mentionRecipients?: string[]): Promise<void> {
@@ -274,6 +291,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     }
 
     void this.topicsClassify.enqueueIfNeeded(postId);
+    this.sideEffects.dispatch('post.replyPrompt.classify', { postId });
     void this.embeddings?.indexPost(postId).catch(() => undefined);
     void this.screenPost(postId);
 

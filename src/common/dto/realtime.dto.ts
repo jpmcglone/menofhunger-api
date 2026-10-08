@@ -378,6 +378,8 @@ export type PostsLiveUpdatedPayloadDto = {
     /** Updated poll state (vote counts + viewer flags) after a vote is cast. */
     poll: PostPollDto | null;
     /** Public permalink of a cross-posted copy. Omitted means unchanged. */
+    /** Jev finished reading a root post: it asks a question or invites discussion. */
+    replyPrompt: 'question' | 'discussion' | null;
     pickaxUrl: string | null;
     xUrl: string | null;
     /**

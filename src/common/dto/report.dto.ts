@@ -20,6 +20,8 @@ export type ReportAdminDto = ReportDto & {
   subjectArticle: { id: string; title: string; slug: string; deletedAt: string | null } | null;
   adminNote: string | null;
   resolvedAt: string | null;
+  /** Jev's first opinion (a hint for queue order, never a decision). Null until scored. */
+  jevOpinion: { validScore: number | null; harmScore: number | null; category: string | null; priority: number } | null;
   reporter: {
     id: string;
     username: string | null;
@@ -87,6 +89,9 @@ export function toReportAdminDto(
     subjectArticle: report.subjectArticle ? { ...report.subjectArticle, deletedAt: report.subjectArticle.deletedAt?.toISOString() ?? null } : null,
     adminNote: report.adminNote ?? null,
     resolvedAt: report.resolvedAt ? report.resolvedAt.toISOString() : null,
+    jevOpinion: report.jevPriority == null
+      ? null
+      : { validScore: report.jevValidScore ?? null, harmScore: report.jevHarmScore ?? null, category: report.jevCategory ?? null, priority: report.jevPriority },
     reporter: { id: report.reporter.id, username: report.reporter.username, name: report.reporter.name },
     subjectUser: report.subjectUser
       ? { id: report.subjectUser.id, username: report.subjectUser.username, name: report.subjectUser.name }

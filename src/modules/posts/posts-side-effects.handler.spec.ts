@@ -104,7 +104,38 @@ describe('PostsSideEffectsHandler registration', () => {
 
     handler.onModuleInit();
 
-    expect(deps.registry.names()).toEqual(['board.mentions.added', 'post.created', 'post.deleted', 'post.engagement.changed', 'post.quote.changed']);
+    expect(deps.registry.names()).toEqual(['board.mentions.added', 'media.searchNote.recorded', 'post.created', 'post.deleted', 'post.engagement.changed', 'post.quote.changed']);
+  });
+});
+
+// ─── media.searchNote.recorded ───────────────────────────────────────────────
+
+describe('PostsSideEffectsHandler media.searchNote.recorded', () => {
+  function withNote(note: { note: string } | null) {
+    const { handler, deps } = makeHandler();
+    (deps.prisma as any).mediaSearchNote = { findUnique: jest.fn(async () => note) };
+    const topicsClassify = { classifyFromImageNote: jest.fn(async () => true) };
+    const embeddings = { indexPostIfMissing: jest.fn(async () => true) };
+    (handler as any).topicsClassify = topicsClassify;
+    (handler as any).embeddings = embeddings;
+    return { handler, topicsClassify, embeddings };
+  }
+
+  it('classifies with Jev from the note and embeds only a post without a vector', async () => {
+    const { handler, topicsClassify, embeddings } = withNote({ note: 'A barbell on a squat rack' });
+    await (handler as any).onSearchNoteRecorded({ postId: 'p1', r2Key: 'posts/a.jpg' });
+    expect(topicsClassify.classifyFromImageNote).toHaveBeenCalledWith('p1', 'A barbell on a squat rack');
+    expect(embeddings.indexPostIfMissing).toHaveBeenCalledWith('p1');
+  });
+
+  it('does nothing when the note is gone or the ids are blank', async () => {
+    const gone = withNote(null);
+    await (gone.handler as any).onSearchNoteRecorded({ postId: 'p1', r2Key: 'posts/a.jpg' });
+    expect(gone.topicsClassify.classifyFromImageNote).not.toHaveBeenCalled();
+    expect(gone.embeddings.indexPostIfMissing).not.toHaveBeenCalled();
+    const blank = withNote({ note: 'x note' });
+    await (blank.handler as any).onSearchNoteRecorded({ postId: ' ', r2Key: 'posts/a.jpg' });
+    expect(blank.embeddings.indexPostIfMissing).not.toHaveBeenCalled();
   });
 });
 

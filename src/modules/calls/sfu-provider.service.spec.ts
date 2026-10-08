@@ -46,6 +46,15 @@ describe('SFU provider cleanup confirmation', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it('treats a gone (410) session as already cleaned up, for lookups and track closes', async () => {
+    fetchMock.mockResolvedValueOnce(response({}, 410));
+    await expect(service.closeAll('empty-receiver-session')).resolves.toBeUndefined();
+    fetchMock.mockResolvedValueOnce(response({}, 410));
+    await expect(service.close('gone-session', ['0'])).resolves.toBeUndefined();
+    fetchMock.mockResolvedValueOnce(response({}, 410));
+    await expect(service.request('POST', '/sessions/new')).rejects.toEqual(new SfuProviderError('http', 410));
+  });
+
   it('does not mistake provider outages for completed cleanup', async () => {
     fetchMock.mockResolvedValueOnce(response({}, 503));
     await expect(service.closeAll('session')).rejects.toThrow('SFU request failed');

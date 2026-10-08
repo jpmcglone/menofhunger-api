@@ -9,6 +9,7 @@ import { ArticlesRankingService } from '../articles/articles-ranking.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { JevTopicsService } from '../typesafe/jev-topics.service';
+import { JevSearchIntentService } from '../typesafe/jev-search-intent.service';
 import { TickerService } from '../cashtags/ticker.service';
 import type { CashtagResultDto } from '../../common/dto';
 import { excludeBoardOnlyWhere } from '../posts/posts-query-builders';
@@ -19,6 +20,7 @@ import { searchUsersOn } from './search-users.query';
 import { searchPostsOn } from './search-posts.query';
 import {
   ARTICLE_SCORE,
+  POST_MEDIA_NOTE_MATCH_SQL,
   SEARCH_ARTICLE_INCLUDE,
   SEARCH_POST_INCLUDE,
   extractQuotedPhrases,
@@ -44,6 +46,7 @@ export class SearchService {
     readonly ticker: TickerService,
     @Optional() readonly jevTopics?: JevTopicsService,
     @Optional() readonly embeddings?: EmbeddingsService,
+    @Optional() readonly jevIntent?: JevSearchIntentService,
   ) {}
 
   allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
@@ -254,8 +257,26 @@ export class SearchService {
     return { cashtags, nextCursor: null };
   }
 
+  /** Files whose Marv-written photo note contains the phrase or any word. Feeds the short-query post match. */
+  async mediaNoteKeysFor(q: string, words: string[]): Promise<string[]> {
+    const trimmed = (q ?? '').trim();
+    if (trimmed.length < 2) return [];
+    const terms = [...new Set([trimmed, ...words.filter((w) => w.length >= 2)])];
+    try {
+      const rows = await this.prisma.mediaSearchNote.findMany({
+        where: { OR: terms.map((t) => ({ note: { contains: t, mode: 'insensitive' as const } })) },
+        select: { r2Key: true },
+        take: 200,
+      });
+      return rows.map((r) => r.r2Key);
+    } catch {
+      // Photo notes are a bonus; search keeps working without them.
+      return [];
+    }
+  }
+
   /** Broad match: body or author username/name (phrase + each word) so "john steve" matches @john, @steve, or body. */
-  postSearchMatchWhere(q: string, words: string[]): object {
+  postSearchMatchWhere(q: string, words: string[], noteKeys: string[] = []): object {
     const trimmed = (q ?? '').trim();
     if (!trimmed) return {};
     const orConditions: any[] = [
@@ -263,6 +284,12 @@ export class SearchService {
       { user: { username: { contains: trimmed, mode: 'insensitive' as const } } },
       { user: { name: { contains: trimmed, mode: 'insensitive' as const } } },
     ];
+    // Photos Marv described: match through the files whose note fits the query.
+    if (noteKeys.length > 0) {
+      orConditions.push({
+        media: { some: { deletedAt: null, OR: [{ r2Key: { in: noteKeys } }, { thumbnailR2Key: { in: noteKeys } }] } },
+      });
+    }
     for (const w of words) {
       if (w === trimmed.toLowerCase()) continue;
       orConditions.push({ body: { contains: w, mode: 'insensitive' as const } });
@@ -561,6 +588,7 @@ export class SearchService {
                 COALESCE(u."username", '') || ' ' || COALESCE(u."name", '') || ' ' || COALESCE(u."bio", '')
               ) @@ q.tsq
             )
+            OR ${POST_MEDIA_NOTE_MATCH_SQL}
           )
         ORDER BY p."createdAt" DESC, p."id" DESC
         LIMIT ${limit + 1}
@@ -580,7 +608,7 @@ export class SearchService {
     }
 
     const words = queryToWords(queryMatch);
-    const matchWhere = this.postSearchMatchWhere(queryMatch, words) as Prisma.PostWhereInput;
+    const matchWhere = this.postSearchMatchWhere(queryMatch, words, await this.mediaNoteKeysFor(queryMatch, words)) as Prisma.PostWhereInput;
     const readableGroupPostWhere = this.readableGroupPostWhere(params.viewer);
     const cursorWhere = await createdAtIdCursorWhere({
       cursor: cursorPostId,

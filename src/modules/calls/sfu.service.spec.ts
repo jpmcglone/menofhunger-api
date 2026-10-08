@@ -120,6 +120,19 @@ describe('SFU authorization and negotiation', () => {
       (await h.send('answer', { remoteUserId: 'alice', sessionDescription: { type: 'answer', sdp: 'answer' } }, 'bob', 'socket-b')).error,
     ).toBeUndefined();
   });
+  it('opens a replacement receiver even when cleaning up the superseded session fails', async () => {
+    const h = harness();
+    await h.send('open', { remoteUserId: 'alice' }, 'bob', 'socket-b');
+    h.provider.closeAll.mockRejectedValueOnce(new Error('410'));
+    const ack = await h.service.handle('bob', 'socket-b', {
+      callId: 'call-1',
+      connectionId: 'connection-2',
+      action: 'open',
+      remoteUserId: 'alice',
+    });
+    expect(ack.error).toBeUndefined();
+    expect(h.provider.request).toHaveBeenLastCalledWith('POST', '/sessions/new');
+  });
   it('invalidates uncertain negotiations and never announces them', async () => {
     const h = harness();
     await h.send('open');

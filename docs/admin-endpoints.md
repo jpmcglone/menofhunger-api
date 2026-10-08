@@ -109,9 +109,9 @@ The companion [experience review](admin-experience.md) records assistant actions
 | POST /v1/admin/partners/:id/webhook-secret/retire-previous | diagnostics | [source](../src/modules/partner/admin-partners.controller.ts#L29) |
 | POST /v1/admin/push/test/apns | push | [source](../src/modules/admin/admin-push.controller.ts#L28) |
 | POST /v1/admin/push/test/web | push | [source](../src/modules/admin/admin-push.controller.ts#L103) |
-| GET /v1/admin/reports | reports | [source](../src/modules/admin/admin-reports.controller.ts#L32) |
-| PATCH /v1/admin/reports/:id | reports | [source](../src/modules/admin/admin-reports.controller.ts#L63) |
-| GET /v1/admin/reports/:id/media/:mediaId | reports | [source](../src/modules/admin/admin-reports.controller.ts#L52) |
+| GET /v1/admin/reports | reports | [source](../src/modules/admin/admin-reports.controller.ts#L33) |
+| PATCH /v1/admin/reports/:id | reports | [source](../src/modules/admin/admin-reports.controller.ts#L65) |
+| GET /v1/admin/reports/:id/media/:mediaId | reports | [source](../src/modules/admin/admin-reports.controller.ts#L54) |
 | GET /v1/admin/searches | search | [source](../src/modules/admin/admin-search.controller.ts#L17) |
 | GET /v1/admin/services | diagnostics | [source](../src/modules/admin/admin-services.controller.ts#L15) |
 | GET /v1/admin/site-config | site-settings | [source](../src/modules/admin/admin-site-config.controller.ts#L32) |

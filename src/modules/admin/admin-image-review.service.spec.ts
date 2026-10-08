@@ -184,6 +184,9 @@ describe("profile and publication media ownership", () => {
     (prisma as any).mediaContentHash = {
       deleteMany: jest.fn(async () => ({ count: 1 })),
     };
+    (prisma as any).mediaSearchNote = {
+      deleteMany: jest.fn(async () => ({ count: 1 })),
+    };
     (prisma.mediaAsset as any).deleteMany = jest.fn(async () => ({ count: 1 }));
     prisma.user.findMany.mockResolvedValue([
       {
@@ -201,6 +204,9 @@ describe("profile and publication media ownership", () => {
     await service.eraseUnreferencedAccountMedia(["avatars/user/photo.webp"]);
     expect(send).toHaveBeenCalledTimes(1);
     expect((prisma.mediaAsset as any).deleteMany).toHaveBeenCalledWith({
+      where: { r2Key: "avatars/user/photo.webp" },
+    });
+    expect((prisma as any).mediaSearchNote.deleteMany).toHaveBeenCalledWith({
       where: { r2Key: "avatars/user/photo.webp" },
     });
   });

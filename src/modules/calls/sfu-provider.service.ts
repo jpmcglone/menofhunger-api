@@ -43,7 +43,10 @@ export class SfuProviderService {
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(6_000),
     }).catch(() => { throw new SfuProviderError('network'); });
-    if (response.status === 404 && method === 'GET') return { tracks: [] };
+    // Cloudflare answers 404 or 410 once a session has expired or all its tracks closed (an empty
+    // receiver session expires quickly). For cleanup that is success: there is nothing left to close.
+    const sessionGone = response.status === 404 || response.status === 410;
+    if (sessionGone && (method === 'GET' || path.endsWith('/tracks/close'))) return { tracks: [] };
     if (!response.ok) throw new SfuProviderError('http', response.status);
     const result = (await response.json()) as SfuProviderResult;
     if (

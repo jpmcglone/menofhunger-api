@@ -95,6 +95,27 @@ export class PostsTopicsClassifyService {
     }
   }
 
+  /**
+   * Topics for a public photo post that has none, from the short note Marv wrote about the photo.
+   * Jev only: this is a fifteen-word label decision, so no OpenAI completion is made. Null or an
+   * empty answer leaves the post as it was.
+   */
+  async classifyFromImageNote(postId: string, note: string): Promise<boolean> {
+    if (!this.jev?.available()) return false;
+    const where = {
+      id: postId, deletedAt: null, isDraft: false, kind: { not: 'repost' as const },
+      visibility: 'public' as const, communityGroupId: null,
+    };
+    const post = await this.prisma.post.findFirst({ where, select: { topics: true } });
+    if (!post || post.topics.length > 0) return false;
+    const topics = await this.jev.topicsFor(note, 'public post').catch(() => null);
+    if (!topics?.length) return false;
+    const result = await this.prisma.post.updateMany({ where: { ...where, topics: { isEmpty: true } }, data: { topics } });
+    if (!result.count) return false;
+    await this.cacheInvalidation.bumpForPostWrite({ topics, invalidateFeed: false });
+    return true;
+  }
+
   async process(data?: TopicsClassifyJobData): Promise<{ classified: number; examined: number }> {
     if (!this.canClassify()) return { classified: 0, examined: 0 };
     const postId = (data?.postId ?? '').trim();
@@ -191,8 +212,10 @@ export class PostsTopicsClassifyService {
       .filter(Boolean)
       .join('\n');
 
-    let topics: string[] | null = null;
-    if (this.ai.isConfigured()) {
+    // Jev is the primary classifier (much cheaper per token, and the topic allowlist is its home turf).
+    // OpenAI only runs when Jev is unavailable or errors.
+    let topics: string[] | null = (await this.jev?.topicsFor(userMessage, 'public post').catch(() => null)) ?? null;
+    if (!topics && this.ai.isConfigured()) {
       const result = await this.ai.complete({
         model,
         instructions: CLASSIFY_INSTRUCTIONS,
@@ -203,7 +226,6 @@ export class PostsTopicsClassifyService {
       });
       if (result) topics = parseModelTopicList(result.text);
     }
-    topics ??= (await this.jev?.topicsFor(userMessage, 'public post').catch(() => null)) ?? null;
     // A transport failure is not a successful empty classification. Let the bounded job retry.
     if (!topics) throw new Error('Topic classification unavailable');
     if (topics.length === 0) {

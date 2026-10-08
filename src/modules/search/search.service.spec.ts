@@ -367,3 +367,31 @@ describe('broad topic query ranking', () => {
     expect(result.nextCursor).toBe('6');
   });
 });
+
+describe('photo note search helpers', () => {
+  it('ranks a note that holds the whole query above one that holds only part of it', () => {
+    const { noteMatchLevel } = require('./search.shared');
+    expect(noteMatchLevel('A red barbell on a squat rack', 'squat rack', ['squat', 'rack'])).toBe(2);
+    expect(noteMatchLevel('A rack of dumbbells', 'squat rack', ['squat', 'rack'])).toBe(1);
+    expect(noteMatchLevel('A lake at sunrise', 'squat rack', ['squat', 'rack'])).toBe(0);
+  });
+
+  it('short-query post match reaches photos through the files whose note fits', async () => {
+    const { service, prisma } = makeService();
+    prisma.mediaSearchNote = { findMany: jest.fn(async () => [{ r2Key: 'posts/a.jpg' }]) };
+    const keys = await service.mediaNoteKeysFor('rack', ['rack']);
+    expect(keys).toEqual(['posts/a.jpg']);
+    expect(prisma.mediaSearchNote.findMany.mock.calls[0][0].take).toBe(200);
+    const where: any = service.postSearchMatchWhere('rack', ['rack'], keys);
+    expect(where.OR).toContainEqual({
+      media: { some: { deletedAt: null, OR: [{ r2Key: { in: keys } }, { thumbnailR2Key: { in: keys } }] } },
+    });
+    expect((service.postSearchMatchWhere('rack', ['rack']) as any).OR.some((c: any) => c.media)).toBe(false);
+  });
+
+  it('keeps searching when the note lookup fails', async () => {
+    const { service, prisma } = makeService();
+    prisma.mediaSearchNote = { findMany: jest.fn(async () => { throw new Error('offline'); }) };
+    await expect(service.mediaNoteKeysFor('rack', ['rack'])).resolves.toEqual([]);
+  });
+});

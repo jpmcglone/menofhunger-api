@@ -312,6 +312,7 @@ export class MarvinCatchUpService {
           developerNote,
           userMessage,
           imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
+          imageNotes: { focalPostId: postId },
           dispatchTool: (name, args, ctx) => this.tools.dispatch(name, args, ctx),
           toolContext: { requesterUserId: userId, rootPostId, triggeringPostId: postId },
           cacheKey: `marv:catchup:${rootPostId}`,

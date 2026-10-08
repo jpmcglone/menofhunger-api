@@ -24,6 +24,7 @@ import { MarvinMentionDetectorService } from './services/marvin-mention-detector
 import { MarvinPromptBuilderService } from './services/marvin-prompt-builder.service';
 import { MarvinRoutingService } from './services/marvin-routing.service';
 import { MarvinJevService } from './services/marvin-jev.service';
+import { MarvinImageNoteService } from './services/marvin-image-note.service';
 import { MarvinUsageService } from './services/marvin-usage.service';
 import { MarvinAIService } from './services/marvin-ai.service';
 import { MarvinToolHandlersService } from './services/marvin-tool-handlers.service';
@@ -85,6 +86,7 @@ import { ScriptureModule } from '../scripture/scripture.module';
     MarvinCreditService,
     MarvinRoutingService,
     MarvinJevService,
+    MarvinImageNoteService,
     MarvinPromptBuilderService,
     MarvinAIService,
     MarvinToolHandlersService,

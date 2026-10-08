@@ -13,6 +13,8 @@ const reviewedMediaFields = new Set([
   'Article.thumbnailR2Key', 'Announcement.imageKey', 'Newsletter.imageKey',
   // Asset inventory/deduplication are not ownership. mp4Url above is provider GIF media.
   'MediaAsset.r2Key', 'MediaContentHash.r2Key',
+  // Derived text note keyed by file; deleted with the R2 object (orphan sweep and admin media delete).
+  'MediaSearchNote.r2Key',
   'GroupChannelUpload.sourceKey', 'GroupChannelUpload.r2Key',
   // External OpenGraph metadata is provider-hosted, not an upload surface.
   'LinkMetadata.imageUrl',

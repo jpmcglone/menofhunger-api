@@ -3,12 +3,13 @@ import { ChannelAccessService } from '../group-channels/channel-access.service';
 import { MessagesService } from '../messages/messages.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import type { Prisma, ReportReason, ReportStatus, ReportTargetType } from '@prisma/client';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { SlackService } from '../../common/slack/slack.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { SideEffectsService } from '../side-effects/side-effects.service';
 @Injectable()
 export class ReportsService {
   constructor(
@@ -19,13 +20,21 @@ export class ReportsService {
     private readonly viewer: ViewerContextService,
     private readonly channelMedia: ChannelMediaService,
     private readonly postsRead: PostsReadService,
+    @Optional() private readonly sideEffects?: SideEffectsService,
   ) {}
 
   readReportedMedia(reportId: string, mediaId: string, thumbnail: boolean, range?: string) {
     return this.channelMedia.readReportedMedia(reportId, mediaId, thumbnail, range);
   }
 
-  async create(input: {
+  async create(input: Parameters<ReportsService['createRecord']>[0]) {
+    const report = await this.createRecord(input);
+    // Jev's first opinion runs off the request path and only orders the admin queue.
+    this.sideEffects?.dispatch('report.score', { reportId: report.id });
+    return report;
+  }
+
+  private async createRecord(input: {
     reporterUserId: string;
     targetType: ReportTargetType;
     subjectPostId?: string | null;
@@ -111,8 +120,12 @@ export class ReportsService {
     targetType?: ReportTargetType;
     reason?: ReportReason;
     q?: string;
+    /** `likely`: Jev's most-likely-real first (offset cursor). Default: newest first. */
+    sort?: 'newest' | 'likely';
   }) {
-    const cursorWhere = await createdAtIdCursorWhere({
+    const likely = params.sort === 'likely';
+    const offset = likely ? Math.max(0, Number.parseInt(params.cursor ?? '', 10) || 0) : 0;
+    const cursorWhere = likely ? null : await createdAtIdCursorWhere({
       cursor: params.cursor,
       lookup: async (id) =>
         this.prisma.report.findUnique({
@@ -138,7 +151,10 @@ export class ReportsService {
 
     const rows = await this.prisma.report.findMany({
       where,
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: likely
+        ? [{ jevPriority: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }, { id: 'desc' }]
+        : [{ createdAt: 'desc' }, { id: 'desc' }],
+      ...(likely ? { skip: offset } : {}),
       take: params.limit + 1,
       include: {
         reporter: { select: { id: true, username: true, name: true } },
@@ -159,7 +175,9 @@ export class ReportsService {
     });
 
     const slice = rows.slice(0, params.limit);
-    const nextCursor = rows.length > params.limit ? slice[slice.length - 1]?.id ?? null : null;
+    const nextCursor = rows.length > params.limit
+      ? (likely ? String(offset + params.limit) : slice[slice.length - 1]?.id ?? null)
+      : null;
 
     return { rows: slice, nextCursor };
   }

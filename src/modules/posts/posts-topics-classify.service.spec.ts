@@ -138,3 +138,78 @@ describe('classification eligibility', () => {
     expect(ai.complete).not.toHaveBeenCalled();
   });
 });
+
+describe('PostsTopicsClassifyService.classifyFromImageNote', () => {
+  function make(opts: { post?: any; jevTopics?: string[] | null; available?: boolean; count?: number } = {}) {
+    const prisma: any = {
+      post: {
+        findFirst: jest.fn(async () => (opts.post === undefined ? { topics: [] } : opts.post)),
+        updateMany: jest.fn(async () => ({ count: opts.count ?? 1 })),
+      },
+    };
+    const ai: any = { isConfigured: jest.fn(() => true), complete: jest.fn() };
+    const jev: any = {
+      available: jest.fn(() => opts.available !== false),
+      topicsFor: jest.fn(async () => (opts.jevTopics === undefined ? ['fitness'] : opts.jevTopics)),
+    };
+    const cacheInvalidation: any = { bumpForPostWrite: jest.fn(async () => undefined) };
+    const service = new PostsTopicsClassifyService(prisma, ai, {} as any, {} as any, cacheInvalidation, jev);
+    return { service, prisma, ai, jev, cacheInvalidation };
+  }
+
+  it('asks Jev once, never OpenAI, and merges topics onto an unlabeled public post', async () => {
+    const { service, prisma, ai, jev, cacheInvalidation } = make();
+    await expect(service.classifyFromImageNote('p1', 'A barbell on a rack in a garage gym')).resolves.toBe(true);
+    expect(jev.topicsFor).toHaveBeenCalledWith('A barbell on a rack in a garage gym', 'public post');
+    expect(ai.complete).not.toHaveBeenCalled();
+    expect(prisma.post.findFirst.mock.calls[0][0].where).toMatchObject({ visibility: 'public', communityGroupId: null });
+    expect(prisma.post.updateMany.mock.calls[0][0]).toMatchObject({ where: { topics: { isEmpty: true } }, data: { topics: ['fitness'] } });
+    expect(cacheInvalidation.bumpForPostWrite).toHaveBeenCalledWith({ topics: ['fitness'], invalidateFeed: false });
+  });
+
+  it('leaves labeled, non-public, or ungrouped-ineligible posts and unavailable Jev alone', async () => {
+    const labeled = make({ post: { topics: ['faith'] } });
+    await expect(labeled.service.classifyFromImageNote('p1', 'A bench')).resolves.toBe(false);
+    expect(labeled.jev.topicsFor).not.toHaveBeenCalled();
+    const missing = make({ post: null });
+    await expect(missing.service.classifyFromImageNote('p1', 'A bench')).resolves.toBe(false);
+    expect(missing.jev.topicsFor).not.toHaveBeenCalled();
+    const off = make({ available: false });
+    await expect(off.service.classifyFromImageNote('p1', 'A bench')).resolves.toBe(false);
+    expect(off.jev.topicsFor).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when Jev has no answer or a concurrent edit already set topics', async () => {
+    const none = make({ jevTopics: null });
+    await expect(none.service.classifyFromImageNote('p1', 'A bench')).resolves.toBe(false);
+    expect(none.prisma.post.updateMany).not.toHaveBeenCalled();
+    const empty = make({ jevTopics: [] });
+    await expect(empty.service.classifyFromImageNote('p1', 'A bench')).resolves.toBe(false);
+    const raced = make({ count: 0 });
+    await expect(raced.service.classifyFromImageNote('p1', 'A bench')).resolves.toBe(false);
+    expect(raced.cacheInvalidation.bumpForPostWrite).not.toHaveBeenCalled();
+  });
+});
+
+describe('PostsTopicsClassifyService (Jev first)', () => {
+  function withJev(topics: string[] | null) {
+    const base = makeService();
+    const jev: any = { available: () => true, topicsFor: jest.fn(async () => topics) };
+    const service = new PostsTopicsClassifyService(base.prisma, base.ai, base.jobs, { marvOpenAI: () => ({ fastModel: 'm' }) } as any, base.cacheInvalidation, jev);
+    return { ...base, service, jev };
+  }
+
+  it('uses Jev topics without calling OpenAI', async () => {
+    const { service, ai, prisma } = withJev(['faith']);
+    await service.process({ postId: 'p1' });
+    expect(ai.complete).not.toHaveBeenCalled();
+    expect(prisma.post.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { topics: ['faith'], topicsClassifiedAt: expect.any(Date) } }));
+  });
+
+  it('falls back to OpenAI only when Jev is unavailable', async () => {
+    const { service, ai, prisma } = withJev(null);
+    await service.process({ postId: 'p1' });
+    expect(ai.complete).toHaveBeenCalledTimes(1);
+    expect(prisma.post.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { topics: ['faith', 'strength_training'], topicsClassifiedAt: expect.any(Date) } }));
+  });
+});
