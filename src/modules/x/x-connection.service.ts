@@ -38,6 +38,7 @@ import {
   pkceVerifier,
   type XTokenPair,
 } from "./x-api.client";
+import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 
 export type XAllowance = {
   linkPostsLeft: number;
@@ -576,7 +577,7 @@ export class XConnectionService {
     try {
       const user = await this.prisma.user.findUnique({
         where: { id: userId },
-        select: { id: true, username: true },
+        select: USER_REF_SELECT,
       });
       if (user)
         await this.publicProfileCache.invalidateForUser({

@@ -14,6 +14,7 @@ import {
   nextQuotePublishUtcMs,
   dayKeyToDate,
 } from '../../common/time/eastern-day-key';
+import { toIsoOrNull } from '../../common/time/to-iso';
 
 function pickDailyQuote(quotes: DailyQuote[], now: Date): DailyQuote | null {
   const list = Array.isArray(quotes) ? quotes.filter(Boolean) : [];
@@ -22,10 +23,6 @@ function pickDailyQuote(quotes: DailyQuote[], now: Date): DailyQuote | null {
   const dayIndex = dayIndexEastern(now) + 1;
   const i = ((dayIndex % list.length) + list.length) % list.length;
   return list[i] ?? null;
-}
-
-function toIsoOrNull(d: Date | null | undefined): string | null {
-  return d instanceof Date ? d.toISOString() : null;
 }
 
 function mapQuoteDto(q: unknown): DailyQuoteDto | null {

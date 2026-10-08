@@ -12,6 +12,7 @@ import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cu
 import { POST_BASE_INCLUDE } from '../../common/prisma-includes/post.include';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { toPage } from '../../common/pagination/page';
 type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean } | null;
 
 function normalizeTopic(s: string): string {
@@ -279,8 +280,7 @@ export class TopicsService {
       take: limit + 1,
     });
 
-    const slice = rows.slice(0, limit);
-    const nextCursor = rows.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
+    const { items: slice, nextCursor: nextCursor } = toPage(rows, limit, (r) => r.id);
 
     const posts = await this.posts.composeFeedPostDtos({
       viewerUserId: params.viewerUserId,
@@ -351,8 +351,7 @@ export class TopicsService {
       take: limit + 1,
     });
 
-    const slice = rows.slice(0, limit);
-    const nextCursor = rows.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
+    const { items: slice, nextCursor: nextCursor } = toPage(rows, limit, (r) => r.id);
 
     const posts = await this.posts.composeFeedPostDtos({
       viewerUserId: params.viewerUserId,

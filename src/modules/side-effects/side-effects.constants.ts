@@ -26,6 +26,8 @@ export interface SideEffectPayloads {
   "media.transcribe.request": { messageId: string };
   "channel.marv.request": { groupId: string; channelId: string; messageId: string; requesterId: string };
   "channel.message.changed": { groupId: string; channelId: string; messageId: string; edited: boolean };
+  /** A member became active in a group: record the "joined" row in its #general. `at` is the join time and makes retries idempotent. */
+  "channel.member.joined": { groupId: string; userId: string; at: string };
   "channel.member.added": { groupId: string; channelId: string; userId: string; actorUserId: string };
 
   "delegation.result": { runId: string };

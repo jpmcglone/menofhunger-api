@@ -7,28 +7,11 @@ import { assertPublishableText } from '../../common/moderation/content-filter';
 import { LOGGED_IN_VIEW_WEIGHT } from '../views/view-tracking.utils';
 import { toArticleCommentDto, toArticleDto, type ArticleCommentWithAuthorAndReactions, type ArticleWithAuthor } from '../../common/dto/article.dto';
 import type { ArticlesService } from './articles.service';
-
-function normalizeTag(raw: string): string {
-  return raw
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s-]/g, '')
-    .replace(/[\s_]+/g, '-')
-    .replace(/-{2,}/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .substring(0, 50);
-}
+import { toPage } from '../../common/pagination/page';
+import { normalizeCommentBody, normalizeTag } from '../../common/text/normalize';
+import { assertOwnerOrAdmin } from '../../common/access/assert-owner-or-admin';
 
 const VERIFIED_ARTICLES_PER_DAY = 1;
-
-function normalizeCommentBody(raw: string): string {
-  return raw
-    .split('\n')
-    .map((line) => line.trim())
-    .join('\n')
-    .trim()
-    .replace(/\n{3,}/g, '\n\n');
-}
 
 export async function listPublishedRawOn(host: ArticlesService, 
   opts: {
@@ -151,9 +134,7 @@ export async function listPublishedRawOn(host: ArticlesService,
     include: host.articleIncludes(true, true, opts.viewerUserId),
   }) as ArticleWithAuthor[];
 
-  const hasMore = articles.length > limit;
-  const items = hasMore ? articles.slice(0, limit) : articles;
-  const nextCursor = hasMore ? items[items.length - 1].id : null;
+  const { items: items, nextCursor: nextCursor } = toPage(articles, limit, (r) => r.id);
 
   return { articles: await mapItems(items), nextCursor };
 }
@@ -162,7 +143,7 @@ export async function listPublishedRawOn(host: ArticlesService,
 export async function publishArticleOn(host: ArticlesService, userId: string, articleId: string, opts: { postToBoard?: boolean; shareToFeed?: boolean; crosspost?: { pickax?: 'link' | 'native'; x?: 'link' | 'native' } } = {}) {
   const article = await host.prisma.article.findUnique({ where: { id: articleId } });
   if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
-  if (article.authorId !== userId) throw new ForbiddenException('Not your article.');
+  assertOwnerOrAdmin({ userId }, article.authorId, 'Not your article.');
   if (!article.title.trim()) throw new BadRequestException('Article must have a title before publishing.');
 
   const viewerCtx = await host.viewer.getViewerOrThrow(userId);

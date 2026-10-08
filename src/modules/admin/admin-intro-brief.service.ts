@@ -13,6 +13,7 @@ import {
   mergedUserTopicsSql,
   userTopicSourceCtesSql,
 } from '../../common/discovery/user-affinity.sql';
+import { uniqueStrings } from '../../common/arrays/unique-strings';
 
 type CandidateRow = {
   leftUserId: string;
@@ -306,20 +307,6 @@ export class AdminIntroBriefService {
       LIMIT ${CANDIDATE_LIMIT}
     `);
   }
-}
-
-function uniqueStrings(values: string[]): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const raw of values) {
-    const value = raw.trim();
-    if (!value) continue;
-    const key = value.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(value);
-  }
-  return out;
 }
 
 function findCandidate(

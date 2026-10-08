@@ -34,31 +34,9 @@ import { slugifyArticleTitle } from '../../common/text/slugify';
 import { MENTION_USER_SELECT } from '../../common/prisma-selects/user.select';
 import { PostsWriteService } from '../posts-read/posts-write.service';
 import { listPublishedRawOn, publishArticleOn, createArticleCommentOn } from './articles-list.query';
-
-/**
- * Strip leading/trailing whitespace from every line, trim the whole string,
- * and collapse runs of 2+ blank lines into a single blank line.
- */
-function normalizeCommentBody(raw: string): string {
-  return raw
-    .split('\n')
-    .map((line) => line.trim())
-    .join('\n')
-    .trim()
-    .replace(/\n{3,}/g, '\n\n');
-}
-
-/** Normalize a tag to a stable slug key (lowercase, alphanumeric + hyphens). */
-export function normalizeTag(raw: string): string {
-  return raw
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s-]/g, '')
-    .replace(/[\s_]+/g, '-')
-    .replace(/-{2,}/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .substring(0, 50);
-}
+import { toPage } from '../../common/pagination/page';
+import { normalizeCommentBody, normalizeTag } from '../../common/text/normalize';
+import { assertOwnerOrAdmin } from '../../common/access/assert-owner-or-admin';
 
 function extractExcerpt(tiptapJson: string, maxLength = 200): string {
   try {
@@ -382,9 +360,7 @@ export class ArticlesService {
       include: this.articleIncludes(false, false),
     }) as ArticleWithAuthor[];
 
-    const hasMore = articles.length > limit;
-    const items = hasMore ? articles.slice(0, limit) : articles;
-    const nextCursor = hasMore ? items[items.length - 1].id : null;
+    const { items: items, nextCursor: nextCursor } = toPage(articles, limit, (r) => r.id);
     return {
       articles: items.map((a) => toArticleDto(a, this.r2BaseUrl)),
       nextCursor,
@@ -477,7 +453,7 @@ export class ArticlesService {
   ) {
     const article = await this.prisma.article.findUnique({ where: { id: articleId } });
     if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
-    if (article.authorId !== userId) throw new ForbiddenException('Not your article.');
+    assertOwnerOrAdmin({ userId }, article.authorId, 'Not your article.');
 
     if (data.visibility !== undefined) {
       const viewerCtx = await this.viewer.getViewerOrThrow(userId);
@@ -585,7 +561,7 @@ export class ArticlesService {
   async unpublish(userId: string, articleId: string) {
     const article = await this.prisma.article.findUnique({ where: { id: articleId } });
     if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
-    if (article.authorId !== userId) throw new ForbiddenException('Not your article.');
+    assertOwnerOrAdmin({ userId }, article.authorId, 'Not your article.');
 
     // Fetch username before update for hub ping.
     const authorUser = await this.prisma.user.findUnique({ where: { id: userId }, select: { username: true } });
@@ -657,7 +633,7 @@ export class ArticlesService {
   async delete(userId: string, articleId: string) {
     const article = await this.prisma.article.findUnique({ where: { id: articleId } });
     if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
-    if (article.authorId !== userId) throw new ForbiddenException('Not your article.');
+    assertOwnerOrAdmin({ userId }, article.authorId, 'Not your article.');
     const deletedAt = new Date();
     await this.prisma.article.update({ where: { id: articleId }, data: { deletedAt } });
     await this.board.syncArticleThread(articleId, { deleted: true });
@@ -824,9 +800,7 @@ export class ArticlesService {
       include: this.commentIncludes(),
     }) as ArticleCommentWithAuthorAndReactions[];
 
-    const hasMore = comments.length > limit;
-    const items = hasMore ? comments.slice(0, limit) : comments;
-    const nextCursor = hasMore ? items[items.length - 1].id : null;
+    const { items: items, nextCursor: nextCursor } = toPage(comments, limit, (r) => r.id);
     return {
       comments: items.map((c) => toArticleCommentDto(c, this.r2BaseUrl, { viewerUserId: opts.viewerUserId })),
       nextCursor,
@@ -905,9 +879,7 @@ export class ArticlesService {
       include: this.commentLeafIncludes(),
     }) as ArticleCommentWithAuthorAndReactions[];
 
-    const hasMore = replies.length > limit;
-    const items = hasMore ? replies.slice(0, limit) : replies;
-    const nextCursor = hasMore ? items[items.length - 1].id : null;
+    const { items: items, nextCursor: nextCursor } = toPage(replies, limit, (r) => r.id);
     return {
       comments: items.map((c) => toArticleCommentDto(c, this.r2BaseUrl, { viewerUserId: opts.viewerUserId })),
       nextCursor,
@@ -925,7 +897,7 @@ export class ArticlesService {
   async updateComment(userId: string, commentId: string, body: string) {
     const comment = await this.prisma.articleComment.findUnique({ where: { id: commentId } });
     if (!comment || comment.deletedAt) throw new NotFoundException('Comment not found.');
-    if (comment.authorId !== userId) throw new ForbiddenException('Not your comment.');
+    assertOwnerOrAdmin({ userId }, comment.authorId, 'Not your comment.');
 
     const viewerCtx = await this.viewer.getViewerOrThrow(userId);
     const normalizedBody = normalizeCommentBody(body);
@@ -953,7 +925,7 @@ export class ArticlesService {
   async deleteComment(userId: string, commentId: string) {
     const comment = await this.prisma.articleComment.findUnique({ where: { id: commentId } });
     if (!comment || comment.deletedAt) throw new NotFoundException('Comment not found.');
-    if (comment.authorId !== userId) throw new ForbiddenException('Not your comment.');
+    assertOwnerOrAdmin({ userId }, comment.authorId, 'Not your comment.');
 
     let newCommentCount: number | null = null;
     await this.prisma.$transaction(async (tx) => {

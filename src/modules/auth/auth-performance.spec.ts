@@ -1,7 +1,4 @@
-import { AuthController } from './auth.controller';
-import { NotificationsService } from '../notifications/notifications.service';
-import { MessagesService } from '../messages/messages.service';
-import { AUTH_COOKIE_NAME } from './auth.constants';
+import { AuthMeService } from './auth-me.service';
 import { startSpan } from '@sentry/nestjs';
 
 jest.mock('@sentry/nestjs', () => ({
@@ -25,19 +22,15 @@ describe('auth/me performance instrumentation', () => {
       getGroupsUnread: jest.fn(async () => ({ total: 0, byGroupId: {} })),
     };
     const messages = { getUnreadSummary: jest.fn(async () => ({ primary: 3, requests: 0 })) };
-    const moduleRef = { get: jest.fn((type) => {
-      if (type === NotificationsService) return notifications;
-      if (type === MessagesService) return messages;
-      return null;
-    }) };
-    const controller = new AuthController({
+    const controller = new AuthMeService({
       meFromSessionToken: jest.fn(async () => ({ user })),
       runMeChecks: jest.fn(async () => user),
-    } as any, {} as any, moduleRef as any, {} as any,
+    } as any,
     { describe: jest.fn(async () => null) } as any,
-    { describe: jest.fn(async () => null) } as any);
+    { describe: jest.fn(async () => null) } as any,
+    notifications as any, messages as any);
     let finished = false;
-    const request = controller.me({ cookies: { [AUTH_COOKIE_NAME]: 'fixture' } } as any, {} as any)
+    const request = controller.me('fixture', {} as any)
       .then(value => { finished = true; return value; });
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(messages.getUnreadSummary).toHaveBeenCalledTimes(1);
@@ -70,14 +63,13 @@ describe('auth/me performance instrumentation', () => {
       getGroupsUnread: () => delayed({ total: 0, byGroupId: {} }, 15),
     };
     const messages = { getUnreadSummary: () => delayed({ primary: 0, requests: 0 }, 20) };
-    const moduleRef = { get: (type: unknown) => type === NotificationsService ? notifications : type === MessagesService ? messages : null };
-    const controller = new AuthController({
+    const controller = new AuthMeService({
       meFromSessionToken: () => delayed({ user }, 5), runMeChecks: () => delayed(user, 5),
-    } as any, {} as any, moduleRef as any, {} as any,
-    { describe: async () => null } as any, { describe: async () => null } as any);
+    } as any, { describe: async () => null } as any, { describe: async () => null } as any,
+    notifications as any, messages as any);
     for (let i = 0; i < 20; i++) {
       const started = performance.now();
-      const result = await controller.me({ cookies: { [AUTH_COOKIE_NAME]: 'fixture' } } as any, {} as any);
+      const result = await controller.me('fixture', {} as any);
       totals.push(performance.now() - started);
       expect(result.data?.id).toBe(user.id);
     }

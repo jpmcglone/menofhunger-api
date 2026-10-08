@@ -69,6 +69,23 @@ describe("profile and publication media ownership", () => {
     },
   );
 
+  it('refuses delete with references_changed when ownership changed after review', async () => {
+    const key = 'channel-uploads/group/channel/member/original.jpg';
+    const { prisma, service } = setup(key);
+    const token = (await service.getById('asset')).asset.referencesToken;
+    expect(token).toEqual(expect.any(String));
+    prisma.messageMedia.findMany.mockResolvedValue([{
+      id: 'media', messageId: 'message', r2Key: key, thumbnailR2Key: null,
+      message: {
+        conversationId: 'conversation', createdAt: new Date('2026-10-06T18:00:00Z'), sender: { id: 'member', username: 'marcus', name: 'Marcus' },
+        conversation: { groupChannel: { id: 'channel', name: 'general', displayName: null, privacy: 'private', groupId: 'group', group: { name: 'Iron Brothers', slug: 'iron-brothers' } } },
+      },
+    }]);
+    await expect(service.deleteById({ id: 'asset', adminUserId: 'admin', reason: 'cleanup', expectedReferencesToken: token }))
+      .rejects.toMatchObject({ response: expect.objectContaining({ error: 'references_changed' }) });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it.each(['sourceKey', 'r2Key'])('retains unexpired channel upload %s and releases expired uploads', async field => {
     const channelKey = 'channel-uploads/group/channel/member/original.jpg';
     const { prisma, service } = setup(channelKey);

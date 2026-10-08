@@ -23,6 +23,7 @@ import type { MessageCallDto } from "../../common/dto/call.dto";
 import { MESSAGE_PARTICIPANT_USER_SELECT } from "../../common/prisma-selects/user.select";
 import { MessagesSupportService, CONVERSATION_LIST_LIMIT, MESSAGE_LIST_LIMIT, MESSAGE_INCLUDE, LAST_MESSAGE_PREVIEW_SELECT } from "./messages-support.service";
 import type { CallConversationContext } from "./messages.models";
+import { toPage } from '../../common/pagination/page';
 
 @Injectable()
 export class MessagesQueryService {
@@ -663,8 +664,7 @@ export class MessagesQueryService {
       take: limit + 1,
     });
 
-    const slice = messages.slice(0, limit);
-    const nextCursor = messages.length > limit ? slice[slice.length - 1]?.id ?? null : null;
+    const { items: slice, nextCursor: nextCursor } = toPage(messages, limit, (r) => r.id);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     return {
       messages: slice.map((message) => toMessageDto({ message, publicBaseUrl, viewerUserId: userId })),
@@ -768,8 +768,7 @@ export class MessagesQueryService {
       take: limit + 1,
     });
 
-    const slice = messages.slice(0, limit);
-    const newerCursor = messages.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
+    const { items: slice, nextCursor: newerCursor } = toPage(messages, limit, (r) => r.id);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     return {
       messages: slice.map((m) => toMessageDto({ message: m, publicBaseUrl, viewerUserId: userId })),

@@ -1,4 +1,5 @@
-import { chunk, runInBatches } from './batch';
+import { chunk } from '../../common/arrays/chunk';
+import { runInBatches } from './batch';
 
 describe('runInBatches', () => {
   it('processes every item and reports successes', async () => {

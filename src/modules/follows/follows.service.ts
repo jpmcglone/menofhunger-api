@@ -29,6 +29,7 @@ import {
   RECOMMENDATION_SAME_STATE_WEIGHT,
   type RecommendationRow,
 } from './follows.shared';
+import { toPage } from '../../common/pagination/page';
 
 export type FollowRelationship = {
   viewerFollowsUser: boolean;
@@ -860,8 +861,7 @@ export class FollowsService {
       take: limit + 1,
     });
 
-    const slice = rows.slice(0, limit);
-    const nextCursor = rows.length > limit ? (slice[slice.length - 1]?.userId ?? null) : null;
+    const { items: slice, nextCursor: nextCursor } = toPage(rows, limit, (r) => r.userId);
 
     const rel = await this.batchRelationshipForUserIds({
       viewerUserId,
@@ -919,8 +919,7 @@ export class FollowsService {
       take: limit + 1,
     });
 
-    const slice = rows.slice(0, limit);
-    const nextCursor = rows.length > limit ? slice[slice.length - 1]?.id ?? null : null;
+    const { items: slice, nextCursor: nextCursor } = toPage(rows, limit, (r) => r.id);
 
     const followerIds = slice.map((r) => r.followerId);
     const rel = await this.batchRelationshipForUserIds({ viewerUserId, userIds: followerIds });
@@ -976,8 +975,7 @@ export class FollowsService {
       take: limit + 1,
     });
 
-    const slice = rows.slice(0, limit);
-    const nextCursor = rows.length > limit ? slice[slice.length - 1]?.id ?? null : null;
+    const { items: slice, nextCursor: nextCursor } = toPage(rows, limit, (r) => r.id);
 
     const followingIds = slice.map((r) => r.followingId);
     const rel = await this.batchRelationshipForUserIds({ viewerUserId, userIds: followingIds });

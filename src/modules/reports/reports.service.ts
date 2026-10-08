@@ -10,6 +10,7 @@ import { SlackService } from '../../common/slack/slack.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 @Injectable()
 export class ReportsService {
   constructor(
@@ -157,20 +158,20 @@ export class ReportsService {
       ...(likely ? { skip: offset } : {}),
       take: params.limit + 1,
       include: {
-        reporter: { select: { id: true, username: true, name: true } },
+        reporter: { select: USER_BRIEF_SELECT },
         subjectMessage: { select: { id: true, createdAt: true, deletedForAll: true, senderId: true, media: { select: { id: true, kind: true } } } },
         subjectArticle: { select: { id: true, title: true, slug: true, deletedAt: true } },
-        subjectUser: { select: { id: true, username: true, name: true } },
+        subjectUser: { select: USER_BRIEF_SELECT },
         subjectPost: {
           select: {
             id: true,
             createdAt: true,
             body: true,
             deletedAt: true,
-            user: { select: { id: true, username: true, name: true } },
+            user: { select: USER_BRIEF_SELECT },
           },
         },
-        resolvedByAdmin: { select: { id: true, username: true, name: true } },
+        resolvedByAdmin: { select: USER_BRIEF_SELECT },
       },
     });
 
@@ -198,20 +199,20 @@ export class ReportsService {
         ...setResolution,
       },
       include: {
-        reporter: { select: { id: true, username: true, name: true } },
+        reporter: { select: USER_BRIEF_SELECT },
         subjectMessage: { select: { id: true, createdAt: true, deletedForAll: true, senderId: true, media: { select: { id: true, kind: true } } } },
         subjectArticle: { select: { id: true, title: true, slug: true, deletedAt: true } },
-        subjectUser: { select: { id: true, username: true, name: true } },
+        subjectUser: { select: USER_BRIEF_SELECT },
         subjectPost: {
           select: {
             id: true,
             createdAt: true,
             body: true,
             deletedAt: true,
-            user: { select: { id: true, username: true, name: true } },
+            user: { select: USER_BRIEF_SELECT },
           },
         },
-        resolvedByAdmin: { select: { id: true, username: true, name: true } },
+        resolvedByAdmin: { select: USER_BRIEF_SELECT },
       },
     });
   }

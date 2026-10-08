@@ -11,6 +11,7 @@ import type {
   PostRef,
   UserRef,
 } from './admin-image-review.service';
+import { USER_BRIEF_SELECT, USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 
 function emptyAssetRefs(): AssetRefs {
   return { channelUploads: [], posts: [], messages: [], users: [], groups: [], crews: [], polls: [], articles: [], announcements: [], newsletters: [], primaryType: 'orphan' };
@@ -60,7 +61,7 @@ export async function resolveAllReferencesOn(host: AdminImageReviewService, keys
           id: true,
           createdAt: true,
           visibility: true,
-          user: { select: { id: true, username: true } },
+          user: { select: USER_REF_SELECT },
         },
       },
     },
@@ -95,7 +96,7 @@ export async function resolveAllReferencesOn(host: AdminImageReviewService, keys
       thumbnailR2Key: true,
       message: { select: {
         conversationId: true, createdAt: true,
-        sender: { select: { id: true, username: true, name: true } },
+        sender: { select: USER_BRIEF_SELECT },
         conversation: { select: { groupChannel: { select: { id: true, name: true, displayName: true, privacy: true, groupId: true, group: { select: { name: true, slug: true } } } } } },
       } },
     },

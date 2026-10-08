@@ -93,7 +93,7 @@ export class GroupChannelsController {
   @Post(':channelId/messages')
   async send(@CurrentUserId() user: string, @Param('groupId') group: string, @Param('channelId') channel: string, @Body() body: unknown) {
     const giphyUrl = z.string().url().refine(value => { const url = new URL(value); return url.protocol === 'https:' && (url.hostname === 'giphy.com' || url.hostname.endsWith('.giphy.com')); }, 'Choose a GIF from Giphy.');
-    const input = z.object({ body: z.string().trim().max(2000).default(''), clientRequestId: z.string().uuid(), threadRootId: id.optional(), uploadId: z.string().uuid().optional(), thumbnailUploadId: z.string().uuid().optional(), alt: z.string().max(500).optional(), attachments: z.array(z.object({ uploadId: z.string().uuid(), thumbnailUploadId: z.string().uuid().optional(), alt: z.string().max(500).optional() }).strict()).max(4).optional(), giphy: z.object({ url: giphyUrl, mp4Url: giphyUrl.optional(), width: z.number().int().positive().optional(), height: z.number().int().positive().optional() }).strict().optional() }).strict()
+    const input = z.object({ body: z.string().trim().max(2000).default(''), clientRequestId: z.string().uuid(), threadRootId: id.optional(), replyToId: id.optional(), uploadId: z.string().uuid().optional(), thumbnailUploadId: z.string().uuid().optional(), alt: z.string().max(500).optional(), attachments: z.array(z.object({ uploadId: z.string().uuid(), thumbnailUploadId: z.string().uuid().optional(), alt: z.string().max(500).optional() }).strict()).max(4).optional(), giphy: z.object({ url: giphyUrl, mp4Url: giphyUrl.optional(), width: z.number().int().positive().optional(), height: z.number().int().positive().optional() }).strict().optional() }).strict()
       .refine(value => !((value.uploadId || value.attachments?.length) && value.giphy), 'Attach uploads or a GIF, not both.')
       .refine(value => !(value.uploadId && value.attachments), 'Use attachments or uploadId, not both.')
       .refine(value => !value.thumbnailUploadId || value.uploadId, 'Thumbnail requires a video.').parse(body);
@@ -120,6 +120,12 @@ export class GroupChannelsController {
   async delete(@CurrentUserId() user: string, @Param('groupId') group: string, @Param('channelId') channel: string, @Param('messageId') message: string) {
     await this.messages.delete(user, group, channel, message);
     return { data: {} };
+  }
+
+  /** Welcome button on a "joined the group" row: posts the viewer's welcome message (idempotent). */
+  @Post(':channelId/messages/:messageId/welcome')
+  async welcome(@CurrentUserId() user: string, @Param('groupId') group: string, @Param('channelId') channel: string, @Param('messageId') message: string) {
+    return { data: await this.messages.welcome(user, group, channel, message) };
   }
 
   @Put(':channelId/messages/:messageId/reactions/:reactionId')

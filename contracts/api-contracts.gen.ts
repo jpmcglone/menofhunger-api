@@ -2080,6 +2080,8 @@ export type GroupChannelMessageDto = MessageDto & {
   channelId: string; sequence: number; threadRootId: string | null;
   hiddenPreviews: string[];
   replyCount: number; lastReplyAt: string | null; following: boolean; pinned: boolean;
+  /** Only on `kind: groupJoin` rows. `canWelcome` is false for the joiner, after the viewer welcomed, or when they cannot post. */
+  joinWelcome: { canWelcome: boolean } | null;
   canEdit: boolean; canDelete: boolean;
 };
 
@@ -4533,7 +4535,7 @@ export type MessageDto = {
   conversationId: string;
   sender: UserListDto;
   /** `text` for ordinary chat; `call` for the one-per-call timeline row. */
-  kind: 'text' | 'call';
+  kind: 'text' | 'call' | 'groupJoin';
   /** Present only when `kind === 'call'`. */
   call: MessageCallDto | null;
   reactions: MessageReactionSummaryDto[];

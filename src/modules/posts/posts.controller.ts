@@ -1,3 +1,4 @@
+import { isSiteAdminViewer } from '../viewer/site-admin';
 import type { CrosspostMode } from '@prisma/client';
 import { PickaxCrosspostService } from '../pickax/pickax-crosspost.service';
 import { XCrosspostService } from '../x/x-crosspost.service';
@@ -25,6 +26,7 @@ import { collapseFeedByRoot } from '../../common/feed-collapse/collapse-by-root'
 import { collapseRepostsByCanonical } from '../../common/feed-collapse/collapse-reposts-by-canonical';
 import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 import { queryBoolean } from '../../common/validation/query-boolean';
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
 const readThrottle = {
   default: {
@@ -52,9 +54,8 @@ const userListSchema = listSchema.extend({
   includeRestricted: queryBoolean().optional(),
 });
 
-const userMediaListSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
+const userMediaListSchema = cursorPageQuerySchema().extend({
+  
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
   sort: z.enum(['new', 'trending']).optional(),
   includeRestricted: queryBoolean().optional(),
@@ -449,18 +450,14 @@ export class PostsController {
   @UseGuards(AuthGuard)
   @Get('me/only-me')
   async listOnlyMe(@CurrentUserId() userId: string, @Query() query: unknown) {
-    const parsed = z
-      .object({
-        limit: z.coerce.number().int().min(1).max(50).optional(),
-        cursor: z.string().optional(),
-      })
+    const parsed = cursorPageQuerySchema()
       .parse(query);
 
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
     const res = await this.posts.listOnlyMe({ userId, limit, cursor });
     const viewer = await this.posts.viewerContext(userId);
-    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const viewerHasAdmin = isSiteAdminViewer(viewer);
     const internalByPostId = viewerHasAdmin ? await this.posts.ensureBoostScoresFresh(res.posts.map((p) => p.id)) : null;
     const scoreByPostIdOnlyMe =
       viewerHasAdmin ? await this.posts.computeScoresForPostIds(res.posts.map((p) => p.id)) : undefined;
@@ -501,10 +498,8 @@ export class PostsController {
     @Res({ passthrough: true }) httpRes: Response,
   ) {
     const viewerUserId = userId ?? null;
-    const parsed = z
-      .object({
-        limit: z.coerce.number().int().min(1).max(50).optional(),
-        cursor: z.string().optional(),
+    const parsed = cursorPageQuerySchema().extend({
+        
         visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
         sort: z.enum(['new', 'popular', 'trending']).optional(),
       })
@@ -520,7 +515,7 @@ export class PostsController {
     });
     const commentIds = result.comments.map((p) => p.id);
     const viewer = await this.posts.viewerContext(viewerUserId);
-    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const viewerHasAdmin = isSiteAdminViewer(viewer);
     const [boosted, bookmarksByPostId, votedPollOptionIdByPostId, internalByPostId, scoreByPostIdComments] =
       await Promise.all([
         viewerUserId
@@ -745,7 +740,7 @@ export class PostsController {
     const x = xMode ? await this.x.requestPostCrosspost(userId, created.id, xMode) : null;
 
     const viewer = await this.posts.viewerContext(userId);
-    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const viewerHasAdmin = isSiteAdminViewer(viewer);
     return {
       data: {
         pickax,
@@ -784,7 +779,7 @@ export class PostsController {
   async update(@Param('id') id: string, @Body() body: unknown, @CurrentUserId() userId: string) {
     const parsed = updateSchema.parse(body);
     const viewer = await this.posts.viewerContext(userId);
-    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const viewerHasAdmin = isSiteAdminViewer(viewer);
     const updated = await this.posts.updatePost({ userId, postId: id, body: (parsed.body ?? '').trim(), isSiteAdmin: viewerHasAdmin });
     await this.pickax.requestPostUpdate(userId, id);
 
@@ -814,7 +809,7 @@ export class PostsController {
       media: (parsed as any).media ?? null,
     });
     const viewer = await this.posts.viewerContext(userId);
-    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
+    const viewerHasAdmin = isSiteAdminViewer(viewer);
     return {
       data: toPostDto(created, this.appConfig.r2()?.publicBaseUrl ?? null, {
         viewerHasBoosted: false,

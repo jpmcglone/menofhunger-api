@@ -1,3 +1,4 @@
+import { isSiteAdminViewer } from '../../viewer/site-admin';
 import { Injectable } from '@nestjs/common';
 import { isPostVisibleToViewer } from '../../../common/posts/post-visibility';
 import type { Socket } from 'socket.io';
@@ -50,7 +51,7 @@ export class ContentSubscriptionsHandler {
 
     const viewerId = (client.data as { userId?: string })?.userId ?? null;
     const viewer = (client.data as any)?.viewer ?? {};
-    const viewerIsAdmin = Boolean(viewer?.siteAdmin);
+    const viewerIsAdmin = isSiteAdminViewer(viewer);
     const viewerIsVerified = viewerIsAdmin || Boolean(viewer?.verified);
     const viewerIsPremium = viewerIsAdmin || Boolean(viewer?.premium) || Boolean(viewer?.premiumPlus);
 
@@ -123,7 +124,7 @@ export class ContentSubscriptionsHandler {
 
     const viewerId = (client.data as { userId?: string })?.userId ?? null;
     const viewer = (client.data as any)?.viewer ?? {};
-    const viewerIsAdmin = Boolean(viewer?.siteAdmin);
+    const viewerIsAdmin = isSiteAdminViewer(viewer);
     const viewerIsVerified = viewerIsAdmin || Boolean(viewer?.verified);
 
     // Group feeds are private surfaces: a socket may only join a group's room if the
@@ -164,7 +165,7 @@ export class ContentSubscriptionsHandler {
   /** Board list: join the public room plus every tier room the viewer can read. */
   handleBoardSubscribe(client: Socket): void {
     const viewer = (client.data as any)?.viewer ?? {};
-    const isAdmin = Boolean(viewer?.siteAdmin);
+    const isAdmin = isSiteAdminViewer(viewer);
     client.join(boardRoom('public'));
     if (isAdmin || Boolean(viewer?.verified)) client.join(boardRoom('verified'));
     if (isAdmin || Boolean(viewer?.premium) || Boolean(viewer?.premiumPlus)) client.join(boardRoom('premium'));
@@ -202,8 +203,8 @@ export class ContentSubscriptionsHandler {
 
     const viewerId = (client.data as { userId?: string })?.userId ?? null;
     const viewer = (client.data as any)?.viewer ?? {};
-    const viewerIsVerified = Boolean(viewer?.siteAdmin) || Boolean(viewer?.verified);
-    const viewerIsPremium = Boolean(viewer?.siteAdmin) || Boolean(viewer?.premium) || Boolean(viewer?.premiumPlus);
+    const viewerIsVerified = isSiteAdminViewer(viewer) || Boolean(viewer?.verified);
+    const viewerIsPremium = isSiteAdminViewer(viewer) || Boolean(viewer?.premium) || Boolean(viewer?.premiumPlus);
 
     const rows = await this.prisma.article.findMany({
       where: { id: { in: toConsider }, deletedAt: null },

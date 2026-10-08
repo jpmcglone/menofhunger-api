@@ -27,15 +27,5 @@ export async function runInBatches<T>(
   return { ok, failed };
 }
 
-/** Split `items` into fixed-size chunks. Returns `[]` for an empty input. */
-export function chunk<T>(items: readonly T[], size: number): T[][] {
-  const step = Math.max(1, Math.floor(size));
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += step) {
-    out.push(items.slice(i, i + step));
-  }
-  return out;
-}
-
 /** Default in-flight limit for notification fan-out inside a single job. */
 export const FANOUT_CONCURRENCY = 10;

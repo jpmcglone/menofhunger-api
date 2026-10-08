@@ -1,3 +1,4 @@
+import { findGroupNotificationPreference } from '../viewer/group-membership.queries';
 import { Injectable, Optional } from "@nestjs/common";
 import { MutesService } from "../mutes/mutes.service";
 import { Prisma, type NotificationKind } from "@prisma/client";
@@ -124,15 +125,7 @@ export class NotificationWriterSupportService {
       select: { communityGroupId: true },
     });
     if (!post?.communityGroupId) return true;
-    const member = await this.prisma.communityGroupMember.findUnique({
-      where: {
-        groupId_userId: {
-          groupId: post.communityGroupId,
-          userId: recipientUserId,
-        },
-      },
-      select: { notificationPreference: true },
-    });
+    const member = await findGroupNotificationPreference(this.prisma, post.communityGroupId, recipientUserId);
     if (member?.notificationPreference === "muted") return false;
     return (
       member?.notificationPreference !== "repliesAndMentions" ||

@@ -23,6 +23,7 @@ import { SlackService } from "../../common/slack/slack.service";
 import { PresenceService } from "../presence/presence.service";
 import { MEMBERS_MAP_SNAPSHOT_SELECT, MembersMapRealtimeService } from "./members-map-realtime.service";
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -421,7 +422,7 @@ export class UsersMeService {
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { pinnedPostId: postId },
-      select: { id: true, username: true },
+      select: USER_REF_SELECT,
     });
     await this.publicProfileCache.invalidateForUser({
       id: updated.id,
@@ -435,7 +436,7 @@ export class UsersMeService {
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { pinnedPostId: null },
-      select: { id: true, username: true },
+      select: USER_REF_SELECT,
     });
     await this.publicProfileCache.invalidateForUser({
       id: updated.id,

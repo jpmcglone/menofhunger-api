@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PostsService } from '../posts/posts.service';
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
+import { findCrewIdForUser } from '../viewer/crew-membership.queries';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
 import { CHECKIN_PROMPTS } from './checkin-prompts';
@@ -149,14 +150,11 @@ export class CheckinsService implements OnModuleInit {
    * on you" feeling.
    */
   private async buildCrewBlock(params: { userId: string; dayKey: string; publicBaseUrl: string | null }) {
-    const membership = await this.prisma.crewMember.findUnique({
-      where: { userId: params.userId },
-      select: { crewId: true },
-    });
-    if (!membership) return null;
+    const crewId = await findCrewIdForUser(this.prisma, params.userId);
+    if (!crewId) return null;
 
     const crew = await this.prisma.crew.findUnique({
-      where: { id: membership.crewId },
+      where: { id: crewId },
       select: {
         id: true,
         slug: true,
@@ -292,14 +290,11 @@ export class CheckinsService implements OnModuleInit {
    *     completes the day).
    */
   private async handleCrewSideEffectsOnCheckin(params: { userId: string; dayKey: string; now: Date }): Promise<void> {
-    const membership = await this.prisma.crewMember.findUnique({
-      where: { userId: params.userId },
-      select: { crewId: true },
-    });
-    if (!membership) return;
+    const crewId = await findCrewIdForUser(this.prisma, params.userId);
+    if (!crewId) return;
 
     const crew = await this.prisma.crew.findUnique({
-      where: { id: membership.crewId },
+      where: { id: crewId },
       select: {
         id: true,
         slug: true,

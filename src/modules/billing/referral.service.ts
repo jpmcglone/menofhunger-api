@@ -11,7 +11,7 @@ import { EntitlementService, isPayingSubscriber } from './entitlement.service';
 import { FollowsService } from '../follows/follows.service';
 import { AffiliateService } from './affiliate.service';
 import { toUserListDto } from '../../common/dto/user.dto';
-import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
+import { USER_LIST_SELECT, USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 import type { ReferralMeDto, RecruitDto } from '../../common/dto/referral.dto';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { SideEffectsService } from '../side-effects/side-effects.service';
@@ -384,7 +384,7 @@ export class ReferralService {
       select: {
         referralCode: true,
         referralBonusGrantedAt: true,
-        recruitedBy: { select: { id: true, username: true, name: true } },
+        recruitedBy: { select: USER_BRIEF_SELECT },
         recruits: {
           select: {
             ...USER_LIST_SELECT,

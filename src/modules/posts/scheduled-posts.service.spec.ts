@@ -117,13 +117,21 @@ function makeService(
     integrationBudget: () => ({ enabled: false }),
     r2: () => ({ publicBaseUrl: "https://assets.example.com" }),
   };
+  const pickax: any = {
+    requestPostCrosspost: jest.fn(async () => ({ status: "queued" })),
+  };
+  const x: any = {
+    requestPostCrosspost: jest.fn(async () => ({ status: "queued" })),
+  };
   const service = new ScheduledPostsService(
     prisma,
     mutation,
     realtime,
     appConfig,
+    pickax,
+    x,
   );
-  return { service, prisma, mutation, realtime };
+  return { service, prisma, mutation, realtime, pickax, x };
 }
 
 const VALID_FUTURE = new Date(Date.now() + 10 * 60 * 1000); // +10 min
@@ -345,6 +353,67 @@ describe("ScheduledPostsService", () => {
   });
 
   describe("publishDue", () => {
+    it("queues Pickax and X crossposts at fire time, not before", async () => {
+      const duePost = makeHoldingRow({
+        id: "sched-due",
+        scheduledAt: new Date(Date.now() - 1000),
+        crosspostChoices: { pickax: "link", x: "native" },
+      });
+      const { service, pickax, x } = makeService({
+        post: {
+          findMany: jest.fn(async () => [duePost]),
+          updateMany: jest.fn(async () => ({ count: 1 })),
+          update: jest.fn(async () => ({})),
+        },
+      });
+      await service.publishDue(new Date());
+      expect(pickax.requestPostCrosspost).toHaveBeenCalledWith(
+        "user-1",
+        "live-post-1",
+        "link",
+      );
+      expect(x.requestPostCrosspost).toHaveBeenCalledWith(
+        "user-1",
+        "live-post-1",
+        "native",
+      );
+    });
+
+    it("still reports the post published when a crosspost request fails", async () => {
+      const duePost = makeHoldingRow({
+        id: "sched-due",
+        scheduledAt: new Date(Date.now() - 1000),
+        crosspostChoices: { x: "native" },
+      });
+      const { service, x, realtime } = makeService({
+        post: {
+          findMany: jest.fn(async () => [duePost]),
+          updateMany: jest.fn(async () => ({ count: 1 })),
+          update: jest.fn(async () => ({})),
+        },
+      });
+      x.requestPostCrosspost.mockRejectedValueOnce(new Error("x down"));
+      await service.publishDue(new Date());
+      expect(realtime.emitScheduledPostPublished).toHaveBeenCalled();
+    });
+
+    it("does not crosspost when none was selected", async () => {
+      const duePost = makeHoldingRow({
+        id: "sched-due",
+        scheduledAt: new Date(Date.now() - 1000),
+      });
+      const { service, pickax, x } = makeService({
+        post: {
+          findMany: jest.fn(async () => [duePost]),
+          updateMany: jest.fn(async () => ({ count: 1 })),
+          update: jest.fn(async () => ({})),
+        },
+      });
+      await service.publishDue(new Date());
+      expect(pickax.requestPostCrosspost).not.toHaveBeenCalled();
+      expect(x.requestPostCrosspost).not.toHaveBeenCalled();
+    });
+
     it("does not restore a publication already consumed by the transaction", async () => {
       const duePost = makeHoldingRow({
         id: "sched-due",

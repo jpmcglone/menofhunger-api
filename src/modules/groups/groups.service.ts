@@ -1,3 +1,4 @@
+import { assertGroupRole, getGroupMemberOrThrow, GROUP_MANAGER_ROLES } from '../viewer/group-membership.queries';
 import { ChannelAccessService } from '../group-channels/channel-access.service';
 import { prepareChannelDeparture, emitChannelAccessChange } from '../group-channels/channel-lifecycle';
 import { provisionDefaultChannels } from '../group-channels/channel-provisioning';
@@ -33,6 +34,7 @@ import { PostsWriteService } from '../posts-read/posts-write.service';
 import { searchGroupsOn } from './groups-search.query';
 import { listExploreSpotlightOn } from './groups-explore.query';
 import { slugifyHandle } from '../../common/text/slugify';
+import { toPage } from '../../common/pagination/page';
 const FEATURED_CACHE_TTL_SECONDS = 120;
 
 @Injectable()
@@ -85,13 +87,7 @@ export class GroupsService {
   }
 
   async assertActiveMember(groupId: string, userId: string): Promise<void> {
-    const m = await this.prisma.communityGroupMember.findUnique({
-      where: { groupId_userId: { groupId, userId } },
-      select: { status: true },
-    });
-    if (!m || m.status !== 'active') {
-      throw new ForbiddenException('You must be a member of this group.');
-    }
+    await getGroupMemberOrThrow(this.prisma, groupId, userId);
   }
 
   async getNotificationPreferences(viewerUserId: string, groupId: string): Promise<GroupNotificationPreferencesDto> {
@@ -511,6 +507,11 @@ export class GroupsService {
         groupId: g.id,
         joinerUserId: params.viewerUserId,
       });
+      this.sideEffects.dispatch('channel.member.joined', {
+        groupId: g.id,
+        userId: params.viewerUserId,
+        at: new Date().toISOString(),
+      });
 
       return { data: { ok: true as const, status: 'active' as const } };
     }
@@ -568,13 +569,7 @@ export class GroupsService {
   }
 
   private async assertModOrOwner(groupId: string, userId: string): Promise<CommunityGroupMemberRole> {
-    const mem = await this.prisma.communityGroupMember.findUnique({
-      where: { groupId_userId: { groupId, userId } },
-      select: { role: true, status: true },
-    });
-    if (!mem || mem.status !== 'active') throw new ForbiddenException('Not allowed.');
-    if (mem.role !== 'owner' && mem.role !== 'moderator') throw new ForbiddenException('Not allowed.');
-    return mem.role;
+    return assertGroupRole(this.prisma, groupId, userId, GROUP_MANAGER_ROLES);
   }
 
   async listPending(params: { viewerUserId: string; groupId: string }) {
@@ -618,6 +613,11 @@ export class GroupsService {
       userId: params.userId,
       actorUserId: params.viewerUserId,
       decision: 'approved',
+    });
+    this.sideEffects.dispatch('channel.member.joined', {
+      groupId: params.groupId,
+      userId: params.userId,
+      at: new Date().toISOString(),
     });
 
     return { data: { ok: true as const } };
@@ -1013,8 +1013,7 @@ export class GroupsService {
     });
 
     const r2 = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const slice = rows.slice(0, limit);
-    const nextCursor = rows.length > limit ? slice[slice.length - 1]?.userId ?? null : null;
+    const { items: slice, nextCursor: nextCursor } = toPage(rows, limit, (r) => r.userId);
 
     const data: CommunityGroupMemberListItemDto[] = slice.map((m) => ({
       userId: m.userId,

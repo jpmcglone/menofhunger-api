@@ -8,10 +8,10 @@ import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit
 import { NotificationsService } from './notifications.service';
 import type { NotificationPreferencesDto } from '../../common/dto';
 import { queryBoolean } from '../../common/validation/query-boolean';
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
-const listQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
+const listQuerySchema = cursorPageQuerySchema().extend({
+  
   unreadOnly: queryBoolean().optional(),
   boardCommentsOnly: queryBoolean().optional(),
   collapseByRoot: queryBoolean().optional(),

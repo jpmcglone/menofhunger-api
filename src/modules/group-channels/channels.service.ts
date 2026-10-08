@@ -63,7 +63,7 @@ export class ChannelsService {
         AND EXISTS (
           SELECT 1 FROM "Message" m
           LEFT JOIN "GroupChannelThreadState" t ON t."rootMessageId" = m."threadRootId" AND t."userId" = ${userId}
-          WHERE m."conversationId" = c."conversationId" AND NOT m."deletedForAll"
+          WHERE m."conversationId" = c."conversationId" AND NOT m."deletedForAll" AND m.kind = 'text'
             AND m."senderId" <> ${userId} AND m."channelSequence" > COALESCE(v."readThrough", 0)
             AND (m."threadRootId" IS NULL OR m."channelSequence" > COALESCE(t."readThrough", 0))
         )
@@ -101,7 +101,7 @@ export class ChannelsService {
           AND EXISTS (
             SELECT 1 FROM "Message" m
             LEFT JOIN "GroupChannelThreadState" t ON t."rootMessageId" = m."threadRootId" AND t."userId" = u.id
-            WHERE m."conversationId" = ${channel.conversationId} AND NOT m."deletedForAll"
+            WHERE m."conversationId" = ${channel.conversationId} AND NOT m."deletedForAll" AND m.kind = 'text'
               AND m."senderId" <> u.id AND m."channelSequence" > COALESCE(v."readThrough", 0)
               AND (m."threadRootId" IS NULL OR m."channelSequence" > COALESCE(t."readThrough", 0))
           )`),

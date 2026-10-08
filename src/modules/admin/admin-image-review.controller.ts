@@ -4,10 +4,10 @@ import { z } from 'zod';
 import { AdminGuard, type AdminRequest } from './admin.guard';
 import { AdminImageReviewService } from './admin-image-review.service';
 import { queryBoolean } from '../../common/validation/query-boolean';
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
-const listSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-  cursor: z.string().optional(),
+const listSchema = cursorPageQuerySchema(100).extend({
+  
   q: z.string().optional(),
   showDeleted: queryBoolean().optional(),
   onlyOrphans: queryBoolean().optional(),
@@ -18,6 +18,7 @@ const listSchema = z.object({
 const deleteSchema = z.object({
   reason: z.string().trim().min(1).max(200),
   onlyOrphans: z.boolean().optional(),
+  referencesToken: z.string().trim().min(1).max(64).optional(),
 });
 
 const bulkDeleteSchema = z.object({
@@ -64,7 +65,7 @@ export class AdminImageReviewController {
   async del(@Req() req: Request, @Param('assetId') assetId: string, @Body() body: unknown) {
     const parsed = deleteSchema.parse(body);
     const adminUserId = (req as AdminRequest).user?.id ?? '';
-    const result = await this.svc.deleteById({ id: assetId, adminUserId, reason: parsed.reason, onlyOrphans: parsed.onlyOrphans });
+    const result = await this.svc.deleteById({ id: assetId, adminUserId, reason: parsed.reason, onlyOrphans: parsed.onlyOrphans, expectedReferencesToken: parsed.referencesToken });
     return { data: result };
   }
 }

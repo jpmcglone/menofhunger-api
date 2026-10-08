@@ -655,6 +655,11 @@ export class GroupInvitesService {
       inviteeUserId: invite.inviteeUserId,
       response: 'accepted',
     });
+    this.sideEffects.dispatch('channel.member.joined', {
+      groupId: invite.groupId,
+      userId: invite.inviteeUserId,
+      at: now.toISOString(),
+    });
 
     return { groupId: group.id, groupSlug: group.slug };
   }

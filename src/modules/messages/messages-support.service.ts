@@ -13,6 +13,7 @@ import { MarvinBotIdentityService } from "../marvin/services/marvin-bot-identity
 import { SideEffectsService } from "../side-effects/side-effects.service";
 import { CallSessionStore } from "../calls/call-session.store";
 import { MESSAGE_PARTICIPANT_USER_SELECT } from "../../common/prisma-selects/user.select";
+import { USER_AVATAR_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 
 export type ConversationCursor = { updatedAt: string; id: string };
 
@@ -48,7 +49,7 @@ export const MESSAGE_INCLUDE = {
   sender: { select: MESSAGE_SENDER_SELECT },
   reactions: {
     include: {
-      user: { select: { id: true, username: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true } },
+      user: { select: USER_AVATAR_BRIEF_SELECT },
     },
     orderBy: [{ createdAt: 'asc' as const }],
   },

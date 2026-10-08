@@ -1,3 +1,4 @@
+import { findGroupMemberStatus } from '../viewer/group-membership.queries';
 import { assertXCrosspostInput } from "../../common/crosspost/x-crosspost-input";
 import {
   BadRequestException,
@@ -9,6 +10,8 @@ import {
 import type { PostVisibility } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { PostsMutationService } from "./posts-mutation.service";
+import { PickaxCrosspostService } from "../pickax/pickax-crosspost.service";
+import { XCrosspostService } from "../x/x-crosspost.service";
 import { PresenceRealtimeService } from "../presence/presence-realtime.service";
 import { AppConfigService } from "../app/app-config.service";
 import {
@@ -62,6 +65,8 @@ export class ScheduledPostsService {
     private readonly mutation: PostsMutationService,
     private readonly realtime: PresenceRealtimeService,
     private readonly appConfig: AppConfigService,
+    private readonly pickax: PickaxCrosspostService,
+    private readonly x: XCrosspostService,
   ) {}
 
   private r2BaseUrl(): string | null {
@@ -411,12 +416,7 @@ export class ScheduledPostsService {
         ? (params.communityGroupId ?? "").trim() || null
         : post.scheduledCommunityGroupId;
     if (resolvedGroupId) {
-      const membership = await this.prisma.communityGroupMember.findUnique({
-        where: {
-          groupId_userId: { groupId: resolvedGroupId, userId: params.userId },
-        },
-        select: { status: true },
-      });
+      const membership = await findGroupMemberStatus(this.prisma, resolvedGroupId, params.userId);
       if (!userIsVerified)
         throw new ForbiddenException("Verify your account to post in groups.");
       if (membership?.status !== "active")
@@ -725,6 +725,26 @@ export class ScheduledPostsService {
           : null,
         poll,
       });
+
+      // Men of Hunger owns the schedule: Pickax and X are queued only now, at fire time.
+      // Failures here must not undo or fail the committed publication.
+      const choices = post.crosspostChoices as
+        | { pickax?: "link" | "native"; x?: "link" | "native" }
+        | null;
+      if (choices?.pickax) {
+        await this.pickax
+          .requestPostCrosspost(userId, bundle.post.id, choices.pickax)
+          .catch((e) =>
+            this.logger.warn(`Scheduled Pickax crosspost ${scheduledId}: ${e}`),
+          );
+      }
+      if (choices?.x) {
+        await this.x
+          .requestPostCrosspost(userId, bundle.post.id, choices.x)
+          .catch((e) =>
+            this.logger.warn(`Scheduled X crosspost ${scheduledId}: ${e}`),
+          );
+      }
 
       // Notify the author that the post went live.
       const postDto = toPostDto(bundle.post, this.r2BaseUrl());

@@ -13,6 +13,7 @@ import { writeSchema as announcementSchema } from "./admin-announcements.control
 import { writeSchema as newsletterSchema } from "./admin-newsletters.controller";
 import { approveSchema, rejectSchema } from "./admin-verification.controller";
 import { adminUserPatchSchema } from "../marvin/marvin.controller";
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 
 export const assistantPostSchema = z
   .object({
@@ -294,7 +295,7 @@ export async function actionSnapshot(
     case "marv":
       row = await prisma.user.findUnique({
         where: { id },
-        select: { id: true, username: true, name: true },
+        select: USER_BRIEF_SELECT,
       });
       if (row)
         row = {

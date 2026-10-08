@@ -24,6 +24,7 @@ import {
   readTokenIdentity,
 } from './pickax-identity';
 import { openSecret, sealSecret } from '../../common/crypto/secret-box';
+import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 
 export type PickaxConnectionStatus = {
   available: boolean;
@@ -305,7 +306,7 @@ export class PickaxConnectionService {
 
   private async afterProfileChange(userId: string): Promise<void> {
     try {
-      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, username: true } });
+      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: USER_REF_SELECT });
       if (user) await this.publicProfileCache.invalidateForUser({ id: user.id, username: user.username ?? null });
       await this.usersPublicRealtime.emitPublicProfileUpdated(userId);
       void this.usersMeRealtime.emitMeUpdated(userId, 'pickax_changed');

@@ -3,7 +3,7 @@ import { BadRequestException, Injectable, NotFoundException, UnauthorizedExcepti
 import type { Prisma, VerificationRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
-import { VERIFICATION_ADMIN_USER_SELECT } from '../../common/prisma-selects/user.select';
+import { VERIFICATION_ADMIN_USER_SELECT, USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 import { SlackService } from '../../common/slack/slack.service';
 import { UserVerificationService } from './user-verification.service';
 
@@ -154,7 +154,7 @@ export class VerificationService {
       take: params.limit + 1,
       include: {
         user: { select: VERIFICATION_ADMIN_USER_SELECT },
-        reviewedByAdmin: { select: { id: true, username: true, name: true } },
+        reviewedByAdmin: { select: USER_BRIEF_SELECT },
       },
     });
 
@@ -192,7 +192,7 @@ export class VerificationService {
       where: { id },
       include: {
         user: { select: VERIFICATION_ADMIN_USER_SELECT },
-        reviewedByAdmin: { select: { id: true, username: true, name: true } },
+        reviewedByAdmin: { select: USER_BRIEF_SELECT },
       },
     });
   }
@@ -225,7 +225,7 @@ export class VerificationService {
         },
         include: {
           user: { select: VERIFICATION_ADMIN_USER_SELECT },
-          reviewedByAdmin: { select: { id: true, username: true, name: true } },
+          reviewedByAdmin: { select: USER_BRIEF_SELECT },
         },
       });
     });

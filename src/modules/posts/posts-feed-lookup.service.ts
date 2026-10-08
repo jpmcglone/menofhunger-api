@@ -40,6 +40,7 @@ import {excludeMarvFromParticipants} from "./posts-mentions.helpers";
 import {PostsFeedAccessService, type ReadablePostShell} from "./posts-feed-access.service";
 import {PostsRankingService} from "./posts-ranking.service";
 import {AppConfigService} from "../app/app-config.service";
+import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 
 @Injectable()
 export class PostsFeedLookupService {
@@ -302,7 +303,7 @@ export class PostsFeedLookupService {
         usernameIsSet: true,
         bannedAt: null,
       },
-      select: { id: true, username: true },
+      select: USER_REF_SELECT,
     });
     return users
       .filter((u) => u.username != null)

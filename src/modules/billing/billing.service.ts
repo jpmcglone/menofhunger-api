@@ -14,6 +14,7 @@ import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
 import { EntitlementService, laterDate } from './entitlement.service';
 import { ReferralService } from './referral.service';
+import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 
 type StripeCtx = { stripe: Stripe; cfg: NonNullable<ReturnType<AppConfigService['stripe']>> };
 
@@ -673,7 +674,7 @@ export class BillingService {
     await this.prisma.subscriptionGrant.deleteMany({ where: { userId } });
 
     await this.publicProfileCache.invalidateForUser(
-      await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { id: true, username: true } }),
+      await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: USER_REF_SELECT }),
     );
     void this.usersPublicRealtime.emitPublicProfileUpdated(userId);
     void this.usersMeRealtime.emitMeUpdated(userId, 'billing_tier_changed');

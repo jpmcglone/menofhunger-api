@@ -1,3 +1,4 @@
+import { findGroupMemberStatus } from '../viewer/group-membership.queries';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
@@ -15,7 +16,7 @@ export class MarvinChannelDispatchService implements OnModuleInit {
       // Marv takes part only where he is an active member of the group; the worker then checks channel access.
       const botId = await this.identity.getMarvUserId().catch(() => null);
       if (!botId || botId === input.requesterId) return;
-      const membership = await this.prisma.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: input.groupId, userId: botId } }, select: { status: true } });
+      const membership = await findGroupMemberStatus(this.prisma, input.groupId, botId);
       if (membership?.status !== 'active') return;
       const job = await this.jobs.enqueue(JOBS.marvinReplyChannel, input, { jobId: `channel-marv-${input.messageId}`, attempts: 3, backoff: { type: 'exponential', delay: 5000 } });
       this.logger.debug(`[marv] channel reply queued message=${input.messageId} job=${job.id}`);

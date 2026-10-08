@@ -3,20 +3,13 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { TickerService } from './ticker.service';
+import { chunk } from '../../common/arrays/chunk';
 
 type SecTickerEntry = {
   cik_str: number;
   ticker: string;
   title: string;
 };
-
-function chunks<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) {
-    out.push(arr.slice(i, i + size));
-  }
-  return out;
-}
 
 @Injectable()
 export class TickerIngestCron implements OnModuleInit {
@@ -77,7 +70,7 @@ export class TickerIngestCron implements OnModuleInit {
 
       let upserted = 0;
       let skipped = 0;
-      for (const batch of chunks(entries, 500)) {
+      for (const batch of chunk(entries, 500)) {
         await Promise.all(
           batch.map(async (e) => {
             const symbol = (e.ticker ?? '').trim().toUpperCase();

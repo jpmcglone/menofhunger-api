@@ -1,3 +1,4 @@
+import { findGroupMemberStatus } from '../viewer/group-membership.queries';
 import { assertXCrosspostInput } from "../../common/crosspost/x-crosspost-input";
 import { boardMarvReplyId } from "../marvin/services/board-marv-reply-id";
 import { captureMemberParticipation } from "../../common/posthog/member-participation";
@@ -345,15 +346,7 @@ export class PostsMutationWriteService {
               })
             : Promise.resolve(0),
           parentGid
-            ? this.prisma.communityGroupMember.findUnique({
-                where: {
-                  groupId_userId: {
-                    groupId: parentGid,
-                    userId: marvRequesterId ?? userId,
-                  },
-                },
-                select: { status: true },
-              })
+            ? findGroupMemberStatus(this.prisma, parentGid, marvRequesterId ?? userId)
             : Promise.resolve(null),
           needsRootTopics
             ? this.prisma.post.findFirst({

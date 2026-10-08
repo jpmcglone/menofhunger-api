@@ -1,3 +1,4 @@
+import { findGroupMemberStatus } from '../../viewer/group-membership.queries';
 import { MARV_NO_REPLY } from '../marvin-prompt-instructions';
 import { parseMentionsFromBody } from '../../../common/mentions/mention-regex';
 import { boardMarvReplyId } from '../services/board-marv-reply-id';
@@ -31,6 +32,7 @@ import {
 import { LinkMetadataService } from '../../link-metadata/link-metadata.service';
 import { fillVisionSlots } from '../services/marvin-vision-media';
 import { PostsReadService } from '../../posts-read/posts-read.service';
+import { USER_REF_SELECT } from '../../../common/prisma-selects/user.select';
 /**
  * How often to re-emit `posts:typing` while the AI call is in flight.
  * The web client expires the indicator after 7 000ms (`usePostTyping.TYPING_TTL_MS`),
@@ -220,7 +222,7 @@ export class MarvinPublicReplyProcessor {
           select: { id: true, username: true, name: true, premium: true, premiumPlus: true, bannedAt: true },
         },
         mentions: {
-          select: { user: { select: { id: true, username: true } } },
+          select: { user: { select: USER_REF_SELECT } },
         },
         media: {
           where: { deletedAt: null },
@@ -289,10 +291,7 @@ export class MarvinPublicReplyProcessor {
     if (postGroupId) {
       const marvId = this.identity.cachedMarvUserId() ?? (await this.identity.getMarvUserId());
       if (marvId) {
-        const marvMembership = await this.prisma.communityGroupMember.findUnique({
-          where: { groupId_userId: { groupId: postGroupId, userId: marvId } },
-          select: { status: true },
-        });
+        const marvMembership = await findGroupMemberStatus(this.prisma, postGroupId, marvId);
         if (marvMembership?.status !== 'active') {
           this.logger.log(
             `[marv] public-reply EXIT reason=marv_not_in_group post=${postId} groupId=${postGroupId}`,

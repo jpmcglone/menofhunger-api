@@ -1,6 +1,7 @@
 import { isProtectedChannelKey } from '../group-channels/channel-media.service';
 import { DeleteObjectCommand, ListObjectsV2Command, type ListObjectsV2CommandOutput, S3Client } from '@aws-sdk/client-s3';
-import { BadRequestException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { Prisma, type PostMediaKind } from '@prisma/client';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -138,6 +139,13 @@ export type AssetRefs = {
 
 export function emptyAssetRefs(): AssetRefs {
   return { channelUploads: [], posts: [], messages: [], users: [], groups: [], crews: [], polls: [], articles: [], announcements: [], newsletters: [], primaryType: 'orphan' };
+}
+
+/** Stable fingerprint of what currently owns an asset, so a delete can detect a changed reference set. */
+export function referencesToken(refs: AssetRefs): string {
+  const { primaryType, ...lists } = refs;
+  const canonical = Object.keys(lists).sort().map((key) => [key, (lists as Record<string, unknown[]>)[key].map((item) => JSON.stringify(item)).sort()]);
+  return createHash('sha256').update(JSON.stringify([primaryType, canonical])).digest('hex').slice(0, 32);
 }
 
 // ============================================================
@@ -552,6 +560,7 @@ export class AdminImageReviewService {
         r2DeletedAt: a.r2DeletedAt ? a.r2DeletedAt.toISOString() : null,
         publicUrl,
         primaryType: refs.primaryType,
+        referencesToken: referencesToken(refs),
       },
       references: {
         posts: refs.posts.map((p) => ({
@@ -585,7 +594,7 @@ export class AdminImageReviewService {
     };
   }
 
-  async deleteById(params: { id: string; adminUserId: string; reason?: string | null; onlyOrphans?: boolean }) {
+  async deleteById(params: { id: string; adminUserId: string; reason?: string | null; onlyOrphans?: boolean; expectedReferencesToken?: string | null }) {
     const assetId = (params.id ?? '').trim();
     if (!assetId) throw new NotFoundException('Not found.');
     const reason = (params.reason ?? '').trim() || null;
@@ -595,6 +604,13 @@ export class AdminImageReviewService {
     if (!a) throw new NotFoundException('Not found.');
     if (a.deletedAt) {
       return { success: true, alreadyDeleted: true };
+    }
+
+    if (params.expectedReferencesToken) {
+      const current = (await this.resolveAllReferences([a.r2Key])).get(a.r2Key) ?? emptyAssetRefs();
+      if (referencesToken(current) !== params.expectedReferencesToken) {
+        throw new ConflictException({ message: 'This media\'s references changed since you reviewed it. Review it again before deleting.', error: 'references_changed' });
+      }
     }
 
     if (params.onlyOrphans) {

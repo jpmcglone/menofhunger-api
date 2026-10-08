@@ -8,6 +8,7 @@ import { fillVisionSlots, marvMediaMarker, resolveMarvVisionUrl } from './marvin
 import { marvPublicProfilePostWhere } from './marvin-post-access';
 
 import { PostsReadService } from '../../posts-read/posts-read.service';
+import { USER_REF_SELECT } from '../../../common/prisma-selects/user.select';
 export type GeneratedContextCard = {
   cardText: string;
   source: 'generated' | 'manual' | 'hybrid' | 'fallback';
@@ -151,7 +152,7 @@ export class MarvinContextCardService {
     if (!u) return null;
     const user = await this.prisma.user.findFirst({
       where: { username: { equals: u, mode: 'insensitive' }, isBot: false, bannedAt: null },
-      select: { id: true, username: true },
+      select: USER_REF_SELECT,
     });
     if (!user) return null;
 

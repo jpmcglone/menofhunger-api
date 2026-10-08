@@ -9,10 +9,10 @@ import { collapseRepostsByCanonical } from '../../common/feed-collapse/collapse-
 import { queryBoolean } from '../../common/validation/query-boolean';
 import { toPostAuthorDtoFromFeedRow } from './post.dto';
 import type { PostsController } from './posts.controller';
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
-export const listSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
+export const listSchema = cursorPageQuerySchema().extend({
+  
   visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
   followingOnly: queryBoolean().optional(),
   mediaOnly: queryBoolean().optional(),

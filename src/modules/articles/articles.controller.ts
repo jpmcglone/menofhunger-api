@@ -47,9 +47,8 @@ const saveSchema = z.object({
   tags: tagSchema,
 });
 
-const listSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
+const listSchema = cursorPageQuerySchema().extend({
+  
   authorUsername: z.string().optional(),
   sort: z.enum(["new", "trending"]).optional(),
   visibility: z
@@ -76,9 +75,8 @@ const publishSchema = z.object({
     .optional(),
 });
 
-const draftsListSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
+const draftsListSchema = cursorPageQuerySchema().extend({
+  
   visibility: z
     .enum(["all", "public", "verifiedOnly", "premiumOnly"])
     .optional(),

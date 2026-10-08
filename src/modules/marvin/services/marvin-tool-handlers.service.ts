@@ -1,3 +1,4 @@
+import { findGroupMemberStatus } from '../../viewer/group-membership.queries';
 import type { Prisma } from '@prisma/client';
 import { MarvinPersonalService } from './marvin-personal.service';
 import { MarvinParticipationService } from './marvin-participation.service';
@@ -359,7 +360,7 @@ export class MarvinToolHandlersService {
     if (viewer && viewer.verifiedStatus !== 'none') visibility.push('verifiedOnly');
     if (viewer?.premium || viewer?.premiumPlus) visibility.push('premiumOnly');
     const root = ctx.rootPostId ? await this.postsRead.read.findUnique({ where: { id: ctx.rootPostId }, select: { communityGroupId: true } }) : null;
-    const member = root?.communityGroupId ? await this.prisma.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: root.communityGroupId, userId: ctx.requesterUserId } }, select: { status: true } }) : null;
+    const member = root?.communityGroupId ? await findGroupMemberStatus(this.prisma, root.communityGroupId, ctx.requesterUserId) : null;
     const permittedGroupId = member?.status === 'active' || viewer?.siteAdmin ? root?.communityGroupId : null;
     return { deletedAt: null, visibility: { in: visibility }, OR: marvToolGroupAccessOr(ctx.rootPostId, permittedGroupId) };
   }

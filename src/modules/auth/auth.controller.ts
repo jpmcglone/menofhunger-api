@@ -1,4 +1,3 @@
-import { startSpan } from '@sentry/nestjs';
 import {
   BadRequestException,
   Body,
@@ -14,7 +13,6 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
-import { ModuleRef } from '@nestjs/core';
 import { z } from 'zod';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { getSessionCookie } from '../../common/session-cookie';
@@ -25,18 +23,11 @@ import { normalizePhone } from './auth.utils';
 import { signupAttributionSchema } from './signup-attribution';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { NotificationsService } from '../notifications/notifications.service';
-import { MessagesService } from '../messages/messages.service';
-import { CrewInvitesService } from '../crew/crew-invites.service';
-import { GroupInvitesService } from '../groups/group-invites.service';
-import type { AuthMeDto } from '../../common/dto/auth.dto';
 import type { BrowserHandoffDto } from '../../common/dto';
 import { AuthGuard, type AuthedRequest } from './auth.guard';
 import { BrowserHandoffService } from './browser-handoff.service';
 import { ImpersonationService } from './impersonation.service';
 import { AccountSwitchService } from './account-switch.service';
-import { PrismaService } from '../prisma/prisma.service';
-import { totalUserArticlesWhere, totalUserPostsWhere } from '../../common/content-counts';
 import { assertPersonAccount } from '../pages/pages.constants';
 
 const startSchema = z.object({
@@ -90,7 +81,7 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly accountDeletion: AccountDeletionService,
-    private readonly moduleRef: ModuleRef,
+    private readonly presenceRealtime: PresenceRealtimeService,
     private readonly browserHandoff: BrowserHandoffService,
     private readonly impersonation: ImpersonationService,
     private readonly accountSwitch: AccountSwitchService,
@@ -206,139 +197,6 @@ export class AuthController {
     }
   }
 
-  @ApiOperation({ summary: 'Get the authenticated user (me) plus live notification/message counts' })
-  @Get('me')
-  async me(
-    @Req() req: Request,
-    @Res({ passthrough: true }) res: Response,
-  ): Promise<{ data: AuthMeDto | null }> {
-    const token = getSessionCookie(req);
-    const sessionResult = await startSpan({ name: 'auth.me.session', op: 'auth.me' }, () => this.auth.meFromSessionToken(token));
-    if (!sessionResult?.user?.id) return { data: null };
-
-    if (sessionResult.renewed && token) {
-      this.auth.setSessionCookie(token, sessionResult.expiresAt, res);
-    }
-
-    // Run expensive per-request checks (pinned-post validity, streak self-heal) only here,
-    // not in every auth guard invocation.
-    let { user } = sessionResult;
-    if (token) {
-      user = await startSpan({ name: 'auth.me.checks', op: 'auth.me' }, () =>
-        this.auth.runMeChecks(token, user.id, (user as any).pinnedPostId ?? null, user));
-    }
-
-    const notifications = this.moduleRef.get(NotificationsService, { strict: false });
-    const messages = this.moduleRef.get(MessagesService, { strict: false });
-    let crewInvites: CrewInvitesService | null = null;
-    let groupInvites: GroupInvitesService | null = null;
-    let prisma: PrismaService | null = null;
-    try {
-      crewInvites = this.moduleRef.get(CrewInvitesService, { strict: false });
-    } catch {
-      // CrewModule can be absent in focused test/application contexts.
-    }
-    try {
-      groupInvites = this.moduleRef.get(GroupInvitesService, { strict: false });
-    } catch {
-      // GroupsModule can be absent in focused test/application contexts.
-    }
-    try {
-      prisma = this.moduleRef.get(PrismaService, { strict: false });
-    } catch {
-      // Prisma can be absent in focused test/application contexts.
-    }
-
-    const [
-      notificationCountRes,
-      notificationUnreadCommentCountRes,
-      groupsUnreadRes,
-      crewInviteInboxCountRes,
-      groupInviteInboxCountRes,
-      messageCountsRes,
-      postCountRes,
-      articleCountRes,
-      impersonationRes,
-      accountSwitchRes,
-    ] = await Promise.allSettled([
-      startSpan({ name: 'auth.me.notifications', op: 'auth.me' }, () => notifications?.getUndeliveredCount(user.id) ?? Promise.resolve(0)),
-      startSpan({ name: 'auth.me.unread_comments', op: 'auth.me' }, () => notifications?.getUnreadCommentCount(user.id) ?? Promise.resolve(0)),
-      startSpan({ name: 'auth.me.groups', op: 'auth.me' }, () => notifications?.getGroupsUnread(user.id) ?? Promise.resolve({ total: 0, byGroupId: {} })),
-      startSpan({ name: 'auth.me.crew_invites', op: 'auth.me' }, () => crewInvites?.countInboxPending(user.id) ?? Promise.resolve(0)),
-      startSpan({ name: 'auth.me.group_invites', op: 'auth.me' }, () => groupInvites?.countInboxPending(user.id) ?? Promise.resolve(0)),
-      startSpan({ name: 'auth.me.messages', op: 'auth.me' }, () => messages?.getUnreadSummary(user.id) ?? Promise.resolve({ primary: 0, requests: 0 })),
-      startSpan({ name: 'auth.me.post_count', op: 'auth.me' }, () => prisma?.post.count({ where: totalUserPostsWhere(user.id) }) ?? Promise.resolve(null)),
-      startSpan({ name: 'auth.me.article_count', op: 'auth.me' }, () => prisma?.article.count({ where: totalUserArticlesWhere(user.id) }) ?? Promise.resolve(null)),
-      startSpan({ name: 'auth.me.impersonation', op: 'auth.me' }, () => this.impersonation.describe(sessionResult.impersonatedByUserId)),
-      startSpan({ name: 'auth.me.account_switch', op: 'auth.me' }, () => this.accountSwitch.describe(sessionResult.operatedByUserId)),
-    ]);
-
-    const notificationUndeliveredCount =
-      notificationCountRes.status === 'fulfilled'
-        ? Math.max(0, Math.floor(Number(notificationCountRes.value) || 0))
-        : 0;
-    const notificationUnreadCommentCount =
-      notificationUnreadCommentCountRes.status === 'fulfilled'
-        ? Math.max(0, Math.floor(Number(notificationUnreadCommentCountRes.value) || 0))
-        : 0;
-    const groupsUnread =
-      groupsUnreadRes.status === 'fulfilled'
-        ? {
-            total: Math.max(0, Math.floor(Number(groupsUnreadRes.value?.total) || 0)),
-            byGroupId: Object.fromEntries(
-              Object.entries(groupsUnreadRes.value?.byGroupId ?? {}).map(([groupId, count]) => [
-                groupId,
-                Math.max(0, Math.floor(Number(count) || 0)),
-              ]),
-            ),
-          }
-        : { total: 0, byGroupId: {} };
-    const crewInviteInboxCount =
-      crewInviteInboxCountRes.status === 'fulfilled'
-        ? Math.max(0, Math.floor(Number(crewInviteInboxCountRes.value) || 0))
-        : 0;
-    const groupInviteInboxCount =
-      groupInviteInboxCountRes.status === 'fulfilled'
-        ? Math.max(0, Math.floor(Number(groupInviteInboxCountRes.value) || 0))
-        : 0;
-    const messageUnreadCounts =
-      messageCountsRes.status === 'fulfilled'
-        ? {
-            primary: Math.max(0, Math.floor(Number(messageCountsRes.value?.primary) || 0)),
-            requests: Math.max(0, Math.floor(Number(messageCountsRes.value?.requests) || 0)),
-          }
-        : { primary: 0, requests: 0 };
-    const postCount =
-      postCountRes.status === 'fulfilled' && typeof postCountRes.value === 'number'
-        ? Math.max(0, Math.floor(postCountRes.value))
-        : null;
-    const articleCount =
-      articleCountRes.status === 'fulfilled' && typeof articleCountRes.value === 'number'
-        ? Math.max(0, Math.floor(articleCountRes.value))
-        : null;
-
-    const impersonation =
-      impersonationRes.status === 'fulfilled' ? impersonationRes.value ?? null : null;
-    const accountSwitch =
-      accountSwitchRes.status === 'fulfilled' ? accountSwitchRes.value ?? null : null;
-
-    return {
-      data: {
-        ...user,
-        notificationUndeliveredCount,
-        notificationUnreadCommentCount,
-        groupsUnread,
-        crewInviteInboxCount,
-        groupInviteInboxCount,
-        messageUnreadCounts,
-        postCount,
-        articleCount,
-        impersonation,
-        accountSwitch,
-      },
-    };
-  }
-
   @ApiOperation({ summary: 'List the person + pages this session can switch into' })
   @UseGuards(AuthGuard)
   @Get('accounts')
@@ -438,9 +296,7 @@ export class AuthController {
     const result = await this.auth.logout(token, res);
     // Disconnect all active sockets for this user immediately on logout.
     if (sessionResult?.user?.id) {
-      // Avoid module import cycles by resolving at runtime (PresenceModule is loaded in AppModule).
-      const presenceRealtime = this.moduleRef.get(PresenceRealtimeService, { strict: false });
-      presenceRealtime?.disconnectUserSockets(sessionResult.user.id);
+      this.presenceRealtime.disconnectUserSockets(sessionResult.user.id);
     }
     return { data: result };
   }
@@ -462,8 +318,7 @@ export class AuthController {
     await this.auth.revokeAllSessionsForUser(sessionResult.user.id);
     this.auth.clearAuthCookie(res);
 
-    const presenceRealtime = this.moduleRef.get(PresenceRealtimeService, { strict: false });
-    presenceRealtime?.disconnectUserSockets(sessionResult.user.id);
+    this.presenceRealtime.disconnectUserSockets(sessionResult.user.id);
 
     return { data: { success: true } };
   }

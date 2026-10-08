@@ -1,3 +1,4 @@
+import { findGroupMemberStatus } from '../viewer/group-membership.queries';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import type { PostVisibility, VerifiedStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -114,10 +115,7 @@ export class BookmarksService {
     if (!post) throw new NotFoundException('Post not found.');
 
     if (post.communityGroupId) {
-      const membership = await this.prisma.communityGroupMember.findUnique({
-        where: { groupId_userId: { groupId: post.communityGroupId, userId: viewerUserId } },
-        select: { status: true },
-      });
+      const membership = await findGroupMemberStatus(this.prisma, post.communityGroupId, viewerUserId);
       if (!membership || membership.status !== 'active') {
         throw new ForbiddenException('Join this group to bookmark its posts.');
       }

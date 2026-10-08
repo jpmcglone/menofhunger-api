@@ -31,6 +31,8 @@ import {
   type SearchUserRow,
   type Viewer,
 } from './search.shared';
+import { toPage } from '../../common/pagination/page';
+import { findInviteBlockingCrewMemberIds } from '../viewer/crew-membership.queries';
 
 export type { SearchArticleRow, SearchUserRow } from './search.shared';
 
@@ -142,11 +144,7 @@ export class SearchService {
    */
   async inviteBlockingCrewMemberIds(userIds: string[]): Promise<Set<string>> {
     if (!userIds.length) return new Set();
-    const crewMembers = await this.prisma.crewMember.findMany({
-      where: { userId: { in: userIds }, crew: { deletedAt: null } },
-      select: { userId: true, crew: { select: { memberCount: true } } },
-    });
-    return new Set(crewMembers.filter((m) => m.crew.memberCount > 1).map((m) => m.userId));
+    return findInviteBlockingCrewMemberIds(this.prisma, userIds);
   }
 
   async searchUsers(params: {
@@ -630,8 +628,7 @@ export class SearchService {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     });
-    const slice = rows.slice(0, limit);
-    const nextCursor = rows.length > limit ? slice[slice.length - 1]?.id ?? null : null;
+    const { items: slice, nextCursor: nextCursor } = toPage(rows, limit, (r) => r.id);
     return { posts: slice, nextCursor };
   }
 
@@ -939,8 +936,7 @@ export class SearchService {
       },
     });
 
-    const slice = rows.slice(0, limit);
-    const nextCursor = rows.length > limit ? slice[slice.length - 1]?.id ?? null : null;
+    const { items: slice, nextCursor: nextCursor } = toPage(rows, limit, (r) => r.id);
 
     return {
       bookmarks: slice.map((b) => ({

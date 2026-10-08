@@ -1,3 +1,4 @@
+import { findGroupMemberStatus } from '../viewer/group-membership.queries';
 import {
   BadRequestException,
   ForbiddenException,
@@ -92,10 +93,7 @@ export class PostsFeedAccessService {
       throw new ForbiddenException("Verify your account to view group posts.");
     }
 
-    const m = await this.prisma.communityGroupMember.findUnique({
-      where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
-      select: { status: true },
-    });
+    const m = await findGroupMemberStatus(this.prisma, gid, viewerUserId);
     // Approval-group non-members: 404 so the permalink returns not-found instead of
     // leaking author identity, engagement counts, and a body snippet via getByIdNoAccess.
     if (!m || m.status !== "active") {
@@ -117,10 +115,7 @@ export class PostsFeedAccessService {
     const isSelf = Boolean(viewer && viewer.id === post.userId);
     let knownActiveGroupMember = false;
     if (!isSelf && gid && viewerUserId && !viewer?.siteAdmin) {
-      const m = await this.prisma.communityGroupMember.findUnique({
-        where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
-        select: { status: true },
-      });
+      const m = await findGroupMemberStatus(this.prisma, gid, viewerUserId);
       knownActiveGroupMember = m?.status === "active";
     }
 

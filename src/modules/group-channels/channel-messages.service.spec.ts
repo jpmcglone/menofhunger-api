@@ -57,6 +57,19 @@ describe('channel send protocol', () => {
     expect(result).toMatchObject({ threadRootId: 'root', channelSequence: 1 });
     expect(h.tx.groupChannelThreadState.updateMany).toHaveBeenCalledWith({ where: { rootMessageId: 'root', userId: 'viewer', unfollowed: false }, data: { following: true } });
   });
+  it('stores an inline quoted reply only for a live message in this channel', async () => {
+    const h = harness();
+    h.tx.message.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'new-message', ...data }));
+    h.tx.message.findFirst.mockResolvedValueOnce({ id: 'quoted' });
+    const result = await h.service.send('viewer', 'group', 'channel', { ...input, replyToId: 'quoted' });
+    expect(h.tx.message.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: 'quoted', conversationId: 'conversation', deletedForAll: false }) }));
+    expect(result).toMatchObject({ replyToId: 'quoted', threadRootId: null });
+  });
+  it('rejects an inline reply to a missing, deleted, or other-channel message', async () => {
+    const h = harness();
+    await expect(h.service.send('viewer', 'group', 'channel', { ...input, replyToId: 'elsewhere' })).rejects.toThrow('no longer available');
+    expect(h.tx.message.create).not.toHaveBeenCalled();
+  });
   it('enforces leader-only announcements at the mutation boundary', async () => {
     const h = harness(); h.channel.defaultPurpose = 'announcements' as any;
     await expect(h.service.send('viewer', 'group', 'channel', input)).rejects.toThrow('cannot post');
@@ -99,5 +112,72 @@ describe('channel preview removal', () => {
     await expect(h.service.hidePreview('author', 'group', 'channel', 'm1', 'https://evil.test', true)).rejects.toThrow('not in this message');
     h.tx.message.findFirst.mockResolvedValue(null);
     await expect(h.service.hidePreview('other', 'group', 'channel', 'm1', 'https://example.com/a', true)).rejects.toThrow('Only the author');
+  });
+});
+
+describe('group join row and Welcome', () => {
+  function joinHarness() {
+    const h = harness();
+    h.channel.defaultPurpose = 'general' as any;
+    (h.access as any).enabled = jest.fn().mockReturnValue(true);
+    h.tx.groupChannel.findUnique = jest.fn().mockResolvedValue(h.channel);
+    h.tx.communityGroupMember = { findUnique: jest.fn().mockResolvedValue({ status: 'active', user: { bannedAt: null, isBot: false, verifiedStatus: 'identity' } }) };
+    h.tx.message.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'join-row', ...data }));
+    return h;
+  }
+  it('records one silent groupJoin row with the next sequence and broadcasts it', async () => {
+    const h = joinHarness();
+    await h.service.recordJoin('group', 'newbie', '2026-10-08T12:00:00.000Z');
+    expect(h.tx.message.create).toHaveBeenCalledWith({ data: expect.objectContaining({ kind: 'groupJoin', body: '', senderId: 'newbie', clientRequestId: 'join:2026-10-08T12:00:00.000Z', channelSequence: 1 }) });
+    expect(h.attention.reconcile).not.toHaveBeenCalled();
+    expect((h.service as any).effects.dispatch).not.toHaveBeenCalled();
+    expect((h.service as any).broadcast).toHaveBeenCalledWith('group', 'channel', 'join-row');
+  });
+  it('is idempotent on retry and skips inactive or banned members and channels that are gone', async () => {
+    const h = joinHarness();
+    h.tx.message.findFirst.mockResolvedValue({ id: 'already' });
+    await h.service.recordJoin('group', 'newbie', 'at');
+    h.tx.message.findFirst.mockResolvedValue(null);
+    h.tx.communityGroupMember.findUnique.mockResolvedValue({ status: 'pending', user: { bannedAt: null, isBot: false, verifiedStatus: 'identity' } });
+    await h.service.recordJoin('group', 'newbie', 'at2');
+    h.tx.communityGroupMember.findUnique.mockResolvedValue({ status: 'active', user: { bannedAt: new Date(), isBot: false, verifiedStatus: 'identity' } });
+    await h.service.recordJoin('group', 'newbie', 'at3');
+    h.tx.groupChannel.findUnique.mockResolvedValue(null);
+    await h.service.recordJoin('group', 'newbie', 'at4');
+    expect(h.tx.message.create).not.toHaveBeenCalled();
+  });
+  it('does nothing when channels are not enabled for the group', async () => {
+    const h = joinHarness(); (h.access as any).enabled.mockReturnValue(false);
+    await h.service.recordJoin('group', 'newbie', 'at');
+    expect((h.service as any).prisma.$transaction).not.toHaveBeenCalled();
+  });
+  it('Welcome posts "Welcome, <first name> 🤝" once under a stable request id, then refreshes the row', async () => {
+    const h = joinHarness();
+    (h.service as any).prisma.message = { findFirst: jest.fn().mockResolvedValue({ id: 'join-row', senderId: 'newbie', sender: { name: 'Chris Hale', username: 'chris' } }) };
+    const send = jest.spyOn(h.service, 'send').mockResolvedValue({ id: 'welcome-msg' } as any);
+    jest.spyOn(h.service as any, 'advanceRevision').mockResolvedValue(undefined);
+    await expect(h.service.welcome('viewer', 'group', 'channel', 'join-row')).resolves.toEqual({ id: 'welcome-msg' });
+    expect(send).toHaveBeenCalledWith('viewer', 'group', 'channel', { body: 'Welcome, Chris 🤝', clientRequestId: 'welcome:join-row' });
+    expect((h.service as any).broadcast).toHaveBeenCalledWith('group', 'channel', 'join-row');
+  });
+  it('Welcome rejects welcoming yourself and non-join rows', async () => {
+    const h = joinHarness();
+    const prisma = (h.service as any).prisma;
+    prisma.message = { findFirst: jest.fn().mockResolvedValue({ id: 'join-row', senderId: 'viewer', sender: { name: 'Me', username: 'me' } }) };
+    await expect(h.service.welcome('viewer', 'group', 'channel', 'join-row')).rejects.toThrow('yourself');
+    prisma.message.findFirst.mockResolvedValue(null);
+    await expect(h.service.welcome('viewer', 'group', 'channel', 'text-row')).rejects.toThrow('unavailable');
+    expect(prisma.message.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ kind: 'groupJoin' }) }));
+  });
+  it('shows the button only to others who have not welcomed, and never lets the joiner edit the row', () => {
+    const h = joinHarness();
+    (h.service as any).config = { r2: () => null };
+    const base = { id: 'join-row', createdAt: new Date(), body: '', conversationId: 'conversation', sender: { id: 'newbie', username: 'chris', name: 'Chris', avatarKey: null }, kind: 'groupJoin', media: [], reactions: [], deletions: [], deletedForAll: false, channelPins: [], threadReplies: [], _count: { threadReplies: 0 }, channelRevision: 1, channelSequence: 1, hiddenPreviews: [], senderId: 'newbie', replyTo: null, threadRootId: null };
+    const render = (viewer: string, welcomed = new Set<string>()) => (h.service as any).render(viewer, 'member', 'group', h.channel, [base], new Set(), new Map(), welcomed)[0];
+    expect(render('viewer').joinWelcome).toEqual({ canWelcome: true });
+    expect(render('viewer', new Set(['join-row'])).joinWelcome).toEqual({ canWelcome: false });
+    const own = render('newbie');
+    expect(own.joinWelcome).toEqual({ canWelcome: false });
+    expect(own.canEdit).toBe(false);
   });
 });

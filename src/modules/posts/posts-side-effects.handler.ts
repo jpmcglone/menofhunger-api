@@ -19,7 +19,8 @@ import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity
 import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { chunk, FANOUT_CONCURRENCY, runInBatches } from '../side-effects/batch';
+import { FANOUT_CONCURRENCY, runInBatches } from '../side-effects/batch';
+import { chunk } from '../../common/arrays/chunk';
 import {
   FANOUT_CHUNK_SIZE,
   FANOUT_CHUNK_THRESHOLD,
@@ -29,6 +30,7 @@ import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { resolveMentionUsernames } from './posts-mentions.helpers';
 import { notDeletedWhere } from './posts-query-builders';
+import { listCrewmateUserIds } from '../viewer/crew-membership.queries';
 
 /** Thread participant role for reply notifications. */
 const REPLY_TITLE = {
@@ -821,18 +823,12 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       }
       if (postKind === 'checkin' && checkinDayKey && visibility !== 'onlyMe') {
         try {
-          const [allFollowers, crewMembers, totalToday, actor] = await Promise.all([
+          const [allFollowers, crewmateIds, totalToday, actor] = await Promise.all([
             this.prisma.follow.findMany({
               where: { followingId: userId },
               select: { followerId: true },
             }),
-            this.prisma.crewMember.findMany({
-              where: {
-                crew: { members: { some: { userId } } },
-                userId: { not: userId },
-              },
-              select: { userId: true },
-            }),
+            listCrewmateUserIds(this.prisma, userId),
             this.prisma.post.count({
               where: {
                 kind: 'checkin',
@@ -858,8 +854,8 @@ export class PostsSideEffectsHandler implements OnModuleInit {
             for (const f of allFollowers) {
               if (f.followerId && f.followerId !== userId) recipientIds.add(f.followerId);
             }
-            for (const m of crewMembers) {
-              if (m.userId && m.userId !== userId) recipientIds.add(m.userId);
+            for (const id of crewmateIds) {
+              if (id && id !== userId) recipientIds.add(id);
             }
 
             if (recipientIds.size > 0) {

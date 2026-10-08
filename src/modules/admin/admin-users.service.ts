@@ -4,7 +4,6 @@ import { normalizeSocialProfileUrl } from "../../common/urls/social-profile-url"
 import { toAvatarVideoDto } from "../../common/dto/avatar-video.dto";
 import { Injectable, BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
-import { ModuleRef } from "@nestjs/core";
 import { z } from "zod";
 import { normalizePhone } from "../auth/auth.utils";
 import { AppConfigService } from "../app/app-config.service";
@@ -86,7 +85,7 @@ export class AdminUsersService {
     private readonly usersMeRealtime: UsersMeRealtimeService,
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
     private readonly auth: AuthService,
-    private readonly moduleRef: ModuleRef,
+    private readonly presenceRealtime: PresenceRealtimeService,
     private readonly slack: SlackService,
     private readonly entitlementService: EntitlementService,
     private readonly billingService: BillingService,
@@ -352,8 +351,7 @@ export class AdminUsersService {
     });
       return { updated: user, channelGroups };
     });
-    const channelRealtime = this.moduleRef.get(PresenceRealtimeService, { strict: false });
-    for (const groupId of channelGroups) await emitChannelAccessChange(this.prisma, channelRealtime, groupId, id);
+    for (const groupId of channelGroups) await emitChannelAccessChange(this.prisma, this.presenceRealtime, groupId, id);
 
     // Revoke all active sessions immediately.
     await this.auth.revokeAllSessionsForUser(updated.id);
@@ -365,10 +363,7 @@ export class AdminUsersService {
       // Best-effort
     }
     try {
-      const presenceRealtime = this.moduleRef.get(PresenceRealtimeService, {
-        strict: false,
-      });
-      presenceRealtime?.disconnectUserSockets(updated.id);
+      this.presenceRealtime.disconnectUserSockets(updated.id);
     } catch {
       // Best-effort
     }

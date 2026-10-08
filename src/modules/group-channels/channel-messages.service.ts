@@ -22,6 +22,7 @@ const MESSAGE_INCLUDE = {
   reactions: { include: { user: { select: USER_LIST_SELECT } }, orderBy: { createdAt: 'asc' as const } },
   media: { orderBy: [{ createdAt: 'asc' as const }, { id: 'asc' as const }] },
   channelPins: true,
+  replyTo: { include: { sender: { select: { username: true } }, media: { orderBy: [{ createdAt: 'asc' as const }, { id: 'asc' as const }] } } },
   threadReplies: { where: { deletedForAll: false }, select: { createdAt: true }, orderBy: { createdAt: 'desc' as const }, take: 1 },
   _count: { select: { threadReplies: { where: { deletedForAll: false } } } },
 } satisfies Prisma.MessageInclude;
@@ -29,8 +30,9 @@ type MessageRow = Prisma.MessageGetPayload<{ include: typeof MESSAGE_INCLUDE }>;
 /** A deleted message stays visible only as the placeholder root of replies that remain. */
 const VISIBLE_MESSAGE = { OR: [{ deletedForAll: false }, { threadRootId: null, threadReplies: { some: { deletedForAll: false } } }] } satisfies Prisma.MessageWhereInput;
 export const CHANNEL_MAX_ATTACHMENTS = 4;
+const WELCOME_PREFIX = 'welcome:';
 export type ChannelAttachmentInput = { uploadId: string; thumbnailUploadId?: string; alt?: string };
-export type ChannelSendInput = { body: string; clientRequestId: string; threadRootId?: string; uploadId?: string; thumbnailUploadId?: string; alt?: string; attachments?: ChannelAttachmentInput[]; giphy?: { url: string; mp4Url?: string; width?: number; height?: number } };
+export type ChannelSendInput = { body: string; clientRequestId: string; threadRootId?: string; replyToId?: string; uploadId?: string; thumbnailUploadId?: string; alt?: string; attachments?: ChannelAttachmentInput[]; giphy?: { url: string; mp4Url?: string; width?: number; height?: number } };
 
 @Injectable()
 export class ChannelMessagesService {
@@ -43,10 +45,11 @@ export class ChannelMessagesService {
     const states = await this.prisma.groupChannelThreadState.findMany({ where: { userId, rootMessageId: { in: roots } } });
     const follows = new Set(states.filter(s => s.following).map(s => s.rootMessageId));
     const receipts = await this.receipts(userId, groupId, channel, rows);
-    return this.render(userId, member.role, groupId, channel, rows, follows, receipts);
+    const welcomes = await this.welcomes(rows);
+    return this.render(userId, member.role, groupId, channel, rows, follows, receipts, welcomes.get(userId));
   }
 
-  private render(userId: string, role: Parameters<typeof channelCapabilities>[1], groupId: string, channel: Parameters<typeof channelCapabilities>[0] & { id: string }, rows: MessageRow[], follows: Set<string>, receipts: Map<string, GroupChannelReceiptDto>): GroupChannelMessageDto[] {
+  private render(userId: string, role: Parameters<typeof channelCapabilities>[1], groupId: string, channel: Parameters<typeof channelCapabilities>[0] & { id: string }, rows: MessageRow[], follows: Set<string>, receipts: Map<string, GroupChannelReceiptDto>, welcomed: Set<string> = new Set()): GroupChannelMessageDto[] {
     const channelId = channel.id;
     const member = { role };
     return rows.map(message => ({
@@ -66,9 +69,25 @@ export class ChannelMessagesService {
       hiddenPreviews: message.deletedForAll ? [] : message.hiddenPreviews,
       replyCount: message._count.threadReplies, lastReplyAt: message.threadReplies[0]?.createdAt.toISOString() ?? null,
       following: follows.has(message.threadRootId ?? message.id), pinned: message.channelPins.length > 0 && !message.deletedForAll,
-      canEdit: channelCapabilities(channel, member.role).canSend && !message.deletedForAll && message.senderId === userId && Date.now() - message.createdAt.getTime() < 15 * 60_000,
+      joinWelcome: message.kind === 'groupJoin' && !message.deletedForAll
+        ? { canWelcome: message.senderId !== userId && !welcomed.has(message.id) && !channel.archivedAt && channelCapabilities(channel, member.role).canSend }
+        : null,
+      canEdit: message.kind === 'text' && channelCapabilities(channel, member.role).canSend && !message.deletedForAll && message.senderId === userId && Date.now() - message.createdAt.getTime() < 15 * 60_000,
       canDelete: !channel.archivedAt && !message.deletedForAll && (message.senderId === userId || isChannelLeader(member.role)),
     }));
+  }
+
+  /** Who already welcomed each join row: member ID -> join message IDs. A welcome is the member's own `welcome:<joinId>` message. */
+  private async welcomes(rows: MessageRow[]) {
+    const byUser = new Map<string, Set<string>>();
+    const joins = rows.filter(message => message.kind === 'groupJoin' && !message.deletedForAll);
+    if (!joins.length) return byUser;
+    const sent = await this.prisma.message.findMany({
+      where: { conversationId: { in: [...new Set(joins.map(message => message.conversationId))] }, deletedForAll: false, clientRequestId: { in: joins.map(message => `${WELCOME_PREFIX}${message.id}`) } },
+      select: { senderId: true, clientRequestId: true },
+    });
+    for (const item of sent) byUser.set(item.senderId, (byUser.get(item.senderId) ?? new Set()).add(item.clientRequestId!.slice(WELCOME_PREFIX.length)));
+    return byUser;
   }
 
   /**
@@ -141,13 +160,14 @@ export class ChannelMessagesService {
     ]);
     const followsByUser = new Map<string, Set<string>>();
     for (const state of states) followsByUser.set(state.userId, (followsByUser.get(state.userId) ?? new Set()).add(state.rootMessageId));
+    const welcomes = await this.welcomes(rows);
     const owners = new Set(rows.map(m => m.senderId));
     const receiptsByOwner = new Map<string, Map<string, GroupChannelReceiptDto>>();
     for (const owner of owners) if (recipients.some(r => r.userId === owner)) receiptsByOwner.set(owner, await this.receipts(owner, groupId, channel, rows, recipients));
     for (const recipient of recipients) {
       const snapshot = snapshots.get(recipient.userId);
       if (!snapshot) continue;
-      const messages = this.render(recipient.userId, recipient.role, groupId, channel, rows, followsByUser.get(recipient.userId) ?? new Set(), receiptsByOwner.get(recipient.userId) ?? new Map());
+      const messages = this.render(recipient.userId, recipient.role, groupId, channel, rows, followsByUser.get(recipient.userId) ?? new Set(), receiptsByOwner.get(recipient.userId) ?? new Map(), welcomes.get(recipient.userId));
       this.realtime.emitGroupChannelMessages(recipient.userId, { groupId, channel: snapshot, messages });
     }
   }
@@ -197,7 +217,7 @@ export class ChannelMessagesService {
     const attachments: ChannelAttachmentInput[] = input.attachments ?? (input.uploadId ? [{ uploadId: input.uploadId, thumbnailUploadId: input.thumbnailUploadId, alt: input.alt }] : []);
     if (attachments.length > CHANNEL_MAX_ATTACHMENTS || new Set(attachments.map(item => item.uploadId)).size !== attachments.length || (attachments.length && input.giphy)) throw new BadRequestException(`Attach up to ${CHANNEL_MAX_ATTACHMENTS} items.`);
     if ((!body && !attachments.length && !input.giphy) || body.length > 2000) throw new BadRequestException('Write a message of up to 2,000 characters.');
-    const requestHash = createHash('sha256').update(JSON.stringify({ body, threadRootId: input.threadRootId ?? null, uploadId: input.uploadId ?? null, thumbnailUploadId: input.thumbnailUploadId ?? null, alt: input.alt ?? null, giphy: input.giphy ?? null, ...(input.attachments ? { attachments: input.attachments } : {}) })).digest('hex');
+    const requestHash = createHash('sha256').update(JSON.stringify({ body, threadRootId: input.threadRootId ?? null, ...(input.replyToId ? { replyToId: input.replyToId } : {}), uploadId: input.uploadId ?? null, thumbnailUploadId: input.thumbnailUploadId ?? null, alt: input.alt ?? null, giphy: input.giphy ?? null, ...(input.attachments ? { attachments: input.attachments } : {}) })).digest('hex');
     let createdNow = false;
     const message = await this.prisma.$transaction(async tx => {
       await this.access.lockGroup(tx, groupId);
@@ -209,11 +229,16 @@ export class ChannelMessagesService {
       }
       assertChannelSend(channel, member.role);
       const threadRootId = input.threadRootId ? await this.requireRoot(channel.conversationId, input.threadRootId, tx) : null;
+      // Inline quoted reply: the target must be a live message in this same channel.
+      const replyToId = input.replyToId
+        ? (await tx.message.findFirst({ where: { id: input.replyToId, conversationId: channel.conversationId, deletedForAll: false, channelSequence: { not: null } }, select: { id: true } }))?.id ?? null
+        : null;
+      if (input.replyToId && !replyToId) throw new BadRequestException('That message is no longer available to reply to.');
       const uploaded = [];
       for (const item of attachments) uploaded.push({ ...(await this.media.consume(tx, userId, channelId, item.uploadId, item.thumbnailUploadId)), alt: item.alt ?? null });
       const media = uploaded.length ? uploaded : input.giphy ? [{ source: 'giphy' as const, kind: 'gif' as const, ...input.giphy, alt: input.alt ?? null }] : [];
       const updated = await tx.groupChannel.update({ where: { id: channelId }, data: { lastSequence: { increment: 1 }, revision: { increment: 1 } } });
-      const created = await tx.message.create({ data: { conversationId: channel.conversationId, senderId: userId, body, clientRequestId: input.clientRequestId, requestHash, channelRevision: updated.revision, channelSequence: updated.lastSequence, threadRootId, ...(media.length ? { media: { create: media } } : {}) }, include: MESSAGE_INCLUDE });
+      const created = await tx.message.create({ data: { conversationId: channel.conversationId, senderId: userId, body, clientRequestId: input.clientRequestId, requestHash, channelRevision: updated.revision, channelSequence: updated.lastSequence, threadRootId, replyToId, ...(media.length ? { media: { create: media } } : {}) }, include: MESSAGE_INCLUDE });
       if (threadRootId) await tx.message.update({ where: { id: threadRootId }, data: { channelRevision: updated.revision } });
       const rootMessageId = threadRootId ?? created.id;
       await tx.groupChannelThreadState.upsert({ where: { rootMessageId_userId: { rootMessageId, userId } }, create: { rootMessageId, userId, following: true }, update: {} });
@@ -228,6 +253,40 @@ export class ChannelMessagesService {
     if (createdNow && Array.isArray(message.media) && message.media.some(item => item.kind === 'audio')) this.effects.dispatch('media.transcribe.request', { messageId: message.id }, { jobId: `transcribe-${message.id}` });
     if (createdNow) this.effects.dispatch('channel.message.changed', { groupId, channelId, messageId: message.id, edited: false }, { jobId: `channel-send-${message.id}` });
     return result;
+  }
+
+  /**
+   * Records a new member in the group's #general as a `groupJoin` system row. Idempotent per join
+   * time, so queue retries never duplicate it. It is silent: no push, badge, mention or unread dot.
+   */
+  async recordJoin(groupId: string, userId: string, at: string) {
+    if (!this.access.enabled(groupId)) return;
+    const clientRequestId = `join:${at}`;
+    const created = await this.prisma.$transaction(async tx => {
+      await this.access.lockGroup(tx, groupId);
+      const channel = await tx.groupChannel.findUnique({ where: { groupId_defaultPurpose: { groupId, defaultPurpose: 'general' } } });
+      if (!channel || channel.archivedAt) return null;
+      const member = await tx.communityGroupMember.findUnique({ where: { groupId_userId: { groupId, userId } }, include: { user: { select: { bannedAt: true, isBot: true, verifiedStatus: true } } } });
+      if (!member || member.status !== 'active' || member.user.bannedAt || member.user.isBot || member.user.verifiedStatus === 'none') return null;
+      if (await tx.message.findFirst({ where: { conversationId: channel.conversationId, senderId: userId, kind: 'groupJoin', OR: [{ clientRequestId }, { createdAt: { gt: new Date(Date.now() - 60_000) } }] }, select: { id: true } })) return null;
+      const updated = await tx.groupChannel.update({ where: { id: channel.id }, data: { lastSequence: { increment: 1 }, revision: { increment: 1 } } });
+      const message = await tx.message.create({ data: { conversationId: channel.conversationId, senderId: userId, body: '', kind: 'groupJoin', clientRequestId, channelRevision: updated.revision, channelSequence: updated.lastSequence } });
+      return { channelId: channel.id, messageId: message.id };
+    });
+    if (created) await this.broadcast(groupId, created.channelId, created.messageId);
+  }
+
+  /** Welcome button: posts "Welcome, <first name> 🤝" as the viewer (once per join row), then hides the button for them. */
+  async welcome(userId: string, groupId: string, channelId: string, messageId: string) {
+    const { channel } = await this.access.channel(userId, groupId, channelId);
+    const join = await this.prisma.message.findFirst({ where: { id: messageId, conversationId: channel.conversationId, kind: 'groupJoin', deletedForAll: false }, include: { sender: { select: { name: true, username: true } } } });
+    if (!join) throw new NotFoundException('Message unavailable.');
+    if (join.senderId === userId) throw new BadRequestException('You cannot welcome yourself.');
+    const first = join.sender.name?.trim().split(/\s+/)[0] || join.sender.username || 'friend';
+    const message = await this.send(userId, groupId, channelId, { body: `Welcome, ${first} 🤝`, clientRequestId: `${WELCOME_PREFIX}${join.id}` });
+    await this.prisma.$transaction(async tx => { await this.access.lockGroup(tx, groupId); await this.advanceRevision(tx, channelId, join.id); });
+    await this.broadcast(groupId, channelId, join.id);
+    return message;
   }
 
   private async advanceRevision(tx: Prisma.TransactionClient, channelId: string, messageId: string, rootId?: string | null) {
@@ -247,7 +306,7 @@ export class ChannelMessagesService {
       await this.access.lockGroup(tx, groupId);
       const { channel, member } = await this.access.channel(userId, groupId, channelId, tx);
       assertChannelSend(channel, member.role);
-      const message = await tx.message.findFirst({ where: { id: messageId, conversationId: channel.conversationId, senderId: userId, deletedForAll: false } });
+      const message = await tx.message.findFirst({ where: { id: messageId, conversationId: channel.conversationId, senderId: userId, deletedForAll: false, kind: 'text' } });
       if (!message || Date.now() - message.createdAt.getTime() >= 15 * 60_000) throw new ForbiddenException('This message can no longer be edited.');
       await this.advanceRevision(tx, channelId, messageId);
       const hiddenPreviews = message.hiddenPreviews.filter(url => body.includes(url));
@@ -264,7 +323,7 @@ export class ChannelMessagesService {
       await this.access.lockGroup(tx, groupId);
       const { channel, member } = await this.access.channel(userId, groupId, channelId, tx);
       assertChannelSend(channel, member.role);
-      const message = await tx.message.findFirst({ where: { id: messageId, conversationId: channel.conversationId, senderId: userId, deletedForAll: false } });
+      const message = await tx.message.findFirst({ where: { id: messageId, conversationId: channel.conversationId, senderId: userId, deletedForAll: false, kind: 'text' } });
       if (!message) throw new ForbiddenException('Only the author can remove previews.');
       if (!message.body.includes(url)) throw new BadRequestException('That link is not in this message.');
       const rest = message.hiddenPreviews.filter(item => item !== url);

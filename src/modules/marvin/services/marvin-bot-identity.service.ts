@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AppConfigService } from '../../app/app-config.service';
 import { PostsWriteService } from '../../posts-read/posts-write.service';
 import { MARV_BOT_TYPE } from '../marvin.constants';
+import { USER_REF_SELECT } from '../../../common/prisma-selects/user.select';
 
 /**
  * Resolves and (in non-test envs) lazily seeds the Marv bot user.
@@ -77,7 +78,7 @@ export class MarvinBotIdentityService implements OnModuleInit {
     if (cfg.userId) {
       const byId = await this.prisma.user.findUnique({
         where: { id: cfg.userId },
-        select: { id: true, username: true },
+        select: USER_REF_SELECT,
       });
       if (byId) {
         this.cachedUserId = byId.id;

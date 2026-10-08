@@ -1,3 +1,4 @@
+import { findGroupNotificationPreference } from '../viewer/group-membership.queries';
 import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import type { NotificationKind } from '@prisma/client';
@@ -238,10 +239,7 @@ export async function sendKindPushForActorOn(host: NotificationPushService, para
     // Re-check at delivery time: queued pushes may outlive a preference change.
     const activityGroupId = mediaPost?.communityGroupId;
     if (activityGroupId && ['comment', 'mention', 'boost', 'repost', 'followed_post', 'community_group_post'].includes(kind)) {
-      const member = await host.prisma.communityGroupMember.findUnique({
-        where: { groupId_userId: { groupId: activityGroupId, userId: recipientUserId } },
-        select: { notificationPreference: true },
-      });
+      const member = await findGroupNotificationPreference(host.prisma, activityGroupId, recipientUserId);
       if (member?.notificationPreference === 'muted') return;
       if (member?.notificationPreference === 'repliesAndMentions' && kind !== 'comment' && kind !== 'mention') return;
     }

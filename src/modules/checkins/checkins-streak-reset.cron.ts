@@ -12,6 +12,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { crewStreakBrokenPushDelayMs, STREAK_RESET_MINUTE } from './checkin-schedule';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 /**
  * Nightly job that resets checkinStreakDays to 0 for every user who did not
  * check in on the previous ET calendar day (or today). Without this, stale streak
@@ -159,7 +160,7 @@ export class CheckinsStreakResetCron {
         members: {
           select: {
             userId: true,
-            user: { select: { id: true, username: true, name: true } },
+            user: { select: USER_BRIEF_SELECT },
           },
         },
       },
@@ -270,7 +271,7 @@ export class CheckinsStreakResetCron {
         members: {
           select: {
             userId: true,
-            user: { select: { id: true, username: true, name: true } },
+            user: { select: USER_BRIEF_SELECT },
           },
         },
       },

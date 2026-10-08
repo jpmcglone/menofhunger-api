@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
+import { toPage } from '../../common/pagination/page';
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 
 @Injectable()
 export class AdminSearchService {
@@ -39,13 +41,12 @@ export class AdminSearchService {
         query: true,
         createdAt: true,
         user: {
-          select: { id: true, username: true, name: true },
+          select: USER_BRIEF_SELECT,
         },
       },
     });
 
-    const slice = rows.slice(0, limit);
-    const nextCursor = rows.length > limit ? slice[slice.length - 1]?.id ?? null : null;
+    const { items: slice, nextCursor: nextCursor } = toPage(rows, limit, (r) => r.id);
 
     const data = slice.map((r) => ({
       id: r.id,

@@ -5,7 +5,8 @@ import { buildGreeting, getVerifiedRecipientEmail } from '../email/email-send.he
 import { EmailService } from '../email/email.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { chunk, FANOUT_CONCURRENCY, runInBatches } from '../side-effects/batch';
+import { FANOUT_CONCURRENCY, runInBatches } from '../side-effects/batch';
+import { chunk } from '../../common/arrays/chunk';
 import {
   FANOUT_CHUNK_SIZE,
   FANOUT_CHUNK_THRESHOLD,

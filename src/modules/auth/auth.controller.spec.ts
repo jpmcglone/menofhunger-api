@@ -1,14 +1,9 @@
-import { AUTH_COOKIE_NAME } from './auth.constants';
 import { AuthController } from './auth.controller';
-import { CrewInvitesService } from '../crew/crew-invites.service';
-import { GroupInvitesService } from '../groups/group-invites.service';
-import { MessagesService } from '../messages/messages.service';
-import { NotificationsService } from '../notifications/notifications.service';
+import { AuthMeService } from './auth-me.service';
 import { UnauthorizedException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
 import { totalUserArticlesWhere, totalUserPostsWhere } from '../../common/content-counts';
 
-describe('AuthController.me', () => {
+describe('AuthMeService.me', () => {
   it('returns all home-load badge counts in the auth payload', async () => {
     const user = { id: 'user-1', username: 'tester', pinnedPostId: null };
     const auth = {
@@ -32,26 +27,18 @@ describe('AuthController.me', () => {
       post: { count: jest.fn(async () => 978) },
       article: { count: jest.fn(async () => 12) },
     };
-    const moduleRef = {
-      get: jest.fn((token: unknown) => {
-        if (token === NotificationsService) return notifications;
-        if (token === MessagesService) return messages;
-        if (token === CrewInvitesService) return crewInvites;
-        if (token === GroupInvitesService) return groupInvites;
-        if (token === PrismaService) return prisma;
-        return null;
-      }),
-    } as any;
-    const controller = new AuthController(auth, {} as any, moduleRef, {} as any, {
-      describe: jest.fn(async () => null),
-    } as any, {
-      describe: jest.fn(async () => null),
-    } as any);
-
-    const result = await controller.me(
-      { cookies: { [AUTH_COOKIE_NAME]: 'session-token' } } as any,
-      { cookie: jest.fn() } as any,
+    const service = new AuthMeService(
+      auth,
+      { describe: jest.fn(async () => null) } as any,
+      { describe: jest.fn(async () => null) } as any,
+      notifications as any,
+      messages as any,
+      crewInvites as any,
+      groupInvites as any,
+      prisma as any,
     );
+
+    const result = await service.me('session-token', { cookie: jest.fn() } as any);
 
     expect(result.data).toEqual({
       ...user,
@@ -100,24 +87,14 @@ describe('AuthController.me', () => {
         throw new Error('unavailable');
       }),
     };
-    const moduleRef = {
-      get: jest.fn((token: unknown) => {
-        if (token === NotificationsService) return notifications;
-        if (token === MessagesService) return null;
-        if (token === CrewInvitesService) throw new Error('module absent');
-        return null;
-      }),
-    } as any;
-    const controller = new AuthController(auth, {} as any, moduleRef, {} as any, {
-      describe: jest.fn(async () => null),
-    } as any, {
-      describe: jest.fn(async () => null),
-    } as any);
-
-    const result = await controller.me(
-      { cookies: { [AUTH_COOKIE_NAME]: 'session-token' } } as any,
-      {} as any,
+    const service = new AuthMeService(
+      auth,
+      { describe: jest.fn(async () => null) } as any,
+      { describe: jest.fn(async () => null) } as any,
+      notifications as any,
     );
+
+    const result = await service.me('session-token', {} as any);
 
     expect(result.data).toEqual({
       ...user,
@@ -153,15 +130,11 @@ describe('AuthController.me', () => {
         adminAvatarUrl: null,
       })),
     } as any;
-    const moduleRef = { get: jest.fn(() => null) } as any;
-    const controller = new AuthController(auth, {} as any, moduleRef, {} as any, impersonation, {
+    const service = new AuthMeService(auth, impersonation, {
       describe: jest.fn(async () => null),
     } as any);
 
-    const result = await controller.me(
-      { cookies: { [AUTH_COOKIE_NAME]: 'session-token' } } as any,
-      {} as any,
-    );
+    const result = await service.me('session-token', {} as any);
 
     expect(impersonation.describe).toHaveBeenCalledWith('admin-1');
     expect(result.data?.impersonation).toEqual({

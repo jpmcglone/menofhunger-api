@@ -11,6 +11,7 @@ import { PosthogService } from "../../common/posthog/posthog.service";
 import { totalUserArticlesWhere, totalUserBoardPoints, totalUserPostsWhere } from "../../common/content-counts";
 import { PostsReadService } from '../posts-read/posts-read.service';
 import { MENTION_USER_SELECT } from '../../common/prisma-selects/user.select';
+import { findActiveCrewIdForUser } from '../viewer/crew-membership.queries';
 
 const PREVIEW_BATCH_MAX = 50;
 const previewBatchSchema = z.object({
@@ -342,10 +343,7 @@ export class UsersPublicProfileService {
         ? this.publicProfiles.batchOrgAffiliations([profileId])
         : Promise.resolve(new Map()),
       profileId
-        ? this.prisma.crewMember.findFirst({
-            where: { userId: profileId, crew: { deletedAt: null } },
-            select: { crewId: true },
-          })
+        ? findActiveCrewIdForUser(this.prisma, profileId)
         : Promise.resolve(null),
       profileId
         ? this.postsRead.read.count({ where: totalUserPostsWhere(profileId) })

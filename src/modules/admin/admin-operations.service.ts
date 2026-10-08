@@ -8,6 +8,7 @@ import type {
   AdminMemberDiagnosticsDto,
   AdminOperationsContentDto,
 } from "../../common/dto/admin-operations.dto";
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 
 export const adminOperationsIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/);
 export const adminOperationsContentSchema = z
@@ -207,7 +208,7 @@ export class AdminOperationsService {
         boostCount: true,
         kind: true,
         boardThread: { select: { title: true, url: true, tags: true } },
-        user: { select: { id: true, username: true, name: true } },
+        user: { select: USER_BRIEF_SELECT },
       },
     });
     const page = rows.slice(0, input.limit);

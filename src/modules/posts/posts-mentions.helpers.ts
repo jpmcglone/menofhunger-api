@@ -1,4 +1,5 @@
 import type { PrismaService } from '../prisma/prisma.service';
+import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 
 /**
  * Mention-username resolution shared by post create/update and draft flows.
@@ -23,7 +24,7 @@ export async function resolveMentionUsernamesMap(
       bannedAt: null,
       OR: normalized.map((u) => ({ username: { equals: u, mode: 'insensitive' as const } })),
     },
-    select: { id: true, username: true },
+    select: USER_REF_SELECT,
   });
   const byLower = new Map<string, string>();
   for (const u of users) {

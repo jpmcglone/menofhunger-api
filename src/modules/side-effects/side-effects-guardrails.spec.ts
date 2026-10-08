@@ -77,7 +77,7 @@ const ALLOWED_DIRECT_NOTIFICATION_USERS: Record<string, string> = {
   'modules/post-views/post-views.service.ts': 'marks the viewer\u2019s own notifications read',
   'modules/article-views/article-views.service.ts': 'marks the viewer\u2019s own notifications read',
   // Read-only badge counts assembled for the /auth/me payload.
-  'modules/auth/auth.controller.ts': 'reads undelivered counts for the session payload',
+  'modules/auth/auth-me.service.ts': 'reads undelivered counts for the session payload',
   // The notifications module's own HTTP surface (read + read-state endpoints).
   'modules/notifications/notifications.controller.ts': 'the notifications read/read-state API',
   // Admin-only test-push tool: sends directly to the requesting admin's own devices, no

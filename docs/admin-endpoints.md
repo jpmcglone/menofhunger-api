@@ -79,10 +79,10 @@ The companion [experience review](admin-experience.md) records assistant actions
 | PATCH /v1/admin/marvin/users/:userId | marv | [source](../src/modules/marvin/marvin.controller.ts#L233) |
 | GET /v1/admin/marvin/users/:userId/context-card | marv | [source](../src/modules/marvin/marvin.controller.ts#L262) |
 | POST /v1/admin/marvin/users/:userId/context-card/regenerate | marv | [source](../src/modules/marvin/marvin.controller.ts#L275) |
-| GET /v1/admin/media-review | media-review | [source](../src/modules/admin/admin-image-review.controller.ts#L34) |
-| DELETE /v1/admin/media-review/:assetId | media-review | [source](../src/modules/admin/admin-image-review.controller.ts#L63) |
-| GET /v1/admin/media-review/:assetId | media-review | [source](../src/modules/admin/admin-image-review.controller.ts#L49) |
-| POST /v1/admin/media-review/bulk-delete | media-review | [source](../src/modules/admin/admin-image-review.controller.ts#L55) |
+| GET /v1/admin/media-review | media-review | [source](../src/modules/admin/admin-image-review.controller.ts#L35) |
+| DELETE /v1/admin/media-review/:assetId | media-review | [source](../src/modules/admin/admin-image-review.controller.ts#L64) |
+| GET /v1/admin/media-review/:assetId | media-review | [source](../src/modules/admin/admin-image-review.controller.ts#L50) |
+| POST /v1/admin/media-review/bulk-delete | media-review | [source](../src/modules/admin/admin-image-review.controller.ts#L56) |
 | GET /v1/admin/newsletters | newsletters | [source](../src/modules/admin/admin-newsletters.controller.ts#L43) |
 | POST /v1/admin/newsletters | newsletters | [source](../src/modules/admin/admin-newsletters.controller.ts#L78) |
 | GET /v1/admin/newsletters/:id | newsletters | [source](../src/modules/admin/admin-newsletters.controller.ts#L83) |

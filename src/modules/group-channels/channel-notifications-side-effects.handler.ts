@@ -12,6 +12,7 @@ import { CacheService } from '../redis/cache.service';
 import { RedisKeys } from '../redis/redis-keys';
 import { ChannelAccessService } from './channel-access.service';
 import { ChannelViewingService } from './channel-viewing.service';
+import { ChannelMessagesService } from './channel-messages.service';
 
 /** Post-commit channel push and badge fan-out. */
 @Injectable()
@@ -27,11 +28,13 @@ export class ChannelNotificationsSideEffectsHandler implements OnModuleInit {
     private readonly viewing: ChannelViewingService,
     private readonly groupEmail: GroupEmailService,
     private readonly presence: PresenceRedisStateService,
+    private readonly messages: ChannelMessagesService,
   ) {}
 
   onModuleInit() {
     this.registry.register('channel.message.changed', p => this.messageChanged(p));
     this.registry.register('channel.member.added', p => this.memberAdded(p));
+    this.registry.register('channel.member.joined', p => this.messages.recordJoin(p.groupId, p.userId, p.at));
   }
 
   private async eligible(userId: string, input: SideEffectPayloads['channel.message.changed']) {

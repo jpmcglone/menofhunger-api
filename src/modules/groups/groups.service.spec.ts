@@ -146,6 +146,10 @@ describe('GroupsService.join — join policy', () => {
       'group.member.joined',
       expect.objectContaining({ groupId: 'g1', joinerUserId: 'u1' }),
     );
+    expect(sideEffects.dispatch).toHaveBeenCalledWith(
+      'channel.member.joined',
+      expect.objectContaining({ groupId: 'g1', userId: 'u1', at: expect.any(String) }),
+    );
   });
 });
 

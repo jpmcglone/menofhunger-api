@@ -1,3 +1,5 @@
+import type { Prisma } from '@prisma/client';
+
 /**
  * Centralized Prisma selects for public user payloads.
  *
@@ -144,3 +146,36 @@ export const VERIFICATION_ADMIN_USER_SELECT = {
   verifiedAt: true,
   unverifiedAt: true,
 } as const;
+
+/** Minimal user reference: id + handle. */
+export const USER_REF_SELECT = {
+  id: true,
+  username: true,
+} as const satisfies Prisma.UserSelect;
+
+/** Brief user summary: id, handle, display name. */
+export const USER_BRIEF_SELECT = {
+  id: true,
+  username: true,
+  name: true,
+} as const satisfies Prisma.UserSelect;
+
+/** Avatar fields shared by every payload that renders a user avatar. */
+export const USER_AVATAR_SELECT = {
+  avatarKey: true,
+  avatarVideoKey: true,
+  avatarVideoDurationMs: true,
+  avatarUpdatedAt: true,
+} as const satisfies Prisma.UserSelect;
+
+/** User reference with avatar media. */
+export const USER_AVATAR_BRIEF_SELECT = {
+  id: true,
+  username: true,
+  ...USER_AVATAR_SELECT,
+} as const satisfies Prisma.UserSelect;
+
+/** Nested relation select: `user: userSelect(USER_BRIEF_SELECT)` -> `{ select: ... }`. */
+export function selectUser<S extends Prisma.UserSelect>(select: S): { select: S } {
+  return { select };
+}

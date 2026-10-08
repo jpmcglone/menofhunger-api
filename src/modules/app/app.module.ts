@@ -17,6 +17,7 @@ import { RequestCacheModule } from '../../common/cache/request-cache.module';
 import { HealthModule } from '../health/health.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
+import { AuthMeModule } from '../auth/auth-me.module';
 import { UsersModule } from '../users/users.module';
 import { AdminModule } from '../admin/admin.module';
 import { UploadsModule } from '../uploads/uploads.module';
@@ -127,6 +128,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     HealthModule,
     PrismaModule,
     AuthModule,
+    AuthMeModule,
     UsersModule,
     VerificationModule,
     McpModule,

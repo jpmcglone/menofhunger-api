@@ -8,6 +8,7 @@ import { inferTopicsFromText } from '../../common/topics/topic-utils';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { notDeletedWhere } from './posts-query-builders';
 import { resolveMentionUsernames } from './posts-mentions.helpers';
+import { toPage } from '../../common/pagination/page';
 
 type DraftMediaInput = {
   source: 'upload' | 'giphy';
@@ -82,8 +83,7 @@ export class PostsDraftsService {
       take: limit + 1,
     });
 
-    const slice = rows.slice(0, limit);
-    const nextCursor = rows.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
+    const { items: slice, nextCursor: nextCursor } = toPage(rows, limit, (r) => r.id);
     return { posts: slice, nextCursor };
   }
 

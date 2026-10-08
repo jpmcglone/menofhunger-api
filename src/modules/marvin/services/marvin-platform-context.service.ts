@@ -4,6 +4,7 @@ import { marvChannelSourceWhere } from '../../group-channels/channel-marv-scope.
 import { PostsPublicRecordService } from '../../posts/posts-public-record.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MARV_PUBLIC_KNOWLEDGE } from '../marvin-prompt-instructions';
+import { clampLimit } from '../../../common/pagination/page';
 
 /** Where this reply is being delivered. The model never supplies these ids. */
 export type MarvPlatformScope = {
@@ -124,7 +125,7 @@ export class MarvinPlatformContextService {
         author: { bannedAt: null },
       },
       orderBy: { publishedAt: 'desc' },
-      take: clamp(limit),
+      take: clampLimit(limit, { default: 5, max: 8 }),
       select: { title: true, excerpt: true, publishedAt: true, author: { select: { username: true } } },
     });
     return {
@@ -137,7 +138,7 @@ export class MarvinPlatformContextService {
   }
 
   async listBoard(limit = BOARD): Promise<{ threads: BoardRow[] }> {
-    const rows = await this.postsRecord.recentBoardThreads(clamp(limit));
+    const rows = await this.postsRecord.recentBoardThreads(clampLimit(limit, { default: 5, max: 8 }));
     return {
       threads: rows.map((row) => ({
         author: row.author,
@@ -149,7 +150,7 @@ export class MarvinPlatformContextService {
   }
 
   async listGroupFeed(groupId: string, limit = GROUP_POSTS): Promise<{ posts: PublicPostRow[] }> {
-    return { posts: await this.postsRecord.recentGroupPosts(groupId, clamp(limit)) };
+    return { posts: await this.postsRecord.recentGroupPosts(groupId, clampLimit(limit, { default: 5, max: 8 })) };
   }
 
   /**
@@ -259,7 +260,3 @@ function toChannelLine(row: {
   };
 }
 
-function clamp(limit: number): number {
-  if (!Number.isFinite(limit)) return 5;
-  return Math.min(8, Math.max(1, Math.trunc(limit)));
-}

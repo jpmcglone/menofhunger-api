@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { ChannelAccessService } from './channel-access.service';
 import { isChannelLeader } from './channel-policy';
+import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 
 /** A message right after Marv's own is read as a follow-up to him for this long. */
 const CONVERSATION_WINDOW_MS = 10 * 60_000;
@@ -32,7 +33,7 @@ export class ChannelMarvScopeService {
   private enabled(groupId: string) { return this.access.enabled(groupId) && this.config.marvBot().enabled; }
   private bot(db: Prisma.TransactionClient = this.prisma) {
     const configured = this.config.marvBot();
-    return db.user.findFirst({ where: { ...(configured.userId ? { id: configured.userId } : { username: { equals: configured.username, mode: 'insensitive' as const } }), isBot: true, botType: 'marvin', bannedAt: null }, select: { id: true, username: true } });
+    return db.user.findFirst({ where: { ...(configured.userId ? { id: configured.userId } : { username: { equals: configured.username, mode: 'insensitive' as const } }), isBot: true, botType: 'marvin', bannedAt: null }, select: USER_REF_SELECT });
   }
   /**
    * Group members reach every normal channel, and Marv is a group member. Only a private channel needs

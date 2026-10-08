@@ -1,3 +1,4 @@
+import { isSiteAdminUser } from '../viewer/site-admin';
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 import { ApiTags } from '@nestjs/swagger';
@@ -10,17 +11,16 @@ import { GroupInvitesService } from './group-invites.service';
 import { UserLookupService } from '../user-lookup/user-lookup.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { queryBoolean } from '../../common/validation/query-boolean';
+import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
 
-const feedQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
+const feedQuerySchema = cursorPageQuerySchema().extend({
+  
   sort: z.enum(['new', 'trending']).optional(),
   topLevelOnly: queryBoolean().optional(),
 });
 
-const mediaQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
+const mediaQuerySchema = cursorPageQuerySchema().extend({
+  
   sort: z.enum(['new', 'trending']).optional(),
 });
 
@@ -28,9 +28,8 @@ const myHubFeedQuerySchema = feedQuerySchema.extend({
   groupId: z.string().trim().min(1).max(40).optional(),
 });
 
-const membersQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
+const membersQuerySchema = cursorPageQuerySchema().extend({
+  
   q: z.string().trim().max(80).optional(),
 });
 
@@ -275,10 +274,10 @@ export class GroupsController {
   @Patch(':groupId')
   async update(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Body() body: unknown) {
     const parsed = updateGroupSchema.parse(body);
-    const u = await this.users.findById(viewerUserId, { siteAdmin: true });
+    const isSiteAdmin = await isSiteAdminUser(this.users, viewerUserId);
     return await this.groups.updateGroup({
       viewerUserId,
-      isSiteAdmin: Boolean(u?.siteAdmin),
+      isSiteAdmin,
       groupId,
       ...parsed,
     });
@@ -291,8 +290,8 @@ export class GroupsController {
   @Post(':groupId/delete')
   async deleteGroup(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Body() body: unknown) {
     const { confirmName } = z.object({ confirmName: z.string().trim().min(1).max(200) }).parse(body);
-    const u = await this.users.findById(viewerUserId, { siteAdmin: true });
-    return { data: await this.groups.deleteGroup({ viewerUserId, isSiteAdmin: Boolean(u?.siteAdmin), groupId, confirmName }) };
+    const isSiteAdmin = await isSiteAdminUser(this.users, viewerUserId);
+    return { data: await this.groups.deleteGroup({ viewerUserId, isSiteAdmin, groupId, confirmName }) };
   }
 
   @UseGuards(AuthGuard)
@@ -349,10 +348,10 @@ export class GroupsController {
     @Param('groupId') groupId: string,
     @Param('postId') postId: string,
   ) {
-    const u = await this.users.findById(viewerUserId, { siteAdmin: true });
+    const isSiteAdmin = await isSiteAdminUser(this.users, viewerUserId);
     return await this.groups.pinPost({
       viewerUserId,
-      isSiteAdmin: Boolean(u?.siteAdmin),
+      isSiteAdmin,
       groupId,
       postId,
     });
@@ -364,10 +363,10 @@ export class GroupsController {
   })
   @Delete(':groupId/pin')
   async unpinPost(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string) {
-    const u = await this.users.findById(viewerUserId, { siteAdmin: true });
+    const isSiteAdmin = await isSiteAdminUser(this.users, viewerUserId);
     return await this.groups.unpinGroupPost({
       viewerUserId,
-      isSiteAdmin: Boolean(u?.siteAdmin),
+      isSiteAdmin,
       groupId,
     });
   }
@@ -399,10 +398,10 @@ export class GroupsController {
   @UseGuards(AuthGuard)
   @Post(':groupId/members/:userId/promote-moderator')
   async promote(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
-    const u = await this.users.findById(viewerUserId, { siteAdmin: true });
+    const isSiteAdmin = await isSiteAdminUser(this.users, viewerUserId);
     return await this.groups.promoteModerator({
       viewerUserId,
-      isSiteAdmin: Boolean(u?.siteAdmin),
+      isSiteAdmin,
       groupId,
       userId,
     });
@@ -417,10 +416,10 @@ export class GroupsController {
   @UseGuards(AuthGuard)
   @Post(':groupId/members/:userId/demote-moderator')
   async demote(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
-    const u = await this.users.findById(viewerUserId, { siteAdmin: true });
+    const isSiteAdmin = await isSiteAdminUser(this.users, viewerUserId);
     return await this.groups.demoteModerator({
       viewerUserId,
-      isSiteAdmin: Boolean(u?.siteAdmin),
+      isSiteAdmin,
       groupId,
       userId,
     });

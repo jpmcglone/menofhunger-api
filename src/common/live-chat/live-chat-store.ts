@@ -1,3 +1,5 @@
+import { clampInt } from '../numbers/clamp';
+
 type RoomState<M> = {
   seq: number;
   messages: M[];
@@ -31,11 +33,6 @@ export const DEFAULT_LIVE_CHAT_LIMITS: LiveChatLimits = {
   refillMsPerToken: 900, // ~0.9s per message steady-state
   minGapMs: 450, // prevent ultra-fast spam
 };
-
-function clampInt(n: number, min: number, max: number): number {
-  if (!Number.isFinite(n)) return min;
-  return Math.max(min, Math.min(max, Math.floor(n)));
-}
 
 /** Live chat is single-line. Collapse whitespace and strip control chars. */
 export function normalizeLiveChatBody(raw: string): string {

@@ -6,6 +6,7 @@ import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { BillingService } from './billing.service';
 import { ReferralService } from './referral.service';
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 
 /**
  * Billing side effects: sends a bell notification when the user's premium access
@@ -82,7 +83,7 @@ export class BillingSideEffectsHandler implements OnModuleInit {
   private async notifyReferralBonus(recruitId: string, recruiterId: string): Promise<void> {
     const people = await this.prisma.user.findMany({
       where: { id: { in: [recruitId, recruiterId] } },
-      select: { id: true, username: true, name: true },
+      select: USER_BRIEF_SELECT,
     });
     const label = (id: string) => {
       const person = people.find((p) => p.id === id);

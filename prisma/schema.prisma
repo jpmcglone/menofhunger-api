@@ -237,6 +237,8 @@ enum MessageParticipantRole {
 enum MessageKind {
   text
   call
+  /// System row in a group's #general: the sender joined the group. Body is empty.
+  groupJoin
 }
 
 enum EmailActionTokenPurpose {

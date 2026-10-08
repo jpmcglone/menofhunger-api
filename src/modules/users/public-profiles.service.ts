@@ -13,6 +13,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { PublicProfileCacheService } from "./public-profile-cache.service";
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { findActiveCrewIdForUser } from '../viewer/crew-membership.queries';
 export type PublicProfilePayload = {
   id: string;
   createdAt: string;
@@ -385,10 +386,7 @@ export class PublicProfilesService {
     const [orgMap, crewMember, postCount, articleCount, boardPoints] =
       await Promise.all([
         this.batchOrgAffiliations([payload.id]),
-        this.prisma.crewMember.findFirst({
-          where: { userId: payload.id, crew: { deletedAt: null } },
-          select: { crewId: true },
-        }),
+        findActiveCrewIdForUser(this.prisma, payload.id),
         this.postsRead.read.count({ where: totalUserPostsWhere(payload.id) }),
         this.prisma.article.count({
           where: totalUserArticlesWhere(payload.id),

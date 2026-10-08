@@ -1,10 +1,12 @@
 ---
-description: Spaces / Watch Party gateway architecture for PresenceGateway. Read when working on watch party sync, owner socket tracking, presence.gateway.ts, or WatchPartyStateService.
-globs: "src/modules/presence/presence.gateway.ts,src/modules/spaces/watch-party-state.service.ts,src/modules/spaces/spaces-presence.service.ts"
+description: Spaces / Watch Party gateway architecture. Read when working on watch party sync, owner socket tracking, gateway-spaces.handler.ts, or WatchPartyStateService.
+globs: "src/modules/presence/presence.gateway.ts,src/modules/presence/gateway/gateway-spaces.handler.ts,src/modules/spaces/watch-party-state.service.ts,src/modules/spaces/spaces-presence.service.ts"
 alwaysApply: false
 ---
 
 # Spaces / Watch Party Gateway Model
+
+`SpacesGatewayHandler` in `gateway-spaces.handler.ts` owns the maps and re-election. `PresenceGateway` delegates `handleSpacesAnnounceMode` and the join, leave, and disconnect paths to it.
 
 ## Owner socket tracking (two maps, different purposes)
 

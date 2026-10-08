@@ -7,6 +7,7 @@ import { PublicProfileCacheService } from "./public-profile-cache.service";
 import type { PublicProfilePayload } from "./public-profiles.service";
 import { UsersMeRealtimeService } from "./users-me-realtime.service";
 import { UsersPublicRealtimeService } from "./users-public-realtime.service";
+import { normalizeTag } from '../../common/text/normalize';
 
 const settingsSchema = z.object({
   followVisibility: z.enum(["all", "verified", "premium", "none"]).optional(),
@@ -21,17 +22,6 @@ const taxonomyPreferencesSchema = z.object({
   termIds: z.array(z.string().trim().min(1)).max(30).optional(),
   slugs: z.array(z.string().trim().min(1).max(80)).max(30).optional(),
 });
-
-function normalizeTag(raw: string): string {
-  return raw
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s-]/g, "")
-    .replace(/[\s_]+/g, "-")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .substring(0, 50);
-}
 
 /** Viewer feed preferences and settings. */
 @Injectable()
