@@ -38,25 +38,33 @@ export class MarvinImageNoteService {
   private async eligibleMedia(postId: string): Promise<Array<{ r2Key: string; imageUrl: string }>> {
     const id = (postId ?? '').trim();
     if (!id) return [];
-    const post = await this.prisma.post.findFirst({
-      where: { id, deletedAt: null, isDraft: false, kind: { not: 'repost' }, visibility: { not: 'onlyMe' } },
-      select: {
-        body: true,
-        hashtags: true,
-        media: {
-          where: { deletedAt: null, source: 'upload', kind: { in: ['image', 'video'] } },
-          select: { kind: true, source: true, r2Key: true, url: true, thumbnailR2Key: true },
-          orderBy: { position: 'asc' },
-          take: 8,
-        },
+    // Read through the media relation so the posts table stays owned by the posts module.
+    const rows = await this.prisma.postMedia.findMany({
+      where: {
+        postId: id,
+        deletedAt: null,
+        source: 'upload',
+        kind: { in: ['image', 'video'] },
+        post: { deletedAt: null, isDraft: false, kind: { not: 'repost' }, visibility: { not: 'onlyMe' } },
       },
+      select: {
+        kind: true,
+        source: true,
+        r2Key: true,
+        url: true,
+        thumbnailR2Key: true,
+        post: { select: { body: true, hashtags: true } },
+      },
+      orderBy: { position: 'asc' },
+      take: 8,
     });
+    const post = rows[0]?.post;
     if (!post) return [];
     if ((post.body ?? '').trim().length >= IMAGE_NOTE_MAX_BODY_CHARS || (post.hashtags ?? []).length > 0) return [];
 
     const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const out: Array<{ r2Key: string; imageUrl: string }> = [];
-    for (const media of post.media) {
+    for (const media of rows) {
       const r2Key = media.kind === 'video' ? media.thumbnailR2Key : media.r2Key;
       const imageUrl = resolveMarvVisionUrl(media, baseUrl);
       if (r2Key && imageUrl) out.push({ r2Key, imageUrl });

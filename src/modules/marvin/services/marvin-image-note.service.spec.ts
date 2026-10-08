@@ -13,7 +13,12 @@ function post(over: Record<string, unknown> = {}) {
 
 function make(opts: { post?: unknown; notes?: string[]; created?: number } = {}) {
   const prisma: any = {
-    post: { findFirst: jest.fn(async () => (opts.post === undefined ? post() : opts.post)) },
+    postMedia: {
+      findMany: jest.fn(async () => {
+        const p: any = opts.post === undefined ? post() : opts.post;
+        return p ? p.media.map((m: any) => ({ ...m, post: { body: p.body, hashtags: p.hashtags } })) : [];
+      }),
+    },
     mediaSearchNote: {
       findMany: jest.fn(async () => (opts.notes ?? []).map((r2Key) => ({ r2Key }))),
       createMany: jest.fn(async () => ({ count: opts.created ?? 1 })),
@@ -31,9 +36,9 @@ describe('MarvinImageNoteService.candidateForPost', () => {
     const { svc, prisma } = make();
     await expect(svc.candidateForPost('p1', viewing)).resolves.toEqual({ r2Key: 'posts/a.jpg', postId: 'p1', imageUrl: viewing[0] });
     // Only uploads that are images or videos are even loaded; GIFs and provider media never qualify.
-    expect(prisma.post.findFirst.mock.calls[0][0].select.media.where).toMatchObject({ source: 'upload', kind: { in: ['image', 'video'] } });
+    expect(prisma.postMedia.findMany.mock.calls[0][0].where).toMatchObject({ source: 'upload', kind: { in: ['image', 'video'] } });
     // Private posts, drafts, deleted posts and reposts are filtered by the query.
-    expect(prisma.post.findFirst.mock.calls[0][0].where).toMatchObject({ deletedAt: null, isDraft: false, visibility: { not: 'onlyMe' } });
+    expect(prisma.postMedia.findMany.mock.calls[0][0].where.post).toMatchObject({ deletedAt: null, isDraft: false, visibility: { not: 'onlyMe' } });
   });
 
   it('uses a video poster key and URL', async () => {
