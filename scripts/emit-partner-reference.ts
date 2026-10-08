@@ -9,13 +9,14 @@ import { PartnerController, PartnerGuard } from '../src/modules/partner/partner.
 import { PartnerReadService } from '../src/modules/partner/partner-read.service';
 import { PartnerRateService } from '../src/modules/partner/partner-rate.service';
 import { PartnerOAuthService } from '../src/modules/partner/partner-oauth.service';
+import { PartnerAccessService } from '../src/modules/partner/partner-access.service';
 import { PrismaService } from '../src/modules/prisma/prisma.service';
 import { RedisService } from '../src/modules/redis/redis.service';
 import { AppConfigService } from '../src/modules/app/app-config.service';
-@Module({ controllers: [PartnerController], providers: [PartnerReadService, PartnerRateService, PartnerOAuthService, RedisService, AppConfigService, PrismaService].map(provide => ({ provide, useValue: {} })).concat([{ provide: PartnerGuard as any, useValue: {} }]) })
+@Module({ controllers: [PartnerController], providers: [PartnerReadService, PartnerRateService, PartnerOAuthService, PartnerAccessService, RedisService, AppConfigService, PrismaService].map(provide => ({ provide, useValue: {} })).concat([{ provide: PartnerGuard as any, useValue: {} }]) })
 class ReferenceModule {}
 async function main() {
-  const app = await NestFactory.create(ReferenceModule, { logger: false });
+  const app = await NestFactory.create(ReferenceModule, { logger: false, abortOnError: false });
   try {
     app.setGlobalPrefix('v1');
     const doc = SwaggerModule.createDocument(app, new DocumentBuilder().setTitle('Men of Hunger Partner API').setVersion('1').addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'opaque' }, 'partner').build());
