@@ -24,8 +24,8 @@ import { PrismaService } from "../prisma/prisma.service";
 import { XApiClient, XApiError } from "./x-api.client";
 import { XConnectionService, monthStartUtc } from "./x-connection.service";
 
-import { PostsReadService } from '../posts-read/posts-read.service';
-import { PostsWriteService } from '../posts-read/posts-write.service';
+import { PostsReadService } from "../posts-read/posts-read.service";
+import { PostsWriteService } from "../posts-read/posts-write.service";
 export type XQueueResult =
   | { status: "queued"; mode: CrosspostMode }
   | { status: "skipped"; reason: string };
@@ -170,7 +170,9 @@ export class XCrosspostService {
   }
 
   private boardLinkText(id: string, title?: string | null): string {
-    const base = (this.appConfig.frontendBaseUrl() ?? "https://menofhunger.com").replace(/\/+$/, "");
+    const base = (
+      this.appConfig.frontendBaseUrl() ?? "https://menofhunger.com"
+    ).replace(/\/+$/, "");
     return `${(title ?? "").trim()}\n${base}/b/${encodeURIComponent(id)}`.trim();
   }
 
@@ -189,7 +191,8 @@ export class XCrosspostService {
     if (post.kind === "board") {
       const boardReason = linkBlocker(post);
       const text = this.boardLinkText(postId, post.boardTitle);
-      const reason = boardReason ?? (xWeightedLength(text) > 280 ? "too_long" : null);
+      const reason =
+        boardReason ?? (xWeightedLength(text) > 280 ? "too_long" : null);
       if (reason) {
         await this.fail("post", postId, post.userId, xBlockerMessage(reason));
         return;
@@ -748,6 +751,7 @@ export class XCrosspostService {
         publicationCount: 1,
       });
     let paidRequestStarted = false;
+    let billableMediaAccepted = false;
     try {
       const token = await this.freshToken(userId, conn.generation);
       if (sharedBudget)
@@ -759,6 +763,7 @@ export class XCrosspostService {
         );
       await this.budgets.settle(ledgerId, "uncertain");
       paidRequestStarted = true;
+      billableMediaAccepted = media.some((item) => !item.deletedAt);
       const mediaIds = await this.uploadImages(token, media);
       const remoteId = await this.api.createPost(token, {
         text: text || " ",
@@ -793,10 +798,21 @@ export class XCrosspostService {
       this.announce(kind, localId, userId, { xUrl }, true);
       await this.connections.clearError(userId);
     } catch (err) {
-      if (!paidRequestStarted)
+      const retryLater =
+        err instanceof XApiError && err.isRetryable && !sharedBudget;
+      // A 4xx before any media upload is a finished rejection: X did not create
+      // the post. Timeouts, 5xx, and uploaded media stay held for review.
+      const knownRejection =
+        !billableMediaAccepted &&
+        !retryLater &&
+        err instanceof XApiError &&
+        !err.duplicateRisk &&
+        err.status >= 400 &&
+        err.status < 500;
+      if (!paidRequestStarted || knownRejection)
         await this.budgets.settle(ledgerId, "released", 0);
       const message = err instanceof Error ? err.message : String(err);
-      if (err instanceof XApiError && err.isRetryable && !sharedBudget) {
+      if (retryLater) {
         this.logger.warn(`X ${kind} ${localId} will retry: ${message}`);
         throw err;
       }
@@ -1035,6 +1051,10 @@ export class XCrosspostService {
     });
     if (!post) return null;
     const { poll, boardThread, ...rest } = post;
-    return { ...rest, boardTitle: boardThread?.title ?? null, hasPoll: Boolean(poll) };
+    return {
+      ...rest,
+      boardTitle: boardThread?.title ?? null,
+      hasPoll: Boolean(poll),
+    };
   }
 }

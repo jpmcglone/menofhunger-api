@@ -1,9 +1,10 @@
 import { X_NATIVE_COST_MICROS } from "../../common/crosspost/crosspost-eligibility";
+import { X_REFERENCE_PRICES } from "./integration-budget.policy";
 import { XApiError } from "./x-api.client";
 import { XCrosspostService } from "./x-crosspost.service";
 
-import { PostsReadService } from '../posts-read/posts-read.service';
-import { PostsWriteService } from '../posts-read/posts-write.service';
+import { PostsReadService } from "../posts-read/posts-read.service";
+import { PostsWriteService } from "../posts-read/posts-write.service";
 type Row = Record<string, unknown> | null;
 
 function postRow(overrides: Record<string, unknown> = {}) {
@@ -32,6 +33,7 @@ function harness(
     premium?: boolean;
     spent?: number;
     connected?: boolean;
+    sharedBudget?: boolean;
   } = {},
 ) {
   let row: Row = null;
@@ -107,7 +109,13 @@ function harness(
   };
   const appConfig = {
     xArticle: () => ({ enabled: false, accountIds: [] }),
-    integrationBudget: () => ({ enabled: false }),
+    integrationBudget: () =>
+      opts.sharedBudget
+        ? {
+            enabled: true,
+            priceVersion: X_REFERENCE_PRICES.version,
+          }
+        : { enabled: false },
     partner: () => ({ xCountAllowance: false }),
     x: () => ({
       clientId: "id",
@@ -124,15 +132,27 @@ function harness(
     emitArticlesLiveUpdated: jest.fn(),
     emitArticlesLiveUpdatedToUser: jest.fn(),
   };
-  const budgets = { recordLegacy: jest.fn(), settle: jest.fn() };
-  const service = new XCrosspostService(prisma as never,
+  const budgets = {
+    recordLegacy: jest.fn(),
+    settle: jest.fn(),
+    reserve: jest.fn(async () => true),
+  };
+  const service = new XCrosspostService(
+    prisma as never,
     { ensure: async () => sideEffects.dispatch("outbound.deliver") } as never,
-    { settle: jest.fn(), reserve: jest.fn(async () => true) } as never,
+    {
+      settle: jest.fn(),
+      reserve: jest.fn(async () => true),
+      recordShared: jest.fn(),
+    } as never,
     appConfig as never,
     connections as never,
     api as never,
     realtime as never,
-    budgets as never, new PostsReadService(prisma as never as never), new PostsWriteService(prisma as never as never));
+    budgets as never,
+    new PostsReadService(prisma as never as never),
+    new PostsWriteService(prisma as never as never),
+  );
   return {
     service,
     prisma,
@@ -282,6 +302,43 @@ describe("X cross-post worker", () => {
         patch: { xError: "Delivery is uncertain. Check X before retrying." },
       }),
     );
+  });
+
+  it("releases a text-only shared-budget hold when X rejects the post", async () => {
+    const h = harness({ sharedBudget: true });
+    await h.service.requestPostCrosspost("user-1", "post-1", "native");
+    h.api.createPost.mockRejectedValueOnce(
+      new XApiError(403, "request_failed", "Duplicate content."),
+    );
+    await h.service.syncPost("post-1");
+    expect(h.row()?.remoteId).toBeNull();
+    expect(h.row()?.refundedAt).toBeInstanceOf(Date);
+    expect(h.budgets.settle).toHaveBeenCalledWith("x:post:post-1", "uncertain");
+    expect(h.budgets.settle).toHaveBeenCalledWith(
+      "x:post:post-1",
+      "released",
+      0,
+    );
+    expect(h.budgets.settle).not.toHaveBeenCalledWith(
+      "x:post:post-1",
+      "settled",
+    );
+  });
+
+  it("keeps a shared-budget hold when the create times out", async () => {
+    const h = harness({ sharedBudget: true });
+    await h.service.requestPostCrosspost("user-1", "post-1", "native");
+    h.api.createPost.mockRejectedValueOnce(
+      new XApiError(0, "network_error", "timed out", true),
+    );
+    await h.service.syncPost("post-1");
+    expect(h.budgets.settle).toHaveBeenCalledWith("x:post:post-1", "uncertain");
+    expect(h.budgets.settle).not.toHaveBeenCalledWith(
+      "x:post:post-1",
+      "released",
+      0,
+    );
+    expect(h.row()?.refundedAt).toBeNull();
   });
 
   it("rethrows a server error so the queue can retry", async () => {

@@ -98,6 +98,7 @@ export class IntegrationOperationsService implements OnModuleInit {
       bucket: "reserve",
     });
     conditions.push(...spendingAlerts(totals, policy));
+    await this.releaseRefundedCrosspostHolds();
     const held = await this.prisma.integrationUsageReservation.count({
       where: {
         status: { in: ["reserved", "uncertain"] },
@@ -177,5 +178,51 @@ export class IntegrationOperationsService implements OnModuleInit {
       });
     }
     await this.snapshots.prune();
+  }
+
+  /**
+   * A refunded crosspost with no remote id is a finished rejection. Text-only
+   * holds from that path used to stay `uncertain` after the member was refunded.
+   */
+  private async releaseRefundedCrosspostHolds(): Promise<void> {
+    const held = await this.prisma.integrationUsageReservation.findMany({
+      where: {
+        status: { in: ["reserved", "uncertain"] },
+        id: { startsWith: "x:post:" },
+      },
+      select: { id: true },
+      take: 100,
+    });
+    const keys = held.flatMap((row) => {
+      const match = /^x:post:([^:]+)$/.exec(row.id);
+      return match ? [{ id: row.id, localId: match[1] }] : [];
+    });
+    if (!keys.length) return;
+    const refunded = await this.prisma.xCrosspost.findMany({
+      where: {
+        kind: "post",
+        localId: { in: keys.map((key) => key.localId) },
+        remoteId: null,
+        refundedAt: { not: null },
+      },
+      select: { localId: true },
+    });
+    const localIds = refunded.map((row) => row.localId);
+    if (!localIds.length) return;
+    const withMedia = await this.prisma.postMedia.findMany({
+      where: { postId: { in: localIds }, deletedAt: null },
+      select: { postId: true },
+    });
+    const mediaPosts = new Set(withMedia.map((row) => row.postId));
+    const ids = keys
+      .filter(
+        (key) => localIds.includes(key.localId) && !mediaPosts.has(key.localId),
+      )
+      .map((key) => key.id);
+    if (!ids.length) return;
+    await this.prisma.integrationUsageReservation.updateMany({
+      where: { id: { in: ids }, status: { in: ["reserved", "uncertain"] } },
+      data: { status: "released", chargedMicros: 0 },
+    });
   }
 }

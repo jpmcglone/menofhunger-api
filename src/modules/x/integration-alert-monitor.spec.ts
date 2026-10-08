@@ -11,7 +11,7 @@ describe('operational alert transitions', () => {
       upsert: async({where,create,update}:any)=>alerts.set(where.key, alerts.has(where.key)?{...alerts.get(where.key),...update}:create),
       updateMany: async({where,data}:any)=>{for(const [key,row] of alerts)if(!where.key.notIn.includes(key))alerts.set(key,{...row,...data});},
     } };
-    const prisma: any = { $transaction:(fn:any)=>fn(tx),integrationSpendControl:{findUnique:async()=>null},integrationUsageReservation:{count:async()=>0},
+    const prisma: any = { $transaction:(fn:any)=>fn(tx),integrationSpendControl:{findUnique:async()=>null},integrationUsageReservation:{count:async()=>0,findMany:async()=>[]},
       $queryRaw:async(strings:any)=>String(strings).includes('integration:month')?[{company:BigInt(spend),daily:0n,provider:0n,bucket:0n,analytics:0n,publications:0n,regular:0n,expensive:0n,pendingRegular:0n,pendingExpensive:0n}]:[{count:0n}],
     };
     const service = new IntegrationOperationsService(prisma,{raw:()=>({ping:async()=>true})} as any,
@@ -22,5 +22,40 @@ describe('operational alert transitions', () => {
     spend=100;await service.check();expect(notify).toHaveBeenCalledTimes(2);
     spend=20;await service.check();expect(alerts.get('company-month').resolvedAt).toBeInstanceOf(Date);
     spend=80;await service.check();expect(notify).toHaveBeenCalledTimes(3);
+  });
+
+  it('releases a refunded text-only crosspost hold and leaves media holds', async () => {
+    const updateMany = jest.fn(async () => ({ count: 1 }));
+    const prisma: any = {
+      $transaction: async (fn: any) => fn({
+        $executeRaw: jest.fn(),
+        integrationOperationalAlert: {
+          findUnique: async () => undefined,
+          upsert: async () => undefined,
+          updateMany: async () => undefined,
+        },
+      }),
+      integrationSpendControl: { findUnique: async () => null },
+      integrationUsageReservation: {
+        count: async () => 0,
+        findMany: async () => [
+          { id: 'x:post:text-1' },
+          { id: 'x:post:photo-1' },
+          { id: 'x:post:text-1:attempt:abc' },
+        ],
+        updateMany,
+      },
+      xCrosspost: { findMany: async () => [{ localId: 'text-1' }, { localId: 'photo-1' }] },
+      postMedia: { findMany: async () => [{ postId: 'photo-1' }] },
+      $queryRaw: async () => [{ count: 0n }],
+    };
+    const service = new IntegrationOperationsService(prisma,{raw:()=>({ping:async()=>true})} as any,
+      {integrationBudget:()=>({enabled:true,companyMonthlyMicros:100,companyDailyMicros:100,providerMonthlyMicros:100,sharedMonthlyMicros:100})} as any,
+      {} as any,{} as any,{prune:jest.fn()} as any);
+    await service.check();
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['x:post:text-1'] }, status: { in: ['reserved', 'uncertain'] } },
+      data: { status: 'released', chargedMicros: 0 },
+    });
   });
 });
