@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { AppConfigService } from '../app/app-config.service';
 import { tokenFromUnsubscribeRequest } from './email-unsubscribe.helpers';
+import { EmailPreferencesService } from '../email/email-preferences.service';
 import { NewslettersService } from './newsletters.service';
 
 function frontendBase(raw: string | null): string {
@@ -18,6 +19,7 @@ export class EmailUnsubscribeController {
   constructor(
     private readonly newsletters: NewslettersService,
     private readonly appConfig: AppConfigService,
+    private readonly preferences: EmailPreferencesService,
   ) {}
 
   @Get('unsubscribe')
@@ -50,7 +52,9 @@ export class EmailUnsubscribeController {
   })
   async unsubscribePost(@Query('token') queryToken: string | undefined, @Body() body: unknown) {
     const parsed = tokenSchema.parse({ token: tokenFromUnsubscribeRequest(queryToken, body) });
-    const result = await this.newsletters.unsubscribeWithToken(parsed.token);
+    const result = parsed.token.startsWith('family.')
+      ? await this.preferences.unsubscribe(parsed.token)
+      : await this.newsletters.unsubscribeWithToken(parsed.token);
     return { data: result };
   }
 }

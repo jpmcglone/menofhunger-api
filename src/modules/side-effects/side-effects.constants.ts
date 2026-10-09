@@ -1,3 +1,4 @@
+import type { LifecycleEmailEvent } from "../email-lifecycle/email-lifecycle.types";
 import type { NotificationKind, PostVisibility } from "@prisma/client";
 
 /**
@@ -23,12 +24,28 @@ export const MOH_SIDE_EFFECTS_QUEUE = "moh_side_effects";
  * or switch statement to update.
  */
 export interface SideEffectPayloads {
+  "email.lifecycle": LifecycleEmailEvent;
   "media.transcribe.request": { messageId: string };
-  "channel.marv.request": { groupId: string; channelId: string; messageId: string; requesterId: string };
-  "channel.message.changed": { groupId: string; channelId: string; messageId: string; edited: boolean };
+  "channel.marv.request": {
+    groupId: string;
+    channelId: string;
+    messageId: string;
+    requesterId: string;
+  };
+  "channel.message.changed": {
+    groupId: string;
+    channelId: string;
+    messageId: string;
+    edited: boolean;
+  };
   /** A member became active in a group: record the "joined" row in its #general. `at` is the join time and makes retries idempotent. */
   "channel.member.joined": { groupId: string; userId: string; at: string };
-  "channel.member.added": { groupId: string; channelId: string; userId: string; actorUserId: string };
+  "channel.member.added": {
+    groupId: string;
+    channelId: string;
+    userId: string;
+    actorUserId: string;
+  };
 
   "delegation.result": { runId: string };
   "integrations.monitor": Record<string, never>;
@@ -333,6 +350,7 @@ export interface SideEffectPayloads {
   /** A user just became verified; tell them. */
   "user.verified": {
     userId: string;
+    skipWelcome?: boolean;
   };
   /**
    * The user's premium access boundary crossed none<->premium.
@@ -357,6 +375,7 @@ export interface SideEffectPayloads {
    */
   "referral.verified": {
     userId: string;
+    skipWelcome?: boolean;
   };
   /**
    * Referral bonus was granted — one-time, when the recruit becomes verified.
@@ -415,6 +434,7 @@ export interface SideEffectPayloads {
   /** Schedule cleared or space deleted — fan out `space_schedule_cancelled`. */
   "space.schedule.cancelled": {
     spaceId: string;
+    scheduledAt?: string;
     ownerUserId: string;
     spaceTitle: string;
     ownerUsername: string | null;

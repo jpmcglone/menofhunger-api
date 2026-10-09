@@ -95,6 +95,7 @@ export type AssetPrimaryType =
   | "article_inline"
   | "announcement"
   | "newsletter"
+  | "email_delivery"
   | "channel_upload"
   | "orphan";
 
@@ -120,6 +121,7 @@ export type AssetRefs = {
   articles: ArticleRef[];
   announcements: PublicationRef[];
   newsletters: PublicationRef[];
+  emailDeliveries: PublicationRef[];
   primaryType: AssetPrimaryType;
 };
 
@@ -155,6 +157,7 @@ export function emptyAssetRefs(): AssetRefs {
     articles: [],
     announcements: [],
     newsletters: [],
+    emailDeliveries: [],
     primaryType: "orphan",
   };
 }

@@ -1,5 +1,9 @@
-import { BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
-import { VerificationService } from './verification.service';
+import {
+  BadRequestException,
+  NotFoundException,
+  UnauthorizedException,
+} from "@nestjs/common";
+import { VerificationService } from "./verification.service";
 
 type Deps = {
   prisma: any;
@@ -32,12 +36,20 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
         findMany: jest.fn(async () => []),
         create: jest.fn(),
       },
-      $transaction: jest.fn(async (fn: (tx: any) => Promise<unknown>) => fn(tx)),
+      $transaction: jest.fn(async (fn: (tx: any) => Promise<unknown>) =>
+        fn(tx),
+      ),
       __tx: tx,
     },
     slack: { notifyVerificationRequested: jest.fn() },
-    userVerification: { notifyMemberChanged: jest.fn(async () => undefined), notifyAdminQueueChanged: jest.fn(async () => undefined),
-      verifyUser: jest.fn(async () => ({ verified: true, alreadyVerified: false })) },
+    userVerification: {
+      notifyMemberChanged: jest.fn(async () => undefined),
+      notifyAdminQueueChanged: jest.fn(async () => undefined),
+      verifyUser: jest.fn(async () => ({
+        verified: true,
+        alreadyVerified: false,
+      })),
+    },
     ...overrides,
   };
 }
@@ -49,6 +61,7 @@ function makeService(overrides: Partial<Deps> = {}) {
     deps.slack,
     deps.userVerification,
     { capture: jest.fn() } as any,
+    { dispatch: jest.fn() } as any,
   );
   return { service, deps };
 }
@@ -57,193 +70,232 @@ afterEach(() => {
   jest.clearAllMocks();
 });
 
-describe('VerificationService.createRequestForUser', () => {
-  it('rejects a missing userId', async () => {
+describe("VerificationService.createRequestForUser", () => {
+  it("rejects a missing userId", async () => {
     const { service } = makeService();
 
     await expect(
-      service.createRequestForUser({ userId: '', providerHint: null }),
+      service.createRequestForUser({ userId: "", providerHint: null }),
     ).rejects.toThrow(UnauthorizedException);
   });
 
-  it('rejects an unknown user', async () => {
+  it("rejects an unknown user", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(null);
 
     await expect(
-      service.createRequestForUser({ userId: 'u1', providerHint: null }),
+      service.createRequestForUser({ userId: "u1", providerHint: null }),
     ).rejects.toThrow(UnauthorizedException);
   });
 
-  it('rejects already-verified users', async () => {
+  it("rejects already-verified users", async () => {
     const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({ id: 'u1', verifiedStatus: 'identity' });
+    deps.prisma.user.findUnique.mockResolvedValue({
+      id: "u1",
+      verifiedStatus: "identity",
+    });
 
     await expect(
-      service.createRequestForUser({ userId: 'u1', providerHint: null }),
+      service.createRequestForUser({ userId: "u1", providerHint: null }),
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('returns an existing pending request instead of creating a duplicate', async () => {
+  it("returns an existing pending request instead of creating a duplicate", async () => {
     const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({ id: 'u1', verifiedStatus: 'none' });
-    const pending = { id: 'vr1', status: 'pending' };
+    deps.prisma.user.findUnique.mockResolvedValue({
+      id: "u1",
+      verifiedStatus: "none",
+    });
+    const pending = { id: "vr1", status: "pending" };
     deps.prisma.verificationRequest.findFirst.mockResolvedValue(pending);
 
-    const result = await service.createRequestForUser({ userId: 'u1', providerHint: null });
+    const result = await service.createRequestForUser({
+      userId: "u1",
+      providerHint: null,
+    });
 
     expect(result).toBe(pending);
     expect(deps.prisma.verificationRequest.create).not.toHaveBeenCalled();
   });
 
-  it('creates a request and notifies Slack', async () => {
+  it("creates a request and notifies Slack", async () => {
     const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({ id: 'u1', verifiedStatus: 'none' });
+    deps.prisma.user.findUnique.mockResolvedValue({
+      id: "u1",
+      verifiedStatus: "none",
+    });
     deps.prisma.verificationRequest.findFirst.mockResolvedValue(null);
-    const created = { id: 'vr1', status: 'pending' };
+    const created = { id: "vr1", status: "pending" };
     deps.prisma.verificationRequest.create.mockResolvedValue(created);
 
-    const result = await service.createRequestForUser({ userId: 'u1', providerHint: 'manual' });
+    const result = await service.createRequestForUser({
+      userId: "u1",
+      providerHint: "manual",
+    });
 
     expect(result).toBe(created);
-    expect(deps.userVerification.notifyAdminQueueChanged).toHaveBeenCalledWith('created', 'vr1');
+    expect(deps.userVerification.notifyAdminQueueChanged).toHaveBeenCalledWith(
+      "created",
+      "vr1",
+    );
     expect(deps.slack.notifyVerificationRequested).toHaveBeenCalledWith({
-      userId: 'u1',
-      providerHint: 'manual',
+      userId: "u1",
+      providerHint: "manual",
     });
   });
 });
 
-describe('VerificationService.getMyVerificationStatus', () => {
-  it('rejects a missing userId', async () => {
+describe("VerificationService.getMyVerificationStatus", () => {
+  it("rejects a missing userId", async () => {
     const { service } = makeService();
-    await expect(service.getMyVerificationStatus({ userId: '' })).rejects.toThrow(UnauthorizedException);
+    await expect(
+      service.getMyVerificationStatus({ userId: "" }),
+    ).rejects.toThrow(UnauthorizedException);
   });
 
-  it('returns status with no latest request', async () => {
+  it("returns status with no latest request", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
-      verifiedStatus: 'none',
+      verifiedStatus: "none",
       verifiedAt: null,
       unverifiedAt: null,
     });
     deps.prisma.verificationRequest.findFirst.mockResolvedValue(null);
 
-    const result = await service.getMyVerificationStatus({ userId: 'u1' });
+    const result = await service.getMyVerificationStatus({ userId: "u1" });
 
-    expect(result.verifiedStatus).toBe('none');
+    expect(result.verifiedStatus).toBe("none");
     expect(result.latestRequest).toBeNull();
   });
 });
 
-describe('VerificationService.approveAdmin', () => {
-  it('rejects an empty request id', async () => {
+describe("VerificationService.approveAdmin", () => {
+  it("rejects an empty request id", async () => {
     const { service } = makeService();
 
     await expect(
-      service.approveAdmin({ requestId: ' ', adminUserId: 'a1' }),
+      service.approveAdmin({ requestId: " ", adminUserId: "a1" }),
     ).rejects.toThrow(NotFoundException);
   });
 
-  it('rejects when the request does not exist', async () => {
+  it("rejects when the request does not exist", async () => {
     const { service, deps } = makeService();
     deps.prisma.verificationRequest.findUnique.mockResolvedValue(null);
 
     await expect(
-      service.approveAdmin({ requestId: 'vr1', adminUserId: 'a1' }),
+      service.approveAdmin({ requestId: "vr1", adminUserId: "a1" }),
     ).rejects.toThrow(NotFoundException);
   });
 
-  it('rejects a non-pending request for an unverified user', async () => {
+  it("rejects a non-pending request for an unverified user", async () => {
     const { service, deps } = makeService();
     deps.prisma.verificationRequest.findUnique.mockResolvedValue({
-      id: 'vr1',
-      status: 'rejected',
-      userId: 'u1',
-      user: { id: 'u1', verifiedStatus: 'none' },
+      id: "vr1",
+      status: "rejected",
+      userId: "u1",
+      user: { id: "u1", verifiedStatus: "none" },
     });
 
     await expect(
-      service.approveAdmin({ requestId: 'vr1', adminUserId: 'a1' }),
+      service.approveAdmin({ requestId: "vr1", adminUserId: "a1" }),
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('delegates to UserVerificationService and returns the refreshed request', async () => {
+  it("delegates to UserVerificationService and returns the refreshed request", async () => {
     const { service, deps } = makeService();
     deps.prisma.verificationRequest.findUnique.mockResolvedValue({
-      id: 'vr1',
-      status: 'pending',
-      userId: 'u1',
-      user: { id: 'u1', verifiedStatus: 'none' },
+      id: "vr1",
+      status: "pending",
+      userId: "u1",
+      user: { id: "u1", verifiedStatus: "none" },
     });
     const updatedReq = {
-      id: 'vr1',
-      status: 'approved',
-      userId: 'u1',
-      user: { id: 'u1', username: 'alice' },
-      reviewedByAdmin: { id: 'a1', username: 'admin', name: 'Admin' },
+      id: "vr1",
+      status: "approved",
+      userId: "u1",
+      user: { id: "u1", username: "alice" },
+      reviewedByAdmin: { id: "a1", username: "admin", name: "Admin" },
     };
-    deps.prisma.verificationRequest.findUniqueOrThrow.mockResolvedValue(updatedReq);
+    deps.prisma.verificationRequest.findUniqueOrThrow.mockResolvedValue(
+      updatedReq,
+    );
 
-    const result = await service.approveAdmin({ requestId: 'vr1', adminUserId: 'a1', adminNote: 'ok' });
+    const result = await service.approveAdmin({
+      requestId: "vr1",
+      adminUserId: "a1",
+      adminNote: "ok",
+    });
 
     expect(deps.userVerification.verifyUser).toHaveBeenCalledWith({
-      userId: 'u1',
-      source: 'admin_request',
-      requestId: 'vr1',
-      adminUserId: 'a1',
-      adminNote: 'ok',
-      verifiedStatus: 'manual',
+      userId: "u1",
+      source: "admin_request",
+      requestId: "vr1",
+      adminUserId: "a1",
+      adminNote: "ok",
+      verifiedStatus: "manual",
     });
     expect(result).toBe(updatedReq);
   });
 });
 
-describe('VerificationService.rejectAdmin', () => {
-  it('requires a rejection reason', async () => {
+describe("VerificationService.rejectAdmin", () => {
+  it("requires a rejection reason", async () => {
     const { service } = makeService();
 
     await expect(
-      service.rejectAdmin({ requestId: 'vr1', adminUserId: 'a1', rejectionReason: '  ' }),
+      service.rejectAdmin({
+        requestId: "vr1",
+        adminUserId: "a1",
+        rejectionReason: "  ",
+      }),
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('rejects a non-pending request', async () => {
+  it("rejects a non-pending request", async () => {
     const { service, deps } = makeService();
     deps.prisma.__tx.verificationRequest.findUnique.mockResolvedValue({
-      id: 'vr1',
-      status: 'approved',
+      id: "vr1",
+      status: "approved",
     });
 
     await expect(
-      service.rejectAdmin({ requestId: 'vr1', adminUserId: 'a1', rejectionReason: 'nope' }),
+      service.rejectAdmin({
+        requestId: "vr1",
+        adminUserId: "a1",
+        rejectionReason: "nope",
+      }),
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('rejects a pending request and emits admin updated', async () => {
+  it("rejects a pending request and emits admin updated", async () => {
     const { service, deps } = makeService();
     deps.prisma.__tx.verificationRequest.findUnique.mockResolvedValue({
-      id: 'vr1',
-      status: 'pending',
+      id: "vr1",
+      status: "pending",
     });
     const updated = {
-      id: 'vr1',
-      status: 'rejected',
-      user: { id: 'u1' },
-      reviewedByAdmin: { id: 'a1', username: 'admin', name: 'Admin' },
+      id: "vr1",
+      status: "rejected",
+      user: { id: "u1" },
+      reviewedByAdmin: { id: "a1", username: "admin", name: "Admin" },
     };
     deps.prisma.__tx.verificationRequest.update.mockResolvedValue(updated);
 
     const result = await service.rejectAdmin({
-      requestId: 'vr1',
-      adminUserId: 'a1',
-      rejectionReason: 'incomplete',
+      requestId: "vr1",
+      adminUserId: "a1",
+      rejectionReason: "incomplete",
     });
 
     expect(result).toBe(updated);
-    expect(deps.prisma.__tx.verificationRequest.update).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'vr1', status: 'pending' },
-    }));
-    expect(deps.userVerification.notifyAdminQueueChanged).toHaveBeenCalledWith('reviewed', 'vr1');
+    expect(deps.prisma.__tx.verificationRequest.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "vr1", status: "pending" },
+      }),
+    );
+    expect(deps.userVerification.notifyAdminQueueChanged).toHaveBeenCalledWith(
+      "reviewed",
+      "vr1",
+    );
   });
 });

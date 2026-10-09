@@ -1,18 +1,19 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import type { SubscriptionGrant } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-import { AppConfigService } from '../app/app-config.service';
-import { AuthService } from '../auth/auth-public-api';
-import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
-import { SideEffectsService } from '../side-effects/side-effects.service';
+import { lifecycleTierEventId } from "./lifecycle-tier-event";
+import { Injectable, Logger, NotFoundException } from "@nestjs/common";
+import type { SubscriptionGrant } from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { AppConfigService } from "../app/app-config.service";
+import { AuthService } from "../auth/auth-public-api";
+import { UsersMeRealtimeService } from "../users/users-me-realtime.service";
+import { SideEffectsService } from "../side-effects/side-effects.service";
 
-export type GrantTier = 'premium' | 'premiumPlus';
-export type EffectiveTier = 'none' | 'premium' | 'premiumPlus';
+export type GrantTier = "premium" | "premiumPlus";
+export type EffectiveTier = "none" | "premium" | "premiumPlus";
 
 export type ActiveGrantInfo = {
   id: string;
   tier: GrantTier;
-  source: 'admin' | 'referral';
+  source: "admin" | "referral";
   months: number;
   startsAt: Date;
   endsAt: Date;
@@ -34,7 +35,7 @@ export type EntitlementResult = {
 };
 
 function tierRank(tier: EffectiveTier): number {
-  return tier === 'premiumPlus' ? 2 : tier === 'premium' ? 1 : 0;
+  return tier === "premiumPlus" ? 2 : tier === "premium" ? 1 : 0;
 }
 
 function maxTier(a: EffectiveTier, b: EffectiveTier): EffectiveTier {
@@ -48,7 +49,7 @@ function addMonths(date: Date, months: number): Date {
   return d;
 }
 
-const ENTITLED_STRIPE_STATUSES = new Set(['active', 'trialing', 'past_due']);
+const ENTITLED_STRIPE_STATUSES = new Set(["active", "trialing", "past_due"]);
 
 /**
  * Returns true when the user has an actual paid subscription (Stripe or Apple IAP),
@@ -67,10 +68,11 @@ export function isPayingSubscriber(
   },
   now = new Date(),
 ): boolean {
-  if (u.verifiedStatus === 'none') return false;
-  if (ENTITLED_STRIPE_STATUSES.has(u.stripeSubscriptionStatus ?? '')) return true;
+  if (u.verifiedStatus === "none") return false;
+  if (ENTITLED_STRIPE_STATUSES.has(u.stripeSubscriptionStatus ?? ""))
+    return true;
   return (
-    (u.appleStatus === 'active' || u.appleStatus === 'grace') &&
+    (u.appleStatus === "active" || u.appleStatus === "grace") &&
     u.appleExpiresAt != null &&
     u.appleExpiresAt > now
   );
@@ -80,7 +82,7 @@ const MS_PER_MONTH = 30.44 * 24 * 60 * 60 * 1000;
 
 /** Returns the later of two nullable dates, or null if both are null. */
 export function laterDate(a: Date | null, b: Date | null): Date | null {
-  return a && b ? (a > b ? a : b) : a ?? b;
+  return a && b ? (a > b ? a : b) : (a ?? b);
 }
 
 @Injectable()
@@ -113,11 +115,16 @@ export class EntitlementService {
       where: { id: params.userId },
       select: { id: true },
     });
-    if (!user) throw new NotFoundException('User not found.');
+    if (!user) throw new NotFoundException("User not found.");
 
     // Revoke all currently active grants for this tier.
     await this.prisma.subscriptionGrant.updateMany({
-      where: { userId: params.userId, tier: params.tier, revokedAt: null, endsAt: { gt: now } },
+      where: {
+        userId: params.userId,
+        tier: params.tier,
+        revokedAt: null,
+        endsAt: { gt: now },
+      },
       data: { revokedAt: now },
     });
 
@@ -127,7 +134,7 @@ export class EntitlementService {
         data: {
           userId: params.userId,
           tier: params.tier,
-          source: 'admin',
+          source: "admin",
           months: params.months,
           startsAt: now,
           endsAt,
@@ -147,7 +154,10 @@ export class EntitlementService {
    *
    * Safe to call with a null unverifiedAt (no-op) — e.g. for first-time verifications.
    */
-  async extendGrantsAfterPause(userId: string, unverifiedAt: Date | null): Promise<void> {
+  async extendGrantsAfterPause(
+    userId: string,
+    unverifiedAt: Date | null,
+  ): Promise<void> {
     if (!unverifiedAt) return;
     const now = new Date();
     const pauseMs = now.getTime() - unverifiedAt.getTime();
@@ -167,7 +177,9 @@ export class EntitlementService {
 
     if (grants.length > 0) {
       const days = Math.round(pauseMs / (1000 * 60 * 60 * 24));
-      this.logger.log(`[entitlement] Extended ${grants.length} grant(s) for user ${userId} by ${days}d (unverified period)`);
+      this.logger.log(
+        `[entitlement] Extended ${grants.length} grant(s) for user ${userId} by ${days}d (unverified period)`,
+      );
     }
   }
 
@@ -175,7 +187,12 @@ export class EntitlementService {
    * Returns the total remaining months of free premium and premium+ the user has banked.
    * Calculated from the wall-clock time remaining across all active grants per tier.
    */
-  async getGrantSummary(userId: string): Promise<{ premiumMonthsRemaining: number; premiumPlusMonthsRemaining: number }> {
+  async getGrantSummary(
+    userId: string,
+  ): Promise<{
+    premiumMonthsRemaining: number;
+    premiumPlusMonthsRemaining: number;
+  }> {
     const now = new Date();
     const grants = await this.prisma.subscriptionGrant.findMany({
       where: { userId, revokedAt: null, endsAt: { gt: now } },
@@ -185,7 +202,7 @@ export class EntitlementService {
     let premiumPlusMs = 0;
     for (const g of grants) {
       const remaining = Math.max(0, g.endsAt.getTime() - now.getTime());
-      if (g.tier === 'premiumPlus') premiumPlusMs += remaining;
+      if (g.tier === "premiumPlus") premiumPlusMs += remaining;
       else premiumMs += remaining;
     }
 
@@ -200,7 +217,7 @@ export class EntitlementService {
     const now = new Date();
     const rows = await this.prisma.subscriptionGrant.findMany({
       where: { userId, revokedAt: null, endsAt: { gt: now } },
-      orderBy: { endsAt: 'desc' },
+      orderBy: { endsAt: "desc" },
     });
     return rows.map(this.toGrantInfo);
   }
@@ -215,7 +232,10 @@ export class EntitlementService {
    * active Stripe subscription. Referral and admin grants are written with `false`, so
    * they apply on their own.
    */
-  async recomputeAndApply(userId: string): Promise<EntitlementResult> {
+  async recomputeAndApply(
+    userId: string,
+    options: { welcomeHandled?: boolean } = {},
+  ): Promise<EntitlementResult> {
     const now = new Date();
     const cfg = this.appConfig.stripe();
     const appleCfg = this.appConfig.appleIap();
@@ -227,6 +247,10 @@ export class EntitlementService {
         premiumPlus: true,
         accountKind: true,
         verifiedStatus: true,
+        stripeSubscriptionId: true,
+        stripeCurrentPeriodStart: true,
+        appleOriginalTransactionId: true,
+        verifiedAt: true,
         stripeSubscriptionStatus: true,
         stripeSubscriptionPriceId: true,
         stripeCurrentPeriodEnd: true,
@@ -238,85 +262,119 @@ export class EntitlementService {
         appleSandboxExpiresAt: true,
         subscriptionGrants: {
           where: { revokedAt: null, endsAt: { gt: now } },
-          orderBy: { endsAt: 'desc' },
+          orderBy: { endsAt: "desc" },
         },
       },
     });
-    if (!user) throw new NotFoundException('User not found.');
+    if (!user) throw new NotFoundException("User not found.");
 
-    const verified = user.verifiedStatus !== 'none';
+    const verified = user.verifiedStatus !== "none";
 
     // ── Stripe entitlement ──────────────────────────────────────────────────
-    const stripeStatus = user.stripeSubscriptionStatus ?? '';
-    const stripeEntitled = verified && ENTITLED_STRIPE_STATUSES.has(stripeStatus);
+    const stripeStatus = user.stripeSubscriptionStatus ?? "";
+    const stripeEntitled =
+      verified && ENTITLED_STRIPE_STATUSES.has(stripeStatus);
     const stripeIsPlus =
-      stripeEntitled && Boolean(cfg) && user.stripeSubscriptionPriceId === cfg!.pricePremiumPlusMonthly;
+      stripeEntitled &&
+      Boolean(cfg) &&
+      user.stripeSubscriptionPriceId === cfg!.pricePremiumPlusMonthly;
     const stripeIsPremium =
       stripeEntitled &&
       Boolean(cfg) &&
-      (user.stripeSubscriptionPriceId === cfg!.pricePremiumMonthly || stripeIsPlus);
-    const stripeTier: EffectiveTier = stripeIsPlus ? 'premiumPlus' : stripeIsPremium ? 'premium' : 'none';
-    const stripeExpiresAt = stripeEntitled ? (user.stripeCurrentPeriodEnd ?? null) : null;
+      (user.stripeSubscriptionPriceId === cfg!.pricePremiumMonthly ||
+        stripeIsPlus);
+    const stripeTier: EffectiveTier = stripeIsPlus
+      ? "premiumPlus"
+      : stripeIsPremium
+        ? "premium"
+        : "none";
+    const stripeExpiresAt = stripeEntitled
+      ? (user.stripeCurrentPeriodEnd ?? null)
+      : null;
 
     // ── Apple IAP entitlement ───────────────────────────────────────────────
     // 'grace' = DID_FAIL_TO_RENEW billing retry — Apple keeps the subscription
     // active during its grace period, so we honour it the same as 'active'.
     const appleActive =
       verified &&
-      (user.appleStatus === 'active' || user.appleStatus === 'grace') &&
+      (user.appleStatus === "active" || user.appleStatus === "grace") &&
       user.appleExpiresAt != null &&
       user.appleExpiresAt > now;
-    const appleTierKey = appleCfg?.productTierMap?.[user.appleProductId ?? ''] ?? null;
-    const appleIsPlus = appleActive && appleTierKey === 'premiumPlus';
-    const appleIsPremium = appleActive && (appleTierKey === 'premium' || appleIsPlus);
-    const appleTier: EffectiveTier = appleIsPlus ? 'premiumPlus' : appleIsPremium ? 'premium' : 'none';
-    const sandboxActive = verified && (user.appleSandboxStatus === 'active' || user.appleSandboxStatus === 'grace')
-      && user.appleSandboxExpiresAt != null && user.appleSandboxExpiresAt > now;
+    const appleTierKey =
+      appleCfg?.productTierMap?.[user.appleProductId ?? ""] ?? null;
+    const appleIsPlus = appleActive && appleTierKey === "premiumPlus";
+    const appleIsPremium =
+      appleActive && (appleTierKey === "premium" || appleIsPlus);
+    const appleTier: EffectiveTier = appleIsPlus
+      ? "premiumPlus"
+      : appleIsPremium
+        ? "premium"
+        : "none";
+    const sandboxActive =
+      verified &&
+      (user.appleSandboxStatus === "active" ||
+        user.appleSandboxStatus === "grace") &&
+      user.appleSandboxExpiresAt != null &&
+      user.appleSandboxExpiresAt > now;
     const sandboxTier: EffectiveTier = sandboxActive
-      ? (appleCfg?.productTierMap?.[user.appleSandboxProductId ?? ''] ?? 'none') : 'none';
-    const appleExpiresAt = laterDate(appleActive ? user.appleExpiresAt : null, sandboxActive ? user.appleSandboxExpiresAt : null);
+      ? (appleCfg?.productTierMap?.[user.appleSandboxProductId ?? ""] ?? "none")
+      : "none";
+    const appleExpiresAt = laterDate(
+      appleActive ? user.appleExpiresAt : null,
+      sandboxActive ? user.appleSandboxExpiresAt : null,
+    );
 
     // ── Grant entitlement ───────────────────────────────────────────────────
     const allActiveGrants = user.subscriptionGrants.map(this.toGrantInfo);
-    // Referral grants only count when the user has an active Stripe subscription.
-    // Admin grants always apply regardless of subscription status.
+    // Legacy subscription-dependent grants require an entitled Stripe subscription.
+    // Standalone referral/admin grants apply during their active window.
     const effectiveGrants = allActiveGrants.filter(
-      (g) => !g.requiresActiveSubscription || stripeEntitled,
+      (g) =>
+        g.startsAt <= now && (!g.requiresActiveSubscription || stripeEntitled),
     );
     // Grants require verification — unverified users bank months but cannot use them.
     const grantTier: EffectiveTier =
       !verified || effectiveGrants.length === 0
-        ? 'none'
-        : effectiveGrants.some((g) => g.tier === 'premiumPlus')
-          ? 'premiumPlus'
-          : 'premium';
-    const grantExpiresAt = verified && effectiveGrants.length > 0 ? effectiveGrants[0]!.endsAt : null;
+        ? "none"
+        : effectiveGrants.some((g) => g.tier === "premiumPlus")
+          ? "premiumPlus"
+          : "premium";
+    const grantExpiresAt =
+      verified && effectiveGrants.length > 0
+        ? effectiveGrants[0]!.endsAt
+        : null;
 
     // ── Effective tier = max(stripe, apple, grants) ─────────────────────────
-    let effectiveTier = maxTier(maxTier(maxTier(grantTier, stripeTier), appleTier), sandboxTier);
+    let effectiveTier = maxTier(
+      maxTier(maxTier(grantTier, stripeTier), appleTier),
+      sandboxTier,
+    );
 
     // Pages inherit the best tier among their operators.
-    if (user.accountKind === 'page') {
+    if (user.accountKind === "page") {
       const operators = await this.prisma.userPageOperator.findMany({
         where: { pageUserId: userId },
         select: { operator: { select: { premium: true, premiumPlus: true } } },
       });
-      let inherited: EffectiveTier = 'none';
+      let inherited: EffectiveTier = "none";
       for (const row of operators) {
         const opTier: EffectiveTier = row.operator.premiumPlus
-          ? 'premiumPlus'
+          ? "premiumPlus"
           : row.operator.premium
-            ? 'premium'
-            : 'none';
+            ? "premium"
+            : "none";
         inherited = maxTier(inherited, opTier);
       }
       effectiveTier = maxTier(effectiveTier, inherited);
     }
-    const isPremiumPlus = effectiveTier === 'premiumPlus';
-    const isPremium = effectiveTier !== 'none';
+    const isPremiumPlus = effectiveTier === "premiumPlus";
+    const isPremium = effectiveTier !== "none";
 
     // effectiveExpiresAt: latest access window across all three sources.
-    const effectiveExpiresAt = laterDate(laterDate(stripeExpiresAt, grantExpiresAt), appleExpiresAt);
+    const effectiveExpiresAt = laterDate(
+      laterDate(stripeExpiresAt, grantExpiresAt),
+      appleExpiresAt,
+    );
 
     await this.prisma.user.update({
       where: { id: userId },
@@ -327,20 +385,69 @@ export class EntitlementService {
     // before clients refresh, including Premium <-> Premium+ changes.
     if (user.premium !== isPremium || user.premiumPlus !== isPremiumPlus) {
       await this.auth.bustSessionCachesForUser(userId);
-      await this.usersMeRealtime.emitMeUpdated(userId, 'billing_tier_changed');
+      await this.usersMeRealtime.emitMeUpdated(userId, "billing_tier_changed");
     }
 
-    // Fire a side effect only when crossing the none <-> premium boundary.
-    // Premium <-> Premium+ upgrades/downgrades stay silent.
+    // Lifecycle mail includes actual upgrades; the existing bell notification below
+    // stays reserved for crossing the none <-> premium boundary.
+    const previousTier = user.premiumPlus
+      ? "premiumPlus"
+      : user.premium
+        ? "premium"
+        : "none";
+    const upgraded =
+      effectiveTier !== "none" &&
+      previousTier !== effectiveTier &&
+      (previousTier === "none" || effectiveTier === "premiumPlus");
+    if (
+      user.accountKind === "person" &&
+      effectiveTier !== "none" &&
+      upgraded &&
+      !options.welcomeHandled
+    ) {
+      const grant = effectiveGrants.find((g) => g.tier === effectiveTier);
+      const source =
+        stripeTier === effectiveTier
+          ? "stripe"
+          : appleTier === effectiveTier
+            ? "apple"
+            : grant
+              ? grant.source === "referral"
+                ? "referral"
+                : "grant"
+              : null;
+      // TestFlight/Sandbox entitlements never generate billing/welcome mail.
+      const identity = source
+        ? lifecycleTierEventId({
+            ...user,
+            source,
+            tier: effectiveTier,
+            grantId: grant?.id,
+          })
+        : null;
+      if (source && identity)
+        this.sideEffects.dispatch(
+          "email.lifecycle",
+          {
+            kind: "premium",
+            userId,
+            source,
+            tier: effectiveTier,
+            eventId: identity,
+            occurredAt: now.toISOString(),
+          },
+          { delay: 30000 },
+        );
+    }
     const wasPremium = user.premium;
     if (wasPremium !== isPremium) {
-      this.sideEffects.dispatch('billing.premium.changed', {
+      this.sideEffects.dispatch("billing.premium.changed", {
         userId,
-        direction: isPremium ? 'started' : 'ended',
+        direction: isPremium ? "started" : "ended",
       });
     }
 
-    if (user.accountKind === 'person') {
+    if (user.accountKind === "person") {
       const pages = await this.prisma.userPageOperator.findMany({
         where: { operatorUserId: userId },
         select: { pageUserId: true },
@@ -365,7 +472,7 @@ export class EntitlementService {
   private toGrantInfo = (g: SubscriptionGrant): ActiveGrantInfo => ({
     id: g.id,
     tier: g.tier as GrantTier,
-    source: g.source as 'admin' | 'referral',
+    source: g.source as "admin" | "referral",
     months: g.months,
     startsAt: g.startsAt,
     endsAt: g.endsAt,

@@ -15,6 +15,10 @@ function user(overrides: Record<string, unknown> = {}) {
     premium: false,
     longestStreakDays: 0,
     recruitedById: null,
+    avatarKey: 'avatars/u1.jpg',
+    bio: 'Building something useful.',
+    profileReminder24hSentAt: null,
+    profileReminder7dSentAt: null,
     onboardingNudge1SentAt: null,
     onboardingNudge3SentAt: null,
     onboardingNudge7SentAt: null,
@@ -65,5 +69,16 @@ describe('OnboardingNudgeEmailCron', () => {
     const { cron, email } = make([user({ onboardingNudge1SentAt: stamped, onboardingNudge3SentAt: stamped, onboardingNudge7SentAt: stamped })]);
     await expect(cron.run(now)).resolves.toBe(0);
     expect(email.sendText).not.toHaveBeenCalled();
+  });
+
+  it('sends profile help through the onboarding preference and checkpoints it once', async () => {
+    const { cron, prisma, email } = make([user({ avatarKey: null, bio: null })]);
+    await expect(cron.run(now)).resolves.toBe(1);
+    expect(email.sendText).toHaveBeenCalledWith(expect.objectContaining({
+      preference: 'emailOnboarding', eventKey: 'onboarding:u1:7', subject: 'Help the men here recognize you.',
+    }));
+    expect(prisma.user.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ profileReminder24hSentAt: now }),
+    }));
   });
 });

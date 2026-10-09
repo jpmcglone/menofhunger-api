@@ -61,6 +61,10 @@ export class OnboardingNudgeEmailCron {
         premium: boolean;
         longestStreakDays: number;
         recruitedById: string | null;
+        avatarKey: string | null;
+        bio: string | null;
+        profileReminder24hSentAt: Date | null;
+        profileReminder7dSentAt: Date | null;
         onboardingNudge1SentAt: Date | null;
         onboardingNudge3SentAt: Date | null;
         onboardingNudge7SentAt: Date | null;
@@ -93,6 +97,10 @@ export class OnboardingNudgeEmailCron {
           premium: true,
           longestStreakDays: true,
           recruitedById: true,
+          avatarKey: true,
+          bio: true,
+          profileReminder24hSentAt: true,
+          profileReminder7dSentAt: true,
           onboardingNudge1SentAt: true,
           onboardingNudge3SentAt: true,
           onboardingNudge7SentAt: true,
@@ -119,6 +127,8 @@ export class OnboardingNudgeEmailCron {
           hasPosted: u._count.posts > 0,
           hasCheckedIn: u.longestStreakDays > 0,
           hasInvited: u._count.recruits > 0,
+          profileComplete: !!u.avatarKey && !!u.bio?.trim(),
+          profileReminderSent: !!u.profileReminder24hSentAt || !!u.profileReminder7dSentAt,
         });
         if (!to || optedOut || !nudge) {
           await this.prisma.user.update({ where: { id: u.id }, data: stamp });
@@ -131,8 +141,13 @@ export class OnboardingNudgeEmailCron {
           baseUrl,
           settingsUrl,
         });
-        const res = await this.email.sendText({ to, subject, text, html, category: 'engagement', userId: u.id });
+        const res = await this.email.sendText({
+          to, subject, text, html, category: 'engagement', userId: u.id,
+          preference: 'emailOnboarding', eventKey: `onboarding:${u.id}:${target.stage}`,
+        });
         if (res.sent) {
+          // Reuse the old campaign checkpoint so migration never repeats an earlier profile nudge.
+          if (nudge.kind === 'profile') stamp.profileReminder24hSentAt = now;
           await this.prisma.user.update({ where: { id: u.id }, data: stamp });
           sent += 1;
         } else {

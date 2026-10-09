@@ -417,6 +417,7 @@ export class AdminImageReferencesService {
     for (const [key, refs] of publications) {
       result.get(key)!.announcements = refs.announcements;
       result.get(key)!.newsletters = refs.newsletters;
+      result.get(key)!.emailDeliveries = refs.emailDeliveries;
     }
 
     // ── Determine primaryType for each key ─────────────────────────────────
@@ -433,6 +434,7 @@ export class AdminImageReferencesService {
       else if (refs.messages.some((m) => m.isThumbnail)) refs.primaryType = 'message_thumbnail';
       else if (refs.announcements.length) refs.primaryType = 'announcement';
       else if (refs.newsletters.length) refs.primaryType = 'newsletter';
+      else if (refs.emailDeliveries.length) refs.primaryType = 'email_delivery';
       else if (refs.channelUploads.length) refs.primaryType = 'channel_upload';
       else refs.primaryType = 'orphan';
     }
@@ -442,10 +444,10 @@ export class AdminImageReferencesService {
 
   async resolvePublicationReferences(keys: string[]) {
     const refs = new Map(keys.map((key) => [key, {
-      announcements: [] as PublicationRef[], newsletters: [] as PublicationRef[],
+      announcements: [] as PublicationRef[], newsletters: [] as PublicationRef[], emailDeliveries: [] as PublicationRef[],
     }]));
     if (!keys.length) return refs;
-    const [announcements, newsletters] = await Promise.all([
+    const [announcements, newsletters, deliveries] = await Promise.all([
       this.prisma.announcement.findMany({
         where: { imageKey: { in: keys } },
         select: { id: true, title: true, status: true, imageKey: true },
@@ -454,7 +456,16 @@ export class AdminImageReferencesService {
         where: { OR: [{ imageKey: { in: keys } }, ...keys.map((key) => ({ bodyJson: { contains: key } }))] },
         select: { id: true, subject: true, status: true, imageKey: true, bodyJson: true },
       }),
+      this.prisma.emailDelivery.findMany({ where: { mediaUrls: { isEmpty: false } }, select: { id: true, status: true, mediaUrls: true } }),
     ]);
+    for (const row of deliveries) {
+      for (const key of keys) {
+        const keySet = new Set([key]);
+        const urlMap = new Map<string, string>();
+        const used = row.mediaUrls.some(url => matchStoredAssetToKey(url, keySet, urlMap) === key);
+        if (used) refs.get(key)!.emailDeliveries.push({ id: row.id, title: 'Retained email image', status: row.status, isInline: true });
+      }
+    }
     for (const row of announcements) {
       if (row.imageKey) refs.get(row.imageKey)?.announcements.push({
         id: row.id, title: row.title, status: row.status, isInline: false,

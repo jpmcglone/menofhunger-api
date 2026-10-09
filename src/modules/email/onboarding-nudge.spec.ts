@@ -1,6 +1,6 @@
 import { buildOnboardingNudgeEmail, pickOnboardingNudge } from './onboarding-nudge';
 
-const base = { verified: true, hasPosted: false, hasCheckedIn: false, hasInvited: false };
+const base = { verified: true, hasPosted: false, hasCheckedIn: false, hasInvited: false, profileComplete: true, profileReminderSent: false };
 
 describe('pickOnboardingNudge', () => {
   it('asks unverified members to verify at every stage', () => {
@@ -19,6 +19,13 @@ describe('pickOnboardingNudge', () => {
     expect(pickOnboardingNudge(1, { ...base, hasPosted: true })).toBeNull();
     expect(pickOnboardingNudge(3, { ...base, hasCheckedIn: true })).toBeNull();
     expect(pickOnboardingNudge(7, { ...base, hasInvited: true })).toBeNull();
+  });
+
+  it('folds profile help into one stage and does not repeat an old profile reminder', () => {
+    expect(pickOnboardingNudge(1, { ...base, profileComplete: false })?.kind).toBe('profile');
+    expect(pickOnboardingNudge(7, { ...base, profileComplete: false })?.kind).toBe('profile');
+    expect(pickOnboardingNudge(7, { ...base, profileComplete: false, profileReminderSent: true })?.ctaPath).toBe('/invite');
+    expect(pickOnboardingNudge(3, { ...base, profileComplete: false })?.ctaPath).toBe('/home');
   });
 });
 

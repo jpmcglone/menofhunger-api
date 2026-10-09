@@ -418,6 +418,19 @@ export const coreEnvShape = {
       z.string().optional(),
     ),
 
+    RESEND_WEBHOOK_SECRET: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    EMAIL_BILLING_NOTICES_ENABLED: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().optional(),
+    ),
+    EMAIL_PUBLIC_API_URL: z.preprocess(
+      (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+      z.string().url().optional(),
+    ),
+
     // Slack Incoming Webhook URL (optional; notifications silently no-op when unset).
     // Create one at: https://api.slack.com/apps → your app → Incoming Webhooks
     SLACK_WEBHOOK_URL: z.preprocess(

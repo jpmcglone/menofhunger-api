@@ -7,6 +7,8 @@ export type OnboardingSignals = {
   hasPosted: boolean;
   hasCheckedIn: boolean;
   hasInvited: boolean;
+  profileComplete: boolean;
+  profileReminderSent: boolean;
 };
 
 export type OnboardingNudge = {
@@ -14,6 +16,7 @@ export type OnboardingNudge = {
   lines: string[];
   ctaLabel: string;
   ctaPath: string;
+  kind?: 'profile';
 };
 
 /**
@@ -23,19 +26,28 @@ export type OnboardingNudge = {
 export function pickOnboardingNudge(stage: OnboardingStage, s: OnboardingSignals): OnboardingNudge | null {
   if (!s.verified) {
     return {
-      headline: 'Finish verifying to unlock Men of Hunger',
+      headline: 'Your next conversation starts here.',
       lines: [
-        'Verified men can post, check in, and reply across the lodge.',
-        'It takes about a minute, and verifying also earns a free month of Premium when you joined through an invite.',
+        'Get verified to post, reply, join groups, and take part in daily check-ins.',
+        'Verification is free. It helps everyone know who they’re talking to.',
       ],
       ctaLabel: 'Verify now',
       ctaPath: '/settings/verification',
     };
   }
+  if (stage !== 3 && !s.profileComplete && !s.profileReminderSent) {
+    return {
+      kind: 'profile',
+      headline: 'Help the men here recognize you.',
+      lines: ['A photo and a line about yourself make a good introduction.', 'Share what you’re building, what you care about, or where you’re headed.'],
+      ctaLabel: 'Make your profile yours',
+      ctaPath: '/settings/account',
+    };
+  }
   if (stage === 1 && !s.hasPosted) {
     return {
       headline: 'Say hello to the lodge',
-      lines: ['Your first post is the easiest way to be seen. Tell the men here what you are working on.'],
+      lines: ['What are you working on? What’s on your mind? A few honest sentences are enough to start.'],
       ctaLabel: 'Write your first post',
       ctaPath: '/home',
     };
@@ -43,8 +55,8 @@ export function pickOnboardingNudge(stage: OnboardingStage, s: OnboardingSignals
   if (stage === 3 && !s.hasCheckedIn) {
     return {
       headline: 'Start a check-in streak',
-      lines: ['One honest answer a day, between 5pm and midnight Eastern. Day two is where it starts to stick.'],
-      ctaLabel: 'Answer today’s check-in',
+      lines: ['A small pause to say how the day is going. Join the daily check-in when it opens, and build from there.'],
+      ctaLabel: 'Open today’s feed',
       ctaPath: '/home',
     };
   }

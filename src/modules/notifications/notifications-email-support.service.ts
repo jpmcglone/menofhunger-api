@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
-import { EmailService } from "../email/email.service";
+import { EmailService, type EmailCategory } from "../email/email.service";
 import { AppConfigService } from "../app/app-config.service";
 import { PostsReadService } from "../posts-read/posts-read.service";
 
@@ -26,6 +26,9 @@ export class NotificationsEmailSupportService {
     html: string;
     userId: string;
     logTag: string;
+    preference: "emailOnboarding" | "emailNewNotifications" | "emailInstantHighSignal" | "emailStreakReminder" | "emailDigestWeekly" | "emailFollowedArticle";
+    eventKey: string;
+    category?: EmailCategory;
     onSent?: () => Promise<void>;
   }): Promise<void> {
     const sent = await this.email.sendText({
@@ -34,7 +37,9 @@ export class NotificationsEmailSupportService {
       text: params.text,
       html: params.html,
       from: this.notificationsFromAddress(),
-      category: "engagement",
+      category: params.category ?? "engagement",
+      preference: params.preference,
+      eventKey: params.eventKey,
       userId: params.userId,
     });
 

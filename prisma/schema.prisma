@@ -601,6 +601,7 @@ model User {
   verificationRequests         VerificationRequest[]      @relation("VerificationRequest_user")
   verificationRequestsReviewed VerificationRequest[]      @relation("VerificationRequest_reviewedBy")
   emailActionTokens            EmailActionToken[]
+  emailDeliveries              EmailDelivery[]
   subscriptionGrants           SubscriptionGrant[]        @relation("SubscriptionGrant_user")
   subscriptionGrantsGiven      SubscriptionGrant[]        @relation("SubscriptionGrant_grantedByAdmin")
   messageParticipants          MessageParticipant[]       @relation("MessageParticipant_user")
@@ -822,6 +823,52 @@ model EmailActionToken {
   @@index([userId, purpose, createdAt])
   @@index([expiresAt])
   @@index([consumedAt])
+}
+
+/** Durable logical send claim; recipient content is removed when delivery is terminal. */
+model EmailDelivery {
+  id                String   @id @default(cuid())
+  eventKey          String   @unique
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  userId            String?
+  user              User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recipientHash     String
+  category          String
+  preference        String?
+  status            String   @default("pending")
+  requestJson       String?
+  retrySafe         Boolean  @default(false)
+  // Owned image references survive removal of the private retry payload.
+  mediaUrls         String[] @default([])
+  providerMessageId String?  @unique
+  attempts          Int      @default(0)
+  lastError         String?
+  nextAttemptAt     DateTime @default(now())
+  leaseUntil        DateTime?
+  retryUntil        DateTime
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+
+  @@index([status, nextAttemptAt])
+  @@index([userId, createdAt])
+}
+
+/** Stable normalized address hash; raw bounced addresses are not retained here. */
+model EmailSuppression {
+  recipientHash String   @id
+  reason        String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model EmailProviderEvent {
+  id         String   @id
+  createdAt  DateTime @default(now())
+  type       String
+  messageId  String
+
+  @@index([messageId])
 }
 
 model DailyContentSnapshot {

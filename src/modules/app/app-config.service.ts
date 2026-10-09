@@ -6,6 +6,19 @@ export type { NodeEnv, TwilioVerifyConfig, R2Config, StravaConfig, XConfig, Stri
 
 @Injectable()
 export class AppConfigService extends AppConfigValues {
+  emailWebhookSecret(): string | null {
+    return this.config.get<string>('RESEND_WEBHOOK_SECRET')?.trim() || null;
+  }
+
+  emailPublicApiUrl(): string {
+    return (this.config.get<string>('EMAIL_PUBLIC_API_URL')?.trim() || (this.isProd() ? 'https://api.menofhunger.com/v1' : 'http://localhost:3001/v1')).replace(/\/$/, '');
+  }
+
+  /** Set false when Stripe/Apple-managed payment notices already cover the same member. */
+  emailBillingNoticesEnabled(): boolean {
+    return !['false', '0', 'off', 'no'].includes(String(this.config.get<string | boolean>('EMAIL_BILLING_NOTICES_ENABLED') ?? 'true').trim().toLowerCase());
+  }
+
   xPublishing() {
     const ids = (key: string) =>
       (this.config.get<string>(key) ?? "")

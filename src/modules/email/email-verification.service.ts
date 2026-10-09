@@ -1,3 +1,5 @@
+import { SideEffectsService } from '../side-effects/side-effects.service';
+import { createHash } from 'node:crypto';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from './email.service';
@@ -29,6 +31,7 @@ export class EmailVerificationService {
     private readonly email: EmailService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly presence: PresenceService,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   async requestVerification(params: { userId: string; email: string; name?: string | null }): Promise<{ sent: boolean }> {
@@ -92,7 +95,7 @@ export class EmailVerificationService {
         `<div style="margin:0 0 12px 0;font-size:14px;line-height:1.7;color:${EMAIL.muted};">${escapeHtml(greeting)}</div>`,
         renderCard(
           [
-            `<div style="font-size:14px;line-height:1.7;color:${EMAIL.text};">Confirm this email address to unlock your daily digest and important notifications.</div>`,
+            `<div style="font-size:14px;line-height:1.7;color:${EMAIL.text};">Confirm this email address to receive your weekly digest and important notifications.</div>`,
             `<div style="margin-top:12px;">${renderButton({ href: confirmUrl, label: 'Verify email', variant: 'primary' })}</div>`,
             `<div style="margin-top:12px;">${renderPill(`Expires in ${VERIFY_EXPIRES_HOURS} hours`, 'warning')}</div>`,
           ].join(''),
@@ -112,6 +115,10 @@ export class EmailVerificationService {
       html,
       from: this.appConfig.email()?.fromEmail.support ?? undefined,
       category: 'transactional',
+      userId: user.id,
+      eventKey: `email-verification:${createHash('sha256').update(issued.token).digest('hex')}`,
+      recipientMode: 'verification',
+      retrySafe: false,
     });
     if (!sent.sent) {
       this.logger.warn(`[verify] email not sent userId=${user.id} reason=${sent.reason ?? 'unknown'}`);
@@ -181,6 +188,9 @@ export class EmailVerificationService {
     });
     // Presence: email verification is active engagement — keep "recently around" fresh.
     this.presence.markSeenFromHttp(updated.id);
+    if (updated.verifiedAt && Date.now() - updated.verifiedAt.getTime() < 86400000) {
+      this.sideEffects.dispatch('email.lifecycle', { kind: 'verified', userId: updated.id, eventId: updated.verifiedAt.toISOString(), occurredAt: updated.verifiedAt.toISOString() }, { delay: 30000 });
+    }
     return { ok: true };
   }
 }

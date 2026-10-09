@@ -176,6 +176,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     payload: SideEffectPayloads["space.schedule.cancelled"],
   ): Promise<void> {
     const snap = await this.spaces.getScheduleSnapshot(payload.spaceId);
+    if (snap?.scheduledAt) return; // An old cancellation must not cancel a newer schedule in email.
     const eventTitle =
       (snap?.eventTitle || payload.spaceTitle || "").trim() || "Space";
     const recipients = this.uniqueRecipientIds(
@@ -220,6 +221,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
           whenLabel: "",
           spaceUrl: ctx.spaceUrl,
           kind: "cancelled",
+          eventKey: `space-cancelled:${payload.spaceId}:${payload.scheduledAt ?? "legacy"}:${recipientUserId}`,
           ...this.spaceEmailMedia(snap),
         });
       },
@@ -236,6 +238,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     ).filter((id) => id !== snap.ownerUserId);
     if (recipients.length === 0) return;
 
+    if (snap.scheduledAt.toISOString() !== payload.scheduledAt) return;
     const when = formatScheduleWhen(payload.scheduledAt);
     const title = `${snap.eventTitle} rescheduled`;
     const body = when ? `Now ${when}.` : "The start time changed.";
@@ -251,6 +254,20 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
           actorUserId: snap.ownerUserId,
           title,
           body,
+        });
+        const ctx = this.spaceEmailContext({
+          ownerUsername: snap.ownerUsername,
+          eventTitle: snap.eventTitle,
+        });
+        await this.sendSpaceEmail({
+          recipientUserId,
+          hostName: ctx.hostName,
+          spaceTitle: snap.eventTitle,
+          whenLabel: when,
+          spaceUrl: ctx.spaceUrl,
+          kind: "rescheduled",
+          eventKey: `space-rescheduled:${payload.spaceId}:${payload.scheduledAt}:${recipientUserId}`,
+          ...this.spaceEmailMedia(snap),
         });
       },
     );
@@ -321,6 +338,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
           whenLabel: when,
           spaceUrl: ctx.spaceUrl,
           kind: "announced",
+          eventKey: `space-announced:${payload.spaceId}:${snap.scheduledAt?.toISOString()}:${recipientUserId}`,
           ...this.spaceEmailMedia(snap),
         });
       },
@@ -368,6 +386,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
     whenLabel: string;
     spaceUrl: string;
     kind: SpaceScheduleEmailKind;
+    eventKey: string;
     thumbnailUrl?: string | null;
     videoTitle?: string | null;
   }): Promise<void> {
@@ -410,9 +429,16 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
       subject: rendered.subject,
       text: rendered.text,
       html: rendered.html,
-      category: "engagement",
+      category: params.kind === "announced" ? "engagement" : "service",
+      preference: "emailFollowedArticle",
+      eventKey: params.eventKey,
+      retrySafe: false,
       userId: user.id,
     });
+    if (!sent.sent && sent.retryable)
+      throw new Error(
+        `Space email will retry: ${sent.reason ?? "transient_failure"}`,
+      );
     if (!sent.sent) {
       this.logger.debug(
         `Followed-space email skipped ${user.id}: ${sent.reason ?? "unknown"}`,
@@ -486,6 +512,7 @@ export class SpacesSideEffectsHandler implements OnModuleInit {
           whenLabel: when,
           spaceUrl: ctx.spaceUrl,
           kind: "soon",
+          eventKey: `space-soon:${payload.spaceId}:${payload.scheduledAtMs}:${recipientUserId}`,
           ...this.spaceEmailMedia(snap),
         });
       },

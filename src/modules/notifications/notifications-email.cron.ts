@@ -1,13 +1,12 @@
+import { createHash } from 'node:crypto';
 import { MessagesConversationStateService } from "../messages";
 import { NotificationsEmailSupportService } from "./notifications-email-support.service";
-import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { AppConfigService } from '../app/app-config.service';
-import { buildProfileReminderEmail, getMissingProfileFields } from '../email/email-content';
 import { buildFollowedArticleEmail, renderTiptapPreviewHtml } from '../email/email-content-article';
 import { buildGreeting, getRecipientEmail, getVerifiedRecipientEmail } from '../email/email-send.helpers';
 import { JobsService } from '../jobs/jobs.service';
@@ -15,11 +14,10 @@ import { JOBS } from '../jobs/jobs.constants';
 import { messagePreviewText } from '../messages/message.dto';
 import { EMAIL, escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
-import { SlackService } from '../../common/slack/slack.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
 
-import { safeBaseUrl, easternYmdHm, truncate } from "./notifications-email.helpers";
+import { safeBaseUrl, truncate } from "./notifications-email.helpers";
 
 @Injectable()
 export class NotificationsEmailCron {
@@ -36,7 +34,6 @@ export class NotificationsEmailCron {
     private readonly appConfig: AppConfigService,
     private readonly jobs: JobsService,
     @Inject(MessagesConversationStateService) private readonly messages: Pick< MessagesConversationStateService, "getUnreadSummary" >,
-    private readonly slack: SlackService,
     private readonly postsRead: PostsReadService,
     private readonly support: NotificationsEmailSupportService,
   ) {}
@@ -208,6 +205,8 @@ export class NotificationsEmailCron {
           html,
           userId: u.id,
           logTag: 'email-nudges',
+          preference: 'emailNewNotifications',
+          eventKey: `notification-nudge:${u.id}:${now.toISOString().slice(0, 10)}`,
           onSent: async () => {
             await this.prisma.notificationPreferences.upsert({
               where: { userId: u.id },
@@ -499,7 +498,7 @@ ${chatPreviewRows
         `<div style="margin:0 0 14px 0;">${renderPill(previewText, 'neutral')}</div>`,
         convoCards,
         notifCard,
-        `<div style="margin-top:14px;font-size:13px;line-height:1.8;color:${EMAIL.muted};">You can turn off instant emails in <a href="${escapeHtml(
+        `<div style="margin-top:14px;font-size:13px;line-height:1.8;color:${EMAIL.muted};">You can manage message, mention, and reply emails in <a href="${escapeHtml(
           settingsUrl,
         )}" style="color:${EMAIL.text};text-decoration:underline;">Settings → Notifications</a>.</div>`,
       ]
@@ -515,6 +514,12 @@ ${chatPreviewRows
       html,
       userId,
       logTag: 'instant-high-signal',
+      preference: 'emailInstantHighSignal',
+      category: 'service',
+      eventKey: `conversation:${userId}:${createHash('sha256').update(JSON.stringify([
+        notifs.map(n => n.id).sort(),
+        unreadConversations.map(p => [p.conversation.id, p.conversation.lastMessageAt]).sort(),
+      ])).digest('hex')}`,
       onSent: async () => {
         await this.prisma.notificationPreferences.upsert({
           where: { userId },
@@ -547,170 +552,6 @@ ${chatPreviewRows
       );
     } catch {
       // likely duplicate jobId; treat as no-op (batching).
-    }
-  }
-
-  /** Every 15 minutes: enqueue the profile-reminder sweep with a deduped job id per hour. */
-  @Cron('*/15 * * * *')
-  async sendProfileReminderEmail(): Promise<void> {
-    if (!this.appConfig.runSchedulers()) return;
-    const emailCfg = this.appConfig.email();
-    if (!emailCfg) return;
-
-    try {
-      const now = new Date();
-      const et = easternYmdHm(now);
-      // Dedupe by ET hour so at most one sweep per hour runs even across multiple instances.
-      const hourKey = `${et.y}-${String(et.m).padStart(2, '0')}-${String(et.d).padStart(2, '0')}-${String(et.hh).padStart(2, '0')}`;
-      await this.jobs.enqueueCron(JOBS.notificationsProfileReminderEmail, {}, `cron:notificationsProfileReminderEmail:${hourKey}`, {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5 * 60_000 },
-      });
-    } catch {
-      // likely duplicate jobId while previous run is active; treat as no-op
-    }
-  }
-
-  async runSendProfileReminderEmail(): Promise<void> {
-    const emailCfg = this.appConfig.email();
-    if (!emailCfg) return;
-
-    try {
-      const now = new Date();
-      const MS_24H = 24 * 60 * 60 * 1000;
-      const MS_7D = 7 * 24 * 60 * 60 * 1000;
-      // Only consider users created within the last 30 days. Anyone older is an established
-      // user; emailing them now would feel out-of-place and could flood on first deploy.
-      const MS_MAX_LOOKBACK = 30 * 24 * 60 * 60 * 1000;
-      const threshold24h = new Date(now.getTime() - MS_24H);
-      const threshold7d = new Date(now.getTime() - MS_7D);
-      const maxLookback = new Date(now.getTime() - MS_MAX_LOOKBACK);
-
-      const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
-      const settingsUrl = `${baseUrl}/settings/account`;
-
-      type ProfileReminderRow = {
-        id: string;
-        email: string | null;
-        username: string | null;
-        name: string | null;
-        createdAt: Date;
-        avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
-        bannerKey: string | null;
-        bio: string | null;
-        profileReminder24hSentAt: Date | null;
-        profileReminder7dSentAt: Date | null;
-      };
-
-      let cursorId: string | null = null;
-      const pageSize = 400;
-
-      for (;;) {
-        // Fetch users who are past the 24h threshold but haven't had BOTH reminders sent yet.
-        // We'll decide per-user which checkpoint(s) to send.
-        const users: ProfileReminderRow[] = await this.prisma.user.findMany({
-          where: {
-            email: { not: null },
-            emailVerifiedAt: { not: null },
-            ...NOT_BANNED_USER_WHERE,
-            // Must be at least 24h old, but no older than 30 days (flood + staleness guard).
-            createdAt: { lte: threshold24h, gte: maxLookback },
-            OR: [
-              { profileReminder24hSentAt: null },
-              {
-                profileReminder7dSentAt: null,
-                createdAt: { lte: threshold7d },
-              },
-            ],
-            ...(cursorId ? { id: { gt: cursorId } } : {}),
-          },
-          orderBy: [{ id: 'asc' }],
-          take: pageSize,
-          select: {
-            id: true,
-            email: true,
-            username: true,
-            name: true,
-            createdAt: true,
-            avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
-            bannerKey: true,
-            bio: true,
-            profileReminder24hSentAt: true,
-            profileReminder7dSentAt: true,
-          },
-        });
-
-        if (users.length === 0) break;
-        cursorId = users[users.length - 1]?.id ?? null;
-
-        for (const u of users) {
-          const to = getRecipientEmail(u.email);
-          if (!to) continue;
-
-          const missingFields = getMissingProfileFields({
-            avatarKey: u.avatarKey,
-            bio: u.bio,
-            bannerKey: u.bannerKey,
-          });
-          const missingAvatar = missingFields.includes('avatar');
-          const missingBio = missingFields.includes('bio');
-          const missingBanner = missingFields.includes('banner');
-
-          // Only remind if avatar or bio is missing (banner alone is not enough).
-          if (!missingAvatar && !missingBio) continue;
-
-          const greeting = buildGreeting({ name: u.name, username: u.username, tone: 'hey' });
-
-          // Determine which checkpoint to fire. Only ever send one email per run per user.
-          // When both are due (e.g. catch-up on first deploy), send the 7d version — it's
-          // more complete and we mark both flags so the 24h never fires retroactively.
-          const signupMs = u.createdAt.getTime();
-          const needs24h = !u.profileReminder24hSentAt && now.getTime() - signupMs >= MS_24H;
-          const needs7d = !u.profileReminder7dSentAt && now.getTime() - signupMs >= MS_7D;
-
-          const checkpoint: '24h' | '7d' | null = needs7d ? '7d' : needs24h ? '24h' : null;
-          if (!checkpoint) continue;
-
-          const { subject, text, html } = buildProfileReminderEmail({
-            greeting,
-            missingAvatar,
-            missingBio,
-            missingBanner,
-            settingsUrl,
-            checkpoint,
-          });
-
-          await this.support.sendEmailAndHandle({
-            to,
-            subject,
-            text,
-            html,
-            userId: u.id,
-            logTag: `profile-reminder:${checkpoint}`,
-            onSent: async () => {
-              // Always stamp the 24h flag. When sending the 7d email on a catch-up run (both
-              // flags still null), we stamp both so the 24h reminder never fires after the fact.
-              const data: { profileReminder24hSentAt?: Date; profileReminder7dSentAt?: Date } = {};
-              if (!u.profileReminder24hSentAt) data.profileReminder24hSentAt = now;
-              if (checkpoint === '7d') data.profileReminder7dSentAt = now;
-              await this.prisma.user.update({ where: { id: u.id }, data });
-
-              this.slack.notifyProfileReminderSent({
-                userId: u.id,
-                username: u.username,
-                email: to,
-                checkpoint,
-                missingFields,
-              });
-            },
-          });
-        }
-      }
-    } catch (err) {
-      this.logger.error(
-        `[profile-reminder] run failed: ${err instanceof Error ? err.message : String(err)}`,
-        err instanceof Error ? err.stack : undefined,
-      );
     }
   }
 
@@ -866,6 +707,8 @@ ${chatPreviewRows
           html,
           userId: follower.id,
           logTag: `followed-article:${articleId}`,
+          preference: 'emailFollowedArticle',
+          eventKey: `article:${articleId}:${follower.id}`,
         });
 
         sent++;

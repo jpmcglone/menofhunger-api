@@ -1,11 +1,11 @@
-import { Injectable } from '@nestjs/common';
-import { JobsService } from '../jobs/jobs.service';
-import { LinkMetadataService } from '../link-metadata/link-metadata.service';
-import { PosthogService } from '../../common/posthog/posthog.service';
-import { PrismaService } from '../prisma/prisma.service';
-import { SideEffectsService } from '../side-effects/side-effects.service';
-import { SpacesPresenceService } from './spaces-presence.service';
-import { SpacesViewService } from './spaces-view.service';
+import { Injectable } from "@nestjs/common";
+import { JobsService } from "../jobs/jobs.service";
+import { LinkMetadataService } from "../link-metadata/link-metadata.service";
+import { PosthogService } from "../../common/posthog/posthog.service";
+import { PrismaService } from "../prisma/prisma.service";
+import { SideEffectsService } from "../side-effects/side-effects.service";
+import { SpacesPresenceService } from "./spaces-presence.service";
+import { SpacesViewService } from "./spaces-view.service";
 import {
   NotFoundException,
   ForbiddenException,
@@ -47,7 +47,8 @@ export class SpacesScheduleService {
     private readonly spacesPresence: SpacesPresenceService,
   ) {}
 
-  async setSchedule(id: string,
+  async setSchedule(
+    id: string,
     userId: string,
     scheduledAtRaw: string,
   ): Promise<SpaceDto> {
@@ -72,7 +73,10 @@ export class SpacesScheduleService {
     const updated = await this.prisma.space.update({
       where: { id },
       data: { scheduledAt },
-      include: { owner: true, _count: { select: { scheduleSubscribers: true } } },
+      include: {
+        owner: true,
+        _count: { select: { scheduleSubscribers: true } },
+      },
     });
 
     // Host gets the ~30 min heads-up (not day-of / live — see side-effects handler).
@@ -95,7 +99,10 @@ export class SpacesScheduleService {
     const dto = await this.view.toDto(updated, {
       viewerUserId: userId,
       viewerSubscribedOverride: true,
-      subscriberCountOverride: await this.view.countNonOwnerSubscribers(id, userId),
+      subscriberCountOverride: await this.view.countNonOwnerSubscribers(
+        id,
+        userId,
+      ),
     });
     this.view.emitSpaceUpdated(id, "schedule_set", {
       scheduledAt: dto.scheduledAt,
@@ -110,9 +117,7 @@ export class SpacesScheduleService {
     return dto;
   }
 
-  async clearSchedule(id: string,
-    userId: string,
-  ): Promise<SpaceDto> {
+  async clearSchedule(id: string, userId: string): Promise<SpaceDto> {
     const space = await this.prisma.space.findUnique({
       where: { id },
       select: {
@@ -130,15 +135,25 @@ export class SpacesScheduleService {
     }
 
     const previousMs = space.scheduledAt.getTime();
+    // Snapshot the explicitly subscribed audience before clearNonOwnerSubscribers removes it.
+    const subscribers = await this.prisma.spaceScheduleSubscriber.findMany({
+      where: { spaceId: id, userId: { not: userId } },
+      select: { userId: true },
+    });
     const updated = await this.prisma.space.update({
       where: { id },
       data: { scheduledAt: null },
-      include: { owner: true, _count: { select: { scheduleSubscribers: true } } },
+      include: {
+        owner: true,
+        _count: { select: { scheduleSubscribers: true } },
+      },
     });
 
     await this.cancelReminderJobs(id, previousMs);
     this.sideEffects.dispatch("space.schedule.cancelled", {
       spaceId: id,
+      scheduledAt: space.scheduledAt.toISOString(),
+      recipientUserIds: subscribers.map((subscriber) => subscriber.userId),
       ownerUserId: space.ownerId,
       spaceTitle: resolveSpaceEventTitle({ title: space.title }),
       ownerUsername: space.owner.username,
@@ -147,7 +162,10 @@ export class SpacesScheduleService {
 
     const dto = await this.view.toDto(updated, {
       viewerUserId: userId,
-      subscriberCountOverride: await this.view.countNonOwnerSubscribers(id, userId),
+      subscriberCountOverride: await this.view.countNonOwnerSubscribers(
+        id,
+        userId,
+      ),
     });
     this.view.emitSpaceUpdated(id, "schedule_cleared", {
       scheduledAt: null,
@@ -157,9 +175,7 @@ export class SpacesScheduleService {
     return dto;
   }
 
-  async subscribeToSchedule(id: string,
-    userId: string,
-  ): Promise<SpaceDto> {
+  async subscribeToSchedule(id: string, userId: string): Promise<SpaceDto> {
     const space = await this.prisma.space.findUnique({
       where: { id },
       select: { id: true, ownerId: true, scheduledAt: true },
@@ -185,14 +201,14 @@ export class SpacesScheduleService {
       subscriberCount: dto.subscriberCount,
     });
     if (!existing && space.ownerId !== userId) {
-      this.posthog.capture(userId, "space_schedule_subscribed", { space_id: id });
+      this.posthog.capture(userId, "space_schedule_subscribed", {
+        space_id: id,
+      });
     }
     return dto;
   }
 
-  async enqueueReminderJobs(spaceId: string,
-    scheduledAt: Date,
-  ): Promise<void> {
+  async enqueueReminderJobs(spaceId: string, scheduledAt: Date): Promise<void> {
     const scheduledAtMs = scheduledAt.getTime();
     const now = Date.now();
     const soonAt = scheduledAtMs - SPACE_SOON_REMINDER_MS;
@@ -235,8 +251,7 @@ export class SpacesScheduleService {
     }
   }
 
-  async getScheduleSnapshot(spaceId: string,
-  ): Promise<{
+  async getScheduleSnapshot(spaceId: string): Promise<{
     scheduledAt: Date | null;
     title: string | null;
     eventTitle: string;
@@ -280,8 +295,7 @@ export class SpacesScheduleService {
     };
   }
 
-  async listLobbySpaces(viewerUserId?: string | null,
-  ): Promise<SpaceDto[]> {
+  async listLobbySpaces(viewerUserId?: string | null): Promise<SpaceDto[]> {
     const now = new Date();
     const viewerId = String(viewerUserId ?? "").trim() || null;
     const counts = this.spacesPresence.getLobbyCountsBySpaceId();
@@ -299,7 +313,10 @@ export class SpacesScheduleService {
 
     const spaces = await this.prisma.space.findMany({
       where: { OR: or },
-      include: { owner: true, _count: { select: { scheduleSubscribers: true } } },
+      include: {
+        owner: true,
+        _count: { select: { scheduleSubscribers: true } },
+      },
       orderBy: { createdAt: "desc" },
     });
 
@@ -368,14 +385,17 @@ export class SpacesScheduleService {
     );
   }
 
-  async cancelReminderJobs(spaceId: string, scheduledAtMs: number): Promise<void> {
-    await this.jobs.removeById(JOBS.spaceReminderDay, dayReminderJobId(spaceId, scheduledAtMs));
-    await this.jobs.removeById(JOBS.spaceReminderSoon, soonReminderJobId(spaceId, scheduledAtMs));
+  async cancelReminderJobs(
+    spaceId: string,
+    scheduledAtMs: number,
+  ): Promise<void> {
+    await this.jobs.removeById(
+      JOBS.spaceReminderDay,
+      dayReminderJobId(spaceId, scheduledAtMs),
+    );
+    await this.jobs.removeById(
+      JOBS.spaceReminderSoon,
+      soonReminderJobId(spaceId, scheduledAtMs),
+    );
   }
 }
-
-
-
-
-
-

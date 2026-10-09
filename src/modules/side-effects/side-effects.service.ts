@@ -1,12 +1,12 @@
-import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, Logger } from '@nestjs/common';
-import type { JobsOptions, Queue } from 'bullmq';
+import { InjectQueue } from "@nestjs/bullmq";
+import { Injectable, Logger } from "@nestjs/common";
+import type { JobsOptions, Queue } from "bullmq";
 import {
   MOH_SIDE_EFFECTS_QUEUE,
   type SideEffectName,
   type SideEffectPayloads,
-} from './side-effects.constants';
-import { SideEffectsRegistry } from './side-effects.registry';
+} from "./side-effects.constants";
+import { SideEffectsRegistry } from "./side-effects.registry";
 
 /**
  * The one seam every mutation uses to hand off post-commit work.
@@ -28,7 +28,7 @@ export class SideEffectsService {
   /** Retried a few times with backoff; handlers must therefore be idempotent. */
   private static readonly DEFAULT_JOB_OPTS: JobsOptions = {
     attempts: 3,
-    backoff: { type: 'exponential', delay: 5_000 },
+    backoff: { type: "exponential", delay: 5_000 },
     removeOnComplete: true,
     // Keep a bounded tail of failures so the admin readout can show what's breaking.
     removeOnFail: { count: 500 },
@@ -49,15 +49,29 @@ export class SideEffectsService {
   dispatch<K extends SideEffectName>(
     name: K,
     payload: SideEffectPayloads[K],
-    opts?: Pick<JobsOptions, 'jobId' | 'delay' | 'attempts'>,
+    opts?: Pick<JobsOptions, "jobId" | "delay" | "attempts">,
   ): void {
     void this.queue
-      .add(name, payload, { ...SideEffectsService.DEFAULT_JOB_OPTS, ...(opts ?? {}) })
+      .add(name, payload, {
+        ...SideEffectsService.DEFAULT_JOB_OPTS,
+        ...([
+          "email.lifecycle",
+          "space.schedule.cancelled",
+          "space.schedule.rescheduled",
+          "space.schedule.reminder",
+          "space.schedule.announce.chunk",
+        ].includes(name)
+          ? { attempts: 24, backoff: { type: "fixed", delay: 3600000 } }
+          : {}),
+        ...(opts ?? {}),
+      })
       .catch((err) => {
         const message = err instanceof Error ? err.message : String(err);
         // A duplicate jobId is the intended dedupe outcome, not a failure.
         if (opts?.jobId && /already exists/i.test(message)) return;
-        this.logger.warn(`[side-effects] Enqueue of "${name}" failed (${message}); running in-process instead.`);
+        this.logger.warn(
+          `[side-effects] Enqueue of "${name}" failed (${message}); running in-process instead.`,
+        );
         this.runLocally(name, payload);
       });
   }
@@ -70,10 +84,15 @@ export class SideEffectsService {
    * only works because handlers live in domain modules and are therefore registered in the API
    * process too, not only in the worker.
    */
-  private runLocally<K extends SideEffectName>(name: K, payload: SideEffectPayloads[K]): void {
+  private runLocally<K extends SideEffectName>(
+    name: K,
+    payload: SideEffectPayloads[K],
+  ): void {
     const handler = this.registry.get(name);
     if (!handler) {
-      this.logger.error(`[side-effects] No handler registered for "${name}"; effect dropped.`);
+      this.logger.error(
+        `[side-effects] No handler registered for "${name}"; effect dropped.`,
+      );
       return;
     }
     setImmediate(() => {

@@ -231,6 +231,49 @@ describe("BillingSideEffectsHandler — referral.verified", () => {
     );
 
     await (handler as any).onReferralVerified({ userId: "u1" });
-    expect(referral.onMemberVerified).toHaveBeenCalledWith("u1");
+    expect(referral.onMemberVerified).toHaveBeenCalledWith("u1", {
+      combinedVerification: true,
+    });
+  });
+});
+
+describe("verified welcome ordering", () => {
+  it("waits for slow referral grants before enqueueing the combined welcome", async () => {
+    let finish!: () => void;
+    const referral = {
+      onMemberVerified: jest.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    };
+    const { handler, prisma, sideEffects } = makeHandler({ referral });
+    prisma.user.findUnique.mockResolvedValue({
+      verifiedAt: new Date("2026-10-09T18:00:00Z"),
+    });
+    const task = (handler as any).onReferralVerified({ userId: "member" });
+    expect(sideEffects.dispatch).not.toHaveBeenCalled();
+    finish();
+    await task;
+    expect(sideEffects.dispatch).toHaveBeenCalledWith(
+      "email.lifecycle",
+      expect.objectContaining({
+        kind: "verified",
+        eventId: "2026-10-09T18:00:00.000Z",
+      }),
+    );
+  });
+  it("processes re-verification rewards without sending onboarding again", async () => {
+    const { handler, prisma, sideEffects, referral } = makeHandler();
+    prisma.user.findUnique.mockResolvedValue({ verifiedAt: new Date() });
+    await (handler as any).onReferralVerified({
+      userId: "member",
+      skipWelcome: true,
+    });
+    expect(referral.onMemberVerified).toHaveBeenCalledWith("member", {
+      combinedVerification: false,
+    });
+    expect(sideEffects.dispatch).not.toHaveBeenCalled();
   });
 });

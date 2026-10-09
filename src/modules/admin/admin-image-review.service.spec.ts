@@ -28,6 +28,7 @@ describe("profile and publication media ownership", () => {
       article: { findMany: jest.fn().mockResolvedValue([]) },
       announcement: { findMany: jest.fn().mockResolvedValue([]) },
       avatarVideoUpload: { findMany: jest.fn().mockResolvedValue([]) },
+      emailDelivery: { findMany: jest.fn().mockResolvedValue([]) },
       newsletter: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(),
     };
@@ -42,6 +43,18 @@ describe("profile and publication media ownership", () => {
     return { prisma, service };
   };
 
+
+  it('protects retained delivered email photos and refuses stale single and bulk orphan deletion', async () => {
+    const { prisma, service } = setup();
+    expect((await service.getById('asset')).asset.primaryType).toBe('orphan');
+    prisma.emailDelivery.findMany.mockResolvedValue([{ id: 'delivery', status: 'sent', mediaUrls: [`https://cdn.example/${key}`] }]);
+    const detail = await service.getById('asset');
+    expect(detail.asset.primaryType).toBe('email_delivery');
+    expect(detail.references.emailDeliveries).toEqual([{ id: 'delivery', title: 'Retained email image', status: 'sent', isInline: true }]);
+    await expect(service.deleteById({ id: 'asset', adminUserId: 'admin', reason: 'cleanup', onlyOrphans: true })).rejects.toThrow('no longer an orphan');
+    const bulk = await service.deleteManyByIds({ ids: ['asset'], adminUserId: 'admin', reason: 'cleanup', onlyOrphans: true });
+    expect(bulk.errors).toEqual([expect.objectContaining({ id: 'asset' })]);
+  });
 
   it.each(['original.mp4', 'poster.jpg', 'audio.m4a'])(
     'protects channel originals and derivatives without producing public URLs (%s)', async file => {

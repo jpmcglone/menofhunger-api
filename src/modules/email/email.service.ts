@@ -2,39 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { AppConfigService } from '../app/app-config.service';
 import type { EmailSendRequest, EmailSendResult } from './providers/email-provider';
 import { ResendEmailProvider } from './providers/resend-email.provider';
-import { RedisService } from '../redis/redis.service';
-import { RedisKeys } from '../redis/redis-keys';
+import { EmailBudgetService } from './email-budget.service';
 
-/**
- * 'transactional' — must-send email (verification). Counts toward total but
- *   is never blocked by the engagement budget; only blocked at the hard quota wall.
- * 'engagement' — optional reminder email (digest, nudges, instant, streak).
- *   Blocked once sends reach (quotaLimit - verificationReserve).
- *   Also enforces a per-user 24h cap so one active user can't drain the team quota.
- * 'broadcast' — admin newsletter blast. Own daily quota; no per-user 24h cap.
- */
-export type EmailCategory = 'transactional' | 'engagement' | 'broadcast';
-
-type SendEmailParams = {
-  to: string;
-  subject: string;
-  text: string;
-  html?: string;
-  from?: string;
-  replyTo?: string;
-  headers?: Record<string, string>;
-  /** Defaults to 'engagement'. Pass 'transactional' for verification emails. */
-  category?: EmailCategory;
-  /** Required when category is 'engagement' to enforce the per-user 24h cap. */
-  userId?: string;
-};
-
-const DAILY_COUNT_TTL_MS = 48 * 60 * 60 * 1000;
-const PER_USER_CAP_TTL_MS = 26 * 60 * 60 * 1000;
-
-function utcDateKey(): string {
-  return new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
-}
+import { Cron } from '@nestjs/schedule';
+import { EmailDeliveryService, emailPayloadFingerprint } from './email-delivery.service';
+import { EmailPreferencesService } from './email-preferences.service';
+import type { EmailCategory, SendEmailParams } from './email-delivery.types';
+export type { EmailCategory, EmailPreference, SendEmailParams } from './email-delivery.types';
 
 @Injectable()
 export class EmailService {
@@ -43,150 +17,79 @@ export class EmailService {
   constructor(
     private readonly resend: ResendEmailProvider,
     private readonly appConfig: AppConfigService,
-    private readonly redis: RedisService,
+    private readonly budget: EmailBudgetService,
+    private readonly delivery: EmailDeliveryService,
+    private readonly preferences: EmailPreferencesService,
   ) {}
 
-  async sendText(params: SendEmailParams): Promise<{ sent: boolean; reason?: string }> {
+  async sendText(params: SendEmailParams): Promise<EmailSendResult> {
     // NOTE: `sendEmail()` applies dev-only normalization.
     // Avoid normalizing twice (which can duplicate banners/prefixes).
-    const res = await this.sendEmail({
-      to: params.to,
-      subject: params.subject,
-      text: params.text,
-      html: params.html,
-      from: params.from,
-      replyTo: params.replyTo,
-      headers: params.headers,
-      category: params.category,
-      userId: params.userId,
-    });
-    return res.sent ? { sent: true } : { sent: false, reason: res.reason };
+    const res = await this.sendEmail(params);
+    return res;
   }
 
-  async sendEmail(req: EmailSendRequest & { category?: EmailCategory; userId?: string }): Promise<EmailSendResult> {
+  async sendEmail(req: SendEmailParams): Promise<EmailSendResult> {
+    if (await this.delivery.alreadySent(req.eventKey)) return { sent: true };
     const category: EmailCategory = req.category ?? 'engagement';
-    const userId = req.userId ?? null;
-
-    // Budget check before sending.
-    const budget = await this.checkBudget(category, userId);
+    const blocked = await this.preferences.blockedReason(req);
+    if (blocked) return { sent: false, reason: blocked };
+    // Decorate once and keep the exact provider payload immutable for idempotent retries.
+    const normalized = this.normalizeForDev(this.preferences.decorate({ ...req, category, from: req.from || this.appConfig.email()?.fromEmail.default }));
+    const row = await this.delivery.prepare(normalized);
+    if (['sent', 'delivered'].includes(row.status)) return { sent: true };
+    if (!(await this.delivery.claim(row))) return { sent: false, reason: 'email_already_claimed', retryable: row.retryUntil.getTime() > Date.now() && row.attempts < 6 && !['failed', 'suppressed', 'bounced', 'complained'].includes(row.status) };
+    const persisted = JSON.parse(row.requestJson!) as SendEmailParams;
+    const stale = await this.preferences.blockedReason(persisted);
+    if (stale) {
+      const result: EmailSendResult = { sent: false, reason: stale };
+      await this.delivery.finish(row, result, persisted);
+      return result;
+    }
+    // Caller-managed retries revalidate the event and access, but cannot silently
+    // reuse stale private content. Resend also requires an identical body per key.
+    if (!row.retrySafe && emailPayloadFingerprint(normalized) !== emailPayloadFingerprint(persisted)) {
+      const result: EmailSendResult = { sent: false, reason: 'email_content_changed' };
+      await this.delivery.finish(row, result, persisted);
+      return result;
+    }
+    const budget = await this.budget.reserve(persisted.category ?? category, persisted.userId ?? null, row.id);
     if (!budget.allowed) {
-      const reason = budget.reason ?? 'email_quota_exceeded';
-      this.logger.warn(`[email-quota] blocked send category=${category} userId=${userId ?? 'n/a'} reason=${reason}`);
-      return { sent: false, reason };
+      const result: EmailSendResult = { sent: false, reason: budget.reason ?? 'email_quota_exceeded', retryable: true };
+      await this.delivery.finish(row, result, persisted);
+      return result;
     }
-
-    const normalized = this.normalizeForDev(req);
-    // Provider selection stays centralized here so swapping providers later is trivial.
-    // For now, Resend is the only supported provider.
-    const result = await this.resend.sendEmail(normalized);
-
-    if (result.sent) {
-      // Track the send against the team daily counter.
-      await this.recordSend(category, userId).catch(() => undefined);
-    }
-
+    const result = await this.resend.sendEmail({ ...persisted, idempotencyKey: this.delivery.providerKey(row) });
+    await this.budget.reconcile(budget, result).catch(() => this.logger.warn('Email budget reconciliation deferred.'));
+    await this.delivery.finish(row, result, persisted);
     return result;
   }
 
-  /**
-   * Checks the team daily budget and (for engagement) the per-user 24h cap.
-   * Returns { allowed: true } when the send may proceed, or { allowed: false, reason } when blocked.
-   * Logs an upgrade hint when engagement sends exhaust the budget.
-   */
-  private async checkBudget(
-    category: EmailCategory,
-    userId: string | null,
-  ): Promise<{ allowed: boolean; reason?: string }> {
-    try {
-      const dailyLimit = this.appConfig.emailDailyQuotaLimit();
-      const reserve = this.appConfig.emailDailyVerificationReserve();
-      const engagementCap = dailyLimit - reserve;
-
-      const countKey = RedisKeys.emailDailyCount(utcDateKey());
-      const raw = await this.redis.getString(countKey);
-      const count = Number(raw ?? '0');
-
-      if (category === 'transactional') {
-        if (count >= dailyLimit) {
-          this.logger.error(
-            `[email-quota] HARD LIMIT REACHED: ${count}/${dailyLimit} sends today. Verification email blocked. Upgrade Resend to remove the daily cap.`,
-          );
-          return { allowed: false, reason: 'email_quota_hard_limit' };
-        }
-        return { allowed: true };
+  @Cron('*/2 * * * *')
+  async retryPending(): Promise<void> {
+    if (!this.appConfig.runSchedulers() || !this.appConfig.email()) return;
+    for (const row of await this.delivery.due()) {
+      if (!row.requestJson) continue;
+      const req = JSON.parse(row.requestJson) as SendEmailParams;
+      if (!(await this.delivery.claim(row))) continue;
+      const blocked = await this.preferences.blockedReason(req);
+      if (blocked) {
+        await this.delivery.finish(row, { sent: false, reason: blocked }, req);
+        continue;
       }
-
-      if (category === 'broadcast') {
-        const broadcastLimit = this.appConfig.emailBroadcastDailyQuota();
-        const broadcastKey = RedisKeys.emailBroadcastDailyCount(utcDateKey());
-        const broadcastRaw = await this.redis.getString(broadcastKey);
-        const broadcastCount = Number(broadcastRaw ?? '0');
-        if (broadcastCount >= broadcastLimit) {
-          this.logger.warn(
-            `[email-quota] Broadcast budget exhausted (${broadcastCount}/${broadcastLimit}). Pausing newsletter send.`,
-          );
-          return { allowed: false, reason: 'email_quota_broadcast_limit' };
-        }
-        return { allowed: true };
+      const budget = await this.budget.reserve(req.category ?? 'engagement', req.userId ?? null, row.id);
+      if (!budget.allowed) {
+        await this.delivery.finish(row, { sent: false, reason: budget.reason!, retryable: true }, req);
+        continue;
       }
-
-      // Engagement: block at (limit - reserve).
-      if (count >= engagementCap) {
-        this.logger.warn(
-          `[email-quota] Engagement budget exhausted (${count}/${dailyLimit}, reserve=${reserve}). Skipping engagement email. ` +
-            `If this is happening 3+ days/week, it is time to upgrade Resend.`,
-        );
-        return { allowed: false, reason: 'email_quota_engagement_limit' };
-      }
-
-      // Per-user 24h engagement cap.
-      if (userId) {
-        const userCapKey = RedisKeys.emailLastEngagement(userId);
-        const lastSentRaw = await this.redis.getString(userCapKey);
-        if (lastSentRaw) {
-          return { allowed: false, reason: 'email_per_user_engagement_cap' };
-        }
-      }
-
-      return { allowed: true };
-    } catch {
-      // Redis unavailable: allow the send rather than silently dropping all email.
-      return { allowed: true };
+      const result = await this.resend.sendEmail({ ...req, idempotencyKey: this.delivery.providerKey(row) });
+      await this.budget.reconcile(budget, result).catch(() => this.logger.warn('Email budget reconciliation deferred.'));
+      await this.delivery.finish(row, result, req);
     }
   }
 
-  /**
-   * Records a successful send in the team daily counter and, for engagement emails,
-   * marks the per-user 24h cap.
-   */
   async broadcastRemaining(): Promise<number> {
-    try {
-      const limit = this.appConfig.emailBroadcastDailyQuota();
-      const raw = await this.redis.getString(RedisKeys.emailBroadcastDailyCount(utcDateKey()));
-      const count = Number(raw ?? '0');
-      return Math.max(0, limit - (Number.isFinite(count) ? count : 0));
-    } catch {
-      return this.appConfig.emailBroadcastDailyQuota();
-    }
-  }
-
-  private async recordSend(category: EmailCategory, userId: string | null): Promise<void> {
-    if (category === 'broadcast') {
-      const broadcastKey = RedisKeys.emailBroadcastDailyCount(utcDateKey());
-      await this.redis.raw().incr(broadcastKey);
-      await this.redis.raw().pexpire(broadcastKey, DAILY_COUNT_TTL_MS);
-      return;
-    }
-
-    const countKey = RedisKeys.emailDailyCount(utcDateKey());
-    await this.redis.raw().incr(countKey);
-    // Keep counter for 48h so it survives past midnight for debugging.
-    await this.redis.raw().pexpire(countKey, DAILY_COUNT_TTL_MS);
-
-    if (category === 'engagement' && userId) {
-      const userCapKey = RedisKeys.emailLastEngagement(userId);
-      await this.redis.setString(userCapKey, String(Date.now()), { ttlMs: PER_USER_CAP_TTL_MS });
-    }
+    return this.budget.broadcastRemaining();
   }
 
   private normalizeForDev<T extends EmailSendRequest>(req: T): T {

@@ -1,5 +1,5 @@
-import { NotFoundException } from '@nestjs/common';
-import { EntitlementService, laterDate } from './entitlement.service';
+import { NotFoundException } from "@nestjs/common";
+import { EntitlementService, laterDate } from "./entitlement.service";
 
 type Deps = {
   prisma: any;
@@ -10,11 +10,11 @@ type Deps = {
 };
 
 const STRIPE_CFG = {
-  secretKey: 'sk_test',
-  webhookSecret: 'whsec',
-  frontendBaseUrl: 'https://example.test',
-  pricePremiumMonthly: 'price_premium',
-  pricePremiumPlusMonthly: 'price_premium_plus',
+  secretKey: "sk_test",
+  webhookSecret: "whsec",
+  frontendBaseUrl: "https://example.test",
+  pricePremiumMonthly: "price_premium",
+  pricePremiumPlusMonthly: "price_premium_plus",
 };
 
 function makeDeps(overrides: Partial<Deps> = {}): Deps {
@@ -49,16 +49,22 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
 
 function makeService(overrides: Partial<Deps> = {}) {
   const deps = makeDeps(overrides);
-  const service = new EntitlementService(deps.prisma, deps.appConfig, deps.sideEffects, deps.auth, deps.usersMeRealtime);
+  const service = new EntitlementService(
+    deps.prisma,
+    deps.appConfig,
+    deps.sideEffects,
+    deps.auth,
+    deps.usersMeRealtime,
+  );
   return { service, deps };
 }
 
 function grantRow(overrides: Record<string, unknown> = {}) {
   const now = Date.now();
   return {
-    id: 'g1',
-    tier: 'premium',
-    source: 'admin',
+    id: "g1",
+    tier: "premium",
+    source: "admin",
     months: 1,
     startsAt: new Date(now - 1000),
     endsAt: new Date(now + 30 * 24 * 60 * 60 * 1000),
@@ -67,7 +73,7 @@ function grantRow(overrides: Record<string, unknown> = {}) {
     createdAt: new Date(now - 1000),
     requiresActiveSubscription: false,
     revokedAt: null,
-    userId: 'u1',
+    userId: "u1",
     ...overrides,
   };
 }
@@ -76,8 +82,8 @@ function userRow(overrides: Record<string, unknown> = {}) {
   return {
     premium: false,
     premiumPlus: false,
-    accountKind: 'person',
-    verifiedStatus: 'identity',
+    accountKind: "person",
+    verifiedStatus: "identity",
     stripeSubscriptionStatus: null,
     stripeSubscriptionPriceId: null,
     stripeCurrentPeriodEnd: null,
@@ -93,550 +99,677 @@ afterEach(() => {
   jest.clearAllMocks();
 });
 
-describe('laterDate', () => {
-  it('returns the later of two dates', () => {
-    const a = new Date('2030-01-01');
-    const b = new Date('2031-01-01');
+describe("laterDate", () => {
+  it("returns the later of two dates", () => {
+    const a = new Date("2030-01-01");
+    const b = new Date("2031-01-01");
     expect(laterDate(a, b)).toBe(b);
     expect(laterDate(b, a)).toBe(b);
   });
 
-  it('handles nulls', () => {
-    const a = new Date('2030-01-01');
+  it("handles nulls", () => {
+    const a = new Date("2030-01-01");
     expect(laterDate(a, null)).toBe(a);
     expect(laterDate(null, a)).toBe(a);
     expect(laterDate(null, null)).toBeNull();
   });
 });
 
-describe('EntitlementService.recomputeAndApply', () => {
-  it('throws NotFoundException when the user is missing', async () => {
+describe("EntitlementService.recomputeAndApply", () => {
+  it("throws NotFoundException when the user is missing", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(null);
 
-    await expect(service.recomputeAndApply('missing')).rejects.toThrow(NotFoundException);
+    await expect(service.recomputeAndApply("missing")).rejects.toThrow(
+      NotFoundException,
+    );
   });
 
-  it('grants premium from an active Stripe premium subscription', async () => {
+  it("does not activate a grant before its start date", async () => {
     const { service, deps } = makeService();
-    const periodEnd = new Date('2030-06-01T00:00:00Z');
     deps.prisma.user.findUnique.mockResolvedValue(
       userRow({
-        stripeSubscriptionStatus: 'active',
-        stripeSubscriptionPriceId: 'price_premium',
+        subscriptionGrants: [
+          grantRow({ startsAt: new Date(Date.now() + 86400000) }),
+        ],
+      }),
+    );
+    const result = await service.recomputeAndApply("u1");
+    expect(result.effectiveTier).toBe("none");
+    expect(deps.sideEffects.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("grants premium from an active Stripe premium subscription", async () => {
+    const { service, deps } = makeService();
+    const periodEnd = new Date("2030-06-01T00:00:00Z");
+    deps.prisma.user.findUnique.mockResolvedValue(
+      userRow({
+        stripeSubscriptionStatus: "active",
+        stripeSubscriptionPriceId: "price_premium",
         stripeCurrentPeriodEnd: periodEnd,
       }),
     );
 
-    const result = await service.recomputeAndApply('u1');
+    const result = await service.recomputeAndApply("u1");
 
     expect(result.isPremium).toBe(true);
     expect(result.isPremiumPlus).toBe(false);
-    expect(result.effectiveTier).toBe('premium');
+    expect(result.effectiveTier).toBe("premium");
     expect(result.stripeExpiresAt).toEqual(periodEnd);
     expect(result.effectiveExpiresAt).toEqual(periodEnd);
     expect(deps.prisma.user.update).toHaveBeenCalledWith({
-      where: { id: 'u1' },
+      where: { id: "u1" },
       data: { premium: true, premiumPlus: false },
     });
   });
 
-  it('grants premium+ from the premium+ Stripe price', async () => {
+  it("grants premium+ from the premium+ Stripe price", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(
       userRow({
-        stripeSubscriptionStatus: 'trialing',
-        stripeSubscriptionPriceId: 'price_premium_plus',
+        stripeSubscriptionStatus: "trialing",
+        stripeSubscriptionPriceId: "price_premium_plus",
       }),
     );
 
-    const result = await service.recomputeAndApply('u1');
+    const result = await service.recomputeAndApply("u1");
 
-    expect(result.effectiveTier).toBe('premiumPlus');
+    expect(result.effectiveTier).toBe("premiumPlus");
     expect(deps.prisma.user.update).toHaveBeenCalledWith({
-      where: { id: 'u1' },
+      where: { id: "u1" },
       data: { premium: true, premiumPlus: true },
     });
   });
 
-  it('does not entitle an unverified user even with an active Stripe subscription and grants', async () => {
+  it("does not entitle an unverified user even with an active Stripe subscription and grants", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(
       userRow({
-        verifiedStatus: 'none',
-        stripeSubscriptionStatus: 'active',
-        stripeSubscriptionPriceId: 'price_premium',
+        verifiedStatus: "none",
+        stripeSubscriptionStatus: "active",
+        stripeSubscriptionPriceId: "price_premium",
         subscriptionGrants: [grantRow()],
       }),
     );
 
-    const result = await service.recomputeAndApply('u1');
+    const result = await service.recomputeAndApply("u1");
 
-    expect(result.effectiveTier).toBe('none');
+    expect(result.effectiveTier).toBe("none");
     expect(result.isPremium).toBe(false);
     // Grants are still banked (returned), just not applied.
     expect(result.activeGrants).toHaveLength(1);
     expect(deps.prisma.user.update).toHaveBeenCalledWith({
-      where: { id: 'u1' },
+      where: { id: "u1" },
       data: { premium: false, premiumPlus: false },
     });
   });
 
-  it('grants premium from an admin grant without any Stripe subscription', async () => {
+  it("grants premium from an admin grant without any Stripe subscription", async () => {
     const { service, deps } = makeService();
     const grant = grantRow();
-    deps.prisma.user.findUnique.mockResolvedValue(userRow({ subscriptionGrants: [grant] }));
+    deps.prisma.user.findUnique.mockResolvedValue(
+      userRow({ subscriptionGrants: [grant] }),
+    );
 
-    const result = await service.recomputeAndApply('u1');
+    const result = await service.recomputeAndApply("u1");
 
-    expect(result.effectiveTier).toBe('premium');
+    expect(result.effectiveTier).toBe("premium");
     expect(result.grantExpiresAt).toEqual(grant.endsAt);
     expect(result.stripeExpiresAt).toBeNull();
   });
 
-  it('ignores referral grants when there is no active Stripe subscription', async () => {
+  it("ignores referral grants when there is no active Stripe subscription", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(
       userRow({
-        subscriptionGrants: [grantRow({ source: 'referral', requiresActiveSubscription: true })],
-      }),
-    );
-
-    const result = await service.recomputeAndApply('u1');
-
-    expect(result.effectiveTier).toBe('none');
-    expect(result.isPremium).toBe(false);
-  });
-
-  it('counts referral grants when the Stripe subscription is active', async () => {
-    const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue(
-      userRow({
-        stripeSubscriptionStatus: 'active',
-        stripeSubscriptionPriceId: 'price_premium',
         subscriptionGrants: [
-          grantRow({ tier: 'premiumPlus', source: 'referral', requiresActiveSubscription: true }),
+          grantRow({ source: "referral", requiresActiveSubscription: true }),
         ],
       }),
     );
 
-    const result = await service.recomputeAndApply('u1');
+    const result = await service.recomputeAndApply("u1");
 
-    expect(result.effectiveTier).toBe('premiumPlus');
+    expect(result.effectiveTier).toBe("none");
+    expect(result.isPremium).toBe(false);
   });
 
-  it('lets a premium+ grant outrank a premium Stripe subscription', async () => {
+  it("counts referral grants when the Stripe subscription is active", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(
       userRow({
-        stripeSubscriptionStatus: 'active',
-        stripeSubscriptionPriceId: 'price_premium',
-        subscriptionGrants: [grantRow({ tier: 'premiumPlus' })],
+        stripeSubscriptionStatus: "active",
+        stripeSubscriptionPriceId: "price_premium",
+        subscriptionGrants: [
+          grantRow({
+            tier: "premiumPlus",
+            source: "referral",
+            requiresActiveSubscription: true,
+          }),
+        ],
       }),
     );
 
-    const result = await service.recomputeAndApply('u1');
+    const result = await service.recomputeAndApply("u1");
 
-    expect(result.effectiveTier).toBe('premiumPlus');
+    expect(result.effectiveTier).toBe("premiumPlus");
+  });
+
+  it("lets a premium+ grant outrank a premium Stripe subscription", async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue(
+      userRow({
+        stripeSubscriptionStatus: "active",
+        stripeSubscriptionPriceId: "price_premium",
+        subscriptionGrants: [grantRow({ tier: "premiumPlus" })],
+      }),
+    );
+
+    const result = await service.recomputeAndApply("u1");
+
+    expect(result.effectiveTier).toBe("premiumPlus");
     expect(result.isPremiumPlus).toBe(true);
   });
 
-  it('treats past_due as entitled (grace period)', async () => {
+  it("treats past_due as entitled (grace period)", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(
       userRow({
-        stripeSubscriptionStatus: 'past_due',
-        stripeSubscriptionPriceId: 'price_premium',
+        stripeSubscriptionStatus: "past_due",
+        stripeSubscriptionPriceId: "price_premium",
       }),
     );
 
-    const result = await service.recomputeAndApply('u1');
+    const result = await service.recomputeAndApply("u1");
 
     expect(result.isPremium).toBe(true);
   });
 
-  it('treats canceled as not entitled', async () => {
+  it("treats canceled as not entitled", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(
       userRow({
-        stripeSubscriptionStatus: 'canceled',
-        stripeSubscriptionPriceId: 'price_premium',
+        stripeSubscriptionStatus: "canceled",
+        stripeSubscriptionPriceId: "price_premium",
       }),
     );
 
-    const result = await service.recomputeAndApply('u1');
+    const result = await service.recomputeAndApply("u1");
 
     expect(result.isPremium).toBe(false);
     expect(result.stripeExpiresAt).toBeNull();
   });
 
-  it('uses the later of Stripe and grant expiry for effectiveExpiresAt', async () => {
+  it("uses the later of Stripe and grant expiry for effectiveExpiresAt", async () => {
     const { service, deps } = makeService();
-    const stripeEnd = new Date('2030-01-01T00:00:00Z');
-    const grantEnd = new Date('2031-01-01T00:00:00Z');
+    const stripeEnd = new Date("2030-01-01T00:00:00Z");
+    const grantEnd = new Date("2031-01-01T00:00:00Z");
     deps.prisma.user.findUnique.mockResolvedValue(
       userRow({
-        stripeSubscriptionStatus: 'active',
-        stripeSubscriptionPriceId: 'price_premium',
+        stripeSubscriptionStatus: "active",
+        stripeSubscriptionPriceId: "price_premium",
         stripeCurrentPeriodEnd: stripeEnd,
         subscriptionGrants: [grantRow({ endsAt: grantEnd })],
       }),
     );
 
-    const result = await service.recomputeAndApply('u1');
+    const result = await service.recomputeAndApply("u1");
 
     expect(result.effectiveExpiresAt).toEqual(grantEnd);
   });
 
-  it('grants premium from an active Apple subscription', async () => {
+  it("grants premium from an active Apple subscription", async () => {
     const appleExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const { service, deps } = makeService({
       appConfig: {
         stripe: jest.fn(() => STRIPE_CFG),
-        appleIap: jest.fn(() => ({ productTierMap: { 'com.test.premium.monthly': 'premium' } })),
+        appleIap: jest.fn(() => ({
+          productTierMap: { "com.test.premium.monthly": "premium" },
+        })),
       },
     });
     deps.prisma.user.findUnique.mockResolvedValue(
-      userRow({ appleStatus: 'active', appleProductId: 'com.test.premium.monthly', appleExpiresAt }),
+      userRow({
+        appleStatus: "active",
+        appleProductId: "com.test.premium.monthly",
+        appleExpiresAt,
+      }),
     );
 
-    const result = await service.recomputeAndApply('u1');
+    const result = await service.recomputeAndApply("u1");
 
     expect(result.isPremium).toBe(true);
     expect(result.isPremiumPlus).toBe(false);
-    expect(result.effectiveTier).toBe('premium');
+    expect(result.effectiveTier).toBe("premium");
     expect(result.appleExpiresAt).toEqual(appleExpiresAt);
     expect(deps.prisma.user.update).toHaveBeenCalledWith({
-      where: { id: 'u1' },
+      where: { id: "u1" },
       data: { premium: true, premiumPlus: false },
     });
   });
 
-  it('grants premium when Apple subscription is in billing-retry grace period', async () => {
+  it("grants premium when Apple subscription is in billing-retry grace period", async () => {
     const appleExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const { service, deps } = makeService({
       appConfig: {
         stripe: jest.fn(() => STRIPE_CFG),
-        appleIap: jest.fn(() => ({ productTierMap: { 'com.test.premium.monthly': 'premium' } })),
+        appleIap: jest.fn(() => ({
+          productTierMap: { "com.test.premium.monthly": "premium" },
+        })),
       },
     });
     deps.prisma.user.findUnique.mockResolvedValue(
-      userRow({ appleStatus: 'grace', appleProductId: 'com.test.premium.monthly', appleExpiresAt }),
+      userRow({
+        appleStatus: "grace",
+        appleProductId: "com.test.premium.monthly",
+        appleExpiresAt,
+      }),
     );
 
-    const result = await service.recomputeAndApply('u1');
+    const result = await service.recomputeAndApply("u1");
 
     expect(result.isPremium).toBe(true);
-    expect(result.effectiveTier).toBe('premium');
+    expect(result.effectiveTier).toBe("premium");
   });
 
-  it('does not entitle when the Apple subscription has expired', async () => {
+  it("does not entitle when the Apple subscription has expired", async () => {
     const appleExpiresAt = new Date(Date.now() - 1000); // in the past
     const { service, deps } = makeService({
       appConfig: {
         stripe: jest.fn(() => STRIPE_CFG),
-        appleIap: jest.fn(() => ({ productTierMap: { 'com.test.premium.monthly': 'premium' } })),
+        appleIap: jest.fn(() => ({
+          productTierMap: { "com.test.premium.monthly": "premium" },
+        })),
       },
     });
     deps.prisma.user.findUnique.mockResolvedValue(
-      userRow({ appleStatus: 'active', appleProductId: 'com.test.premium.monthly', appleExpiresAt }),
+      userRow({
+        appleStatus: "active",
+        appleProductId: "com.test.premium.monthly",
+        appleExpiresAt,
+      }),
     );
 
-    const result = await service.recomputeAndApply('u1');
+    const result = await service.recomputeAndApply("u1");
 
     expect(result.isPremium).toBe(false);
-    expect(result.effectiveTier).toBe('none');
+    expect(result.effectiveTier).toBe("none");
     expect(result.appleExpiresAt).toBeNull();
   });
 
-  it('does not entitle when the Apple subscription is lapsed', async () => {
+  it("does not entitle when the Apple subscription is lapsed", async () => {
     const appleExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const { service, deps } = makeService({
       appConfig: {
         stripe: jest.fn(() => STRIPE_CFG),
-        appleIap: jest.fn(() => ({ productTierMap: { 'com.test.premium.monthly': 'premium' } })),
+        appleIap: jest.fn(() => ({
+          productTierMap: { "com.test.premium.monthly": "premium" },
+        })),
       },
     });
     deps.prisma.user.findUnique.mockResolvedValue(
-      userRow({ appleStatus: 'lapsed', appleProductId: 'com.test.premium.monthly', appleExpiresAt }),
+      userRow({
+        appleStatus: "lapsed",
+        appleProductId: "com.test.premium.monthly",
+        appleExpiresAt,
+      }),
     );
 
-    const result = await service.recomputeAndApply('u1');
+    const result = await service.recomputeAndApply("u1");
 
     expect(result.isPremium).toBe(false);
-    expect(result.effectiveTier).toBe('none');
+    expect(result.effectiveTier).toBe("none");
   });
 
   // ── billing.premium.changed dispatch ─────────────────────────────────────
 
-  it('dispatches billing.premium.changed started when premium flips false -> true', async () => {
+  it("dispatches billing.premium.changed started when premium flips false -> true", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(
       userRow({
         premium: false,
-        stripeSubscriptionStatus: 'active',
-        stripeSubscriptionPriceId: 'price_premium',
+        stripeSubscriptionStatus: "active",
+        stripeSubscriptionPriceId: "price_premium",
       }),
     );
 
-    await service.recomputeAndApply('u1');
+    await service.recomputeAndApply("u1");
 
-    expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith('u1');
-    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith('u1', 'billing_tier_changed');
-    expect(deps.sideEffects.dispatch).toHaveBeenCalledWith('billing.premium.changed', {
-      userId: 'u1',
-      direction: 'started',
-    });
+    expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith("u1");
+    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith(
+      "u1",
+      "billing_tier_changed",
+    );
+    expect(deps.sideEffects.dispatch).toHaveBeenCalledWith(
+      "billing.premium.changed",
+      {
+        userId: "u1",
+        direction: "started",
+      },
+    );
   });
 
-  it('dispatches billing.premium.changed ended when premium flips true -> false', async () => {
+  it("dispatches billing.premium.changed ended when premium flips true -> false", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(
       userRow({
         premium: true,
-        stripeSubscriptionStatus: 'canceled',
-        stripeSubscriptionPriceId: 'price_premium',
+        stripeSubscriptionStatus: "canceled",
+        stripeSubscriptionPriceId: "price_premium",
       }),
     );
 
-    await service.recomputeAndApply('u1');
+    await service.recomputeAndApply("u1");
 
-    expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith('u1');
-    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith('u1', 'billing_tier_changed');
-    expect(deps.sideEffects.dispatch).toHaveBeenCalledWith('billing.premium.changed', {
-      userId: 'u1',
-      direction: 'ended',
-    });
+    expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith("u1");
+    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith(
+      "u1",
+      "billing_tier_changed",
+    );
+    expect(deps.sideEffects.dispatch).toHaveBeenCalledWith(
+      "billing.premium.changed",
+      {
+        userId: "u1",
+        direction: "ended",
+      },
+    );
   });
 
-  it('does not dispatch when premium is unchanged (already false)', async () => {
+  it("does not dispatch when premium is unchanged (already false)", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(
-      userRow({ premium: false, stripeSubscriptionStatus: 'canceled' }),
+      userRow({ premium: false, stripeSubscriptionStatus: "canceled" }),
     );
 
-    await service.recomputeAndApply('u1');
+    await service.recomputeAndApply("u1");
 
     expect(deps.sideEffects.dispatch).not.toHaveBeenCalled();
   });
 
-  it('does not dispatch when premium is unchanged (already true stays true)', async () => {
+  it("does not dispatch when premium is unchanged (already true stays true)", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(
       userRow({
         premium: true,
-        stripeSubscriptionStatus: 'active',
-        stripeSubscriptionPriceId: 'price_premium',
+        stripeSubscriptionStatus: "active",
+        stripeSubscriptionPriceId: "price_premium",
       }),
     );
 
-    await service.recomputeAndApply('u1');
+    await service.recomputeAndApply("u1");
 
     expect(deps.sideEffects.dispatch).not.toHaveBeenCalled();
   });
 
-  it('does not dispatch when only the Plus tier changes (premium stays true)', async () => {
+  it("emails a real Premium+ upgrade while leaving the Premium boundary notification unchanged", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(
       userRow({
         premium: true,
-        stripeSubscriptionStatus: 'active',
-        stripeSubscriptionPriceId: 'price_premium_plus',
+        stripeSubscriptionId: "sub-plus",
+        stripeCurrentPeriodStart: new Date("2026-10-01T00:00:00Z"),
+        stripeSubscriptionStatus: "active",
+        stripeSubscriptionPriceId: "price_premium_plus",
       }),
     );
 
-    await service.recomputeAndApply('u1');
+    await service.recomputeAndApply("u1");
 
     // Tier changes still invalidate permission caches and notify the active client.
-    expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith('u1');
-    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith('u1', 'billing_tier_changed');
-    expect(deps.auth.bustSessionCachesForUser.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith("u1");
+    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith(
+      "u1",
+      "billing_tier_changed",
+    );
+    expect(
+      deps.auth.bustSessionCachesForUser.mock.invocationCallOrder[0],
+    ).toBeLessThan(
       deps.usersMeRealtime.emitMeUpdated.mock.invocationCallOrder[0],
     );
-    expect(deps.sideEffects.dispatch).not.toHaveBeenCalled();
+    expect(deps.sideEffects.dispatch).toHaveBeenCalledWith(
+      "email.lifecycle",
+      expect.objectContaining({
+        kind: "premium",
+        tier: "premiumPlus",
+        source: "stripe",
+        eventId: "sub-plus-2026-10-01T00:00:00.000Z-premiumPlus",
+      }),
+      expect.anything(),
+    );
+    expect(
+      deps.sideEffects.dispatch.mock.calls.some(
+        (call: any[]) => call[0] === "billing.premium.changed",
+      ),
+    ).toBe(false);
   });
 });
 
-describe('EntitlementService.setGrantMonths', () => {
-  it('throws NotFoundException when the user is missing', async () => {
+describe("EntitlementService.setGrantMonths", () => {
+  it("throws NotFoundException when the user is missing", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(null);
 
     await expect(
-      service.setGrantMonths({ userId: 'missing', tier: 'premium', months: 1 }),
+      service.setGrantMonths({ userId: "missing", tier: "premium", months: 1 }),
     ).rejects.toThrow(NotFoundException);
   });
 
-  it('revokes active grants for the tier and creates a consolidated grant', async () => {
+  it("revokes active grants for the tier and creates a consolidated grant", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique
       // setGrantMonths existence check
-      .mockResolvedValueOnce({ id: 'u1' })
+      .mockResolvedValueOnce({ id: "u1" })
       // recomputeAndApply read
       .mockResolvedValueOnce(userRow());
 
     await service.setGrantMonths({
-      userId: 'u1',
-      tier: 'premium',
+      userId: "u1",
+      tier: "premium",
       months: 3,
-      grantedByAdminId: 'admin1',
-      reason: 'support',
+      grantedByAdminId: "admin1",
+      reason: "support",
     });
 
     expect(deps.prisma.subscriptionGrant.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ userId: 'u1', tier: 'premium', revokedAt: null }),
+        where: expect.objectContaining({
+          userId: "u1",
+          tier: "premium",
+          revokedAt: null,
+        }),
         data: expect.objectContaining({ revokedAt: expect.any(Date) }),
       }),
     );
     expect(deps.prisma.subscriptionGrant.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          userId: 'u1',
-          tier: 'premium',
-          source: 'admin',
+          userId: "u1",
+          tier: "premium",
+          source: "admin",
           months: 3,
-          grantedByAdminId: 'admin1',
-          reason: 'support',
+          grantedByAdminId: "admin1",
+          reason: "support",
         }),
       }),
     );
   });
 
-  it('clears grants entirely when months is 0', async () => {
+  it("clears grants entirely when months is 0", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique
-      .mockResolvedValueOnce({ id: 'u1' })
+      .mockResolvedValueOnce({ id: "u1" })
       .mockResolvedValueOnce(userRow());
 
-    await service.setGrantMonths({ userId: 'u1', tier: 'premium', months: 0 });
+    await service.setGrantMonths({ userId: "u1", tier: "premium", months: 0 });
 
     expect(deps.prisma.subscriptionGrant.updateMany).toHaveBeenCalled();
     expect(deps.prisma.subscriptionGrant.create).not.toHaveBeenCalled();
   });
 });
 
-describe('EntitlementService.extendGrantsAfterPause', () => {
-  it('is a no-op when unverifiedAt is null', async () => {
+describe("EntitlementService.extendGrantsAfterPause", () => {
+  it("is a no-op when unverifiedAt is null", async () => {
     const { service, deps } = makeService();
 
-    await service.extendGrantsAfterPause('u1', null);
+    await service.extendGrantsAfterPause("u1", null);
 
     expect(deps.prisma.subscriptionGrant.findMany).not.toHaveBeenCalled();
   });
 
-  it('extends grant endsAt by the paused duration', async () => {
+  it("extends grant endsAt by the paused duration", async () => {
     const { service, deps } = makeService();
     const pauseMs = 7 * 24 * 60 * 60 * 1000; // 7 days
     const unverifiedAt = new Date(Date.now() - pauseMs);
     const endsAt = new Date(Date.now() + 1000);
-    deps.prisma.subscriptionGrant.findMany.mockResolvedValue([grantRow({ id: 'g1', endsAt })]);
+    deps.prisma.subscriptionGrant.findMany.mockResolvedValue([
+      grantRow({ id: "g1", endsAt }),
+    ]);
 
-    await service.extendGrantsAfterPause('u1', unverifiedAt);
+    await service.extendGrantsAfterPause("u1", unverifiedAt);
 
     expect(deps.prisma.subscriptionGrant.update).toHaveBeenCalledTimes(1);
     const call = deps.prisma.subscriptionGrant.update.mock.calls[0][0];
-    expect(call.where).toEqual({ id: 'g1' });
+    expect(call.where).toEqual({ id: "g1" });
     const newEndsAt: Date = call.data.endsAt;
     // Allow a little wall-clock drift between test setup and service execution.
-    expect(Math.abs(newEndsAt.getTime() - (endsAt.getTime() + pauseMs))).toBeLessThan(2000);
+    expect(
+      Math.abs(newEndsAt.getTime() - (endsAt.getTime() + pauseMs)),
+    ).toBeLessThan(2000);
   });
 });
 
-describe('EntitlementService.getGrantSummary', () => {
-  it('sums remaining time per tier and rounds to months', async () => {
+describe("EntitlementService.getGrantSummary", () => {
+  it("sums remaining time per tier and rounds to months", async () => {
     const { service, deps } = makeService();
     const now = Date.now();
     const oneMonthMs = 30.44 * 24 * 60 * 60 * 1000;
     deps.prisma.subscriptionGrant.findMany.mockResolvedValue([
-      grantRow({ tier: 'premium', endsAt: new Date(now + oneMonthMs) }),
-      grantRow({ id: 'g2', tier: 'premiumPlus', endsAt: new Date(now + 2 * oneMonthMs) }),
+      grantRow({ tier: "premium", endsAt: new Date(now + oneMonthMs) }),
+      grantRow({
+        id: "g2",
+        tier: "premiumPlus",
+        endsAt: new Date(now + 2 * oneMonthMs),
+      }),
     ]);
 
-    const summary = await service.getGrantSummary('u1');
+    const summary = await service.getGrantSummary("u1");
 
     expect(summary.premiumMonthsRemaining).toBe(1);
     expect(summary.premiumPlusMonthsRemaining).toBe(2);
   });
 
-  it('returns zeros when there are no active grants', async () => {
+  it("returns zeros when there are no active grants", async () => {
     const { service, deps } = makeService();
     deps.prisma.subscriptionGrant.findMany.mockResolvedValue([]);
 
-    const summary = await service.getGrantSummary('u1');
+    const summary = await service.getGrantSummary("u1");
 
-    expect(summary).toEqual({ premiumMonthsRemaining: 0, premiumPlusMonthsRemaining: 0 });
+    expect(summary).toEqual({
+      premiumMonthsRemaining: 0,
+      premiumPlusMonthsRemaining: 0,
+    });
   });
 });
 
 // ─── isPayingSubscriber ───────────────────────────────────────────────────────
 
-import { isPayingSubscriber } from './entitlement.service';
+import { isPayingSubscriber } from "./entitlement.service";
 
-describe('isPayingSubscriber', () => {
+describe("isPayingSubscriber", () => {
   const base = {
-    verifiedStatus: 'identity',
+    verifiedStatus: "identity",
     stripeSubscriptionStatus: null as string | null,
     appleStatus: null as string | null,
     appleExpiresAt: null as Date | null,
   };
 
-  it('returns true when Stripe subscription is active', () => {
-    expect(isPayingSubscriber({ ...base, stripeSubscriptionStatus: 'active' })).toBe(true);
-  });
-
-  it('returns true when Stripe subscription is trialing', () => {
-    expect(isPayingSubscriber({ ...base, stripeSubscriptionStatus: 'trialing' })).toBe(true);
-  });
-
-  it('returns true when Apple subscription is active and not expired', () => {
-    const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    expect(isPayingSubscriber({ ...base, appleStatus: 'active', appleExpiresAt: future })).toBe(true);
-  });
-
-  it('returns false when Apple subscription is active but expired', () => {
-    const past = new Date(Date.now() - 1000);
-    expect(isPayingSubscriber({ ...base, appleStatus: 'active', appleExpiresAt: past })).toBe(false);
-  });
-
-  it('returns false when user is unverified regardless of subscription', () => {
+  it("returns true when Stripe subscription is active", () => {
     expect(
-      isPayingSubscriber({ ...base, verifiedStatus: 'none', stripeSubscriptionStatus: 'active' }),
+      isPayingSubscriber({ ...base, stripeSubscriptionStatus: "active" }),
+    ).toBe(true);
+  });
+
+  it("returns true when Stripe subscription is trialing", () => {
+    expect(
+      isPayingSubscriber({ ...base, stripeSubscriptionStatus: "trialing" }),
+    ).toBe(true);
+  });
+
+  it("returns true when Apple subscription is active and not expired", () => {
+    const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    expect(
+      isPayingSubscriber({
+        ...base,
+        appleStatus: "active",
+        appleExpiresAt: future,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when Apple subscription is active but expired", () => {
+    const past = new Date(Date.now() - 1000);
+    expect(
+      isPayingSubscriber({
+        ...base,
+        appleStatus: "active",
+        appleExpiresAt: past,
+      }),
     ).toBe(false);
   });
 
-  it('returns false when there is no paid subscription', () => {
+  it("returns false when user is unverified regardless of subscription", () => {
+    expect(
+      isPayingSubscriber({
+        ...base,
+        verifiedStatus: "none",
+        stripeSubscriptionStatus: "active",
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when there is no paid subscription", () => {
     expect(isPayingSubscriber(base)).toBe(false);
   });
 });
 
 // ─── standalone referral grant entitlement ───────────────────────────────────
 
-describe('EntitlementService — standalone referral grant (requiresActiveSubscription: false)', () => {
-  it('grants premium from a referral grant even with no Stripe subscription', async () => {
+describe("EntitlementService — standalone referral grant (requiresActiveSubscription: false)", () => {
+  it("grants premium from a referral grant even with no Stripe subscription", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(
       userRow({
         subscriptionGrants: [
-          grantRow({ source: 'referral', requiresActiveSubscription: false }),
+          grantRow({ source: "referral", requiresActiveSubscription: false }),
         ],
       }),
     );
 
-    const result = await service.recomputeAndApply('u1');
+    const result = await service.recomputeAndApply("u1");
 
     expect(result.isPremium).toBe(true);
-    expect(result.effectiveTier).toBe('premium');
+    expect(result.effectiveTier).toBe("premium");
   });
 });
 
-
-describe('Sandbox entitlement verification prerequisite', () => {
-  it.each(['none', 'identity', 'manual'])('requires verification for a %s account', async (verifiedStatus) => {
-    const { service, deps } = makeService();
-    deps.appConfig.appleIap.mockReturnValue({ productTierMap: { sandbox: 'premium' } });
-    deps.prisma.user.findUnique.mockResolvedValue(userRow({ verifiedStatus, appleSandboxProductId: 'sandbox', appleSandboxStatus: 'active', appleSandboxExpiresAt: new Date(Date.now() + 86400000) }));
-    const result = await service.recomputeAndApply('u1');
-    expect(result.isPremium).toBe(verifiedStatus !== 'none');
-  });
+describe("Sandbox entitlement verification prerequisite", () => {
+  it.each(["none", "identity", "manual"])(
+    "requires verification for a %s account",
+    async (verifiedStatus) => {
+      const { service, deps } = makeService();
+      deps.appConfig.appleIap.mockReturnValue({
+        productTierMap: { sandbox: "premium" },
+      });
+      deps.prisma.user.findUnique.mockResolvedValue(
+        userRow({
+          verifiedStatus,
+          appleSandboxProductId: "sandbox",
+          appleSandboxStatus: "active",
+          appleSandboxExpiresAt: new Date(Date.now() + 86400000),
+        }),
+      );
+      const result = await service.recomputeAndApply("u1");
+      expect(result.isPremium).toBe(verifiedStatus !== "none");
+    },
+  );
 });

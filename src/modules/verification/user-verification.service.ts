@@ -1,20 +1,24 @@
-import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
-import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
-import { PosthogService } from '../../common/posthog/posthog.service';
-import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { AuthService } from '../auth/auth-public-api';
-import { BillingService } from '../billing/billing.service';
-import { AffiliateService } from '../billing/affiliate.service';
-import { CoinsService } from '../coins/coins.service';
-import { SideEffectsService } from '../side-effects/side-effects.service';
-import { PublicProfileCacheService } from '../users/public-profile-cache.service';
-import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
-import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
-import { joinOfficialGroup } from '../groups/official-group';
-import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { NOT_BANNED_USER_WHERE } from "../../common/prisma-selects/user.where";
+import { USER_REF_SELECT } from "../../common/prisma-selects/user.select";
+import { PosthogService } from "../../common/posthog/posthog.service";
+import { Injectable, Logger } from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { AuthService } from "../auth/auth-public-api";
+import { BillingService } from "../billing/billing.service";
+import { AffiliateService } from "../billing/affiliate.service";
+import { CoinsService } from "../coins/coins.service";
+import { SideEffectsService } from "../side-effects/side-effects.service";
+import { PublicProfileCacheService } from "../users/public-profile-cache.service";
+import { UsersMeRealtimeService } from "../users/users-me-realtime.service";
+import { UsersPublicRealtimeService } from "../users/users-public-realtime.service";
+import { joinOfficialGroup } from "../groups/official-group";
+import { PresenceRealtimeService } from "../presence/presence-realtime.service";
 
-export type VerifyUserSource = 'admin_request' | 'admin_patch' | 'auto_referral' | 'auto_signup';
+export type VerifyUserSource =
+  | "admin_request"
+  | "admin_patch"
+  | "auto_referral"
+  | "auto_signup";
 
 export type VerifyUserResult = {
   verified: boolean;
@@ -38,7 +42,10 @@ export class UserVerificationService {
     private readonly affiliate: AffiliateService,
     private readonly coins: CoinsService,
     private readonly sideEffects: SideEffectsService,
-    private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
+    private readonly publicProfileCache: PublicProfileCacheService<{
+      id: string;
+      username: string | null;
+    }>,
     private readonly usersMeRealtime: UsersMeRealtimeService,
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
     private readonly presenceRealtime: PresenceRealtimeService,
@@ -54,15 +61,20 @@ export class UserVerificationService {
     adminUserId?: string | null;
     adminNote?: string | null;
     /** Override verifiedStatus (admin_patch may set identity vs manual). Default: manual. */
-    verifiedStatus?: 'identity' | 'manual';
+    verifiedStatus?: "identity" | "manual";
   }): Promise<VerifyUserResult> {
-    const userId = (params.userId ?? '').trim();
+    const userId = (params.userId ?? "").trim();
     if (!userId) {
-      return { verified: false, alreadyVerified: false, userId: '', previousUnverifiedAt: null };
+      return {
+        verified: false,
+        alreadyVerified: false,
+        userId: "",
+        previousUnverifiedAt: null,
+      };
     }
 
     const now = new Date();
-    const status = params.verifiedStatus ?? 'manual';
+    const status = params.verifiedStatus ?? "manual";
 
     const current = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -73,31 +85,45 @@ export class UserVerificationService {
       },
     });
     if (!current) {
-      return { verified: false, alreadyVerified: false, userId, previousUnverifiedAt: null };
+      return {
+        verified: false,
+        alreadyVerified: false,
+        userId,
+        previousUnverifiedAt: null,
+      };
     }
 
-    const alreadyVerified = (current.verifiedStatus ?? 'none') !== 'none';
+    const alreadyVerified = (current.verifiedStatus ?? "none") !== "none";
     const previousUnverifiedAt = current.unverifiedAt ?? null;
 
     if (alreadyVerified) {
       await this.prisma.verificationRequest.updateMany({
-        where: { userId, status: 'pending' },
+        where: { userId, status: "pending" },
         data: {
-          status: 'approved', reviewedAt: now, rejectionReason: null,
-          ...(params.adminUserId ? { reviewedByAdminId: params.adminUserId } : {}),
+          status: "approved",
+          reviewedAt: now,
+          rejectionReason: null,
+          ...(params.adminUserId
+            ? { reviewedByAdminId: params.adminUserId }
+            : {}),
           ...(params.adminNote != null ? { adminNote: params.adminNote } : {}),
         },
       });
       await this.auth.bustSessionCachesForUser(userId);
       await this.notifyMemberChanged(userId);
-      await this.notifyAdminQueueChanged('reviewed', params.requestId);
-      return { verified: false, alreadyVerified: true, userId, previousUnverifiedAt };
+      await this.notifyAdminQueueChanged("reviewed", params.requestId);
+      return {
+        verified: false,
+        alreadyVerified: true,
+        userId,
+        previousUnverifiedAt,
+      };
     }
 
     const newlyVerified = await this.prisma.$transaction(async (tx) => {
       // Only one concurrent approval owns rewards and notifications.
       const changed = await tx.user.updateMany({
-        where: { id: userId, verifiedStatus: 'none' },
+        where: { id: userId, verifiedStatus: "none" },
         data: {
           verifiedStatus: status,
           verifiedAt: now,
@@ -108,11 +134,13 @@ export class UserVerificationService {
       // Verification resolves every pending request, regardless of the entry point.
       // Preserve the original provider so the video-call agreement remains auditable.
       await tx.verificationRequest.updateMany({
-        where: { userId, status: 'pending' },
+        where: { userId, status: "pending" },
         data: {
-          status: 'approved',
+          status: "approved",
           reviewedAt: now,
-          ...(params.adminUserId ? { reviewedByAdminId: params.adminUserId } : {}),
+          ...(params.adminUserId
+            ? { reviewedByAdminId: params.adminUserId }
+            : {}),
           ...(params.adminNote != null ? { adminNote: params.adminNote } : {}),
           rejectionReason: null,
         },
@@ -126,12 +154,18 @@ export class UserVerificationService {
     await this.notifyMemberChanged(userId);
 
     if (!newlyVerified) {
-      await this.notifyAdminQueueChanged('reviewed', params.requestId);
-      return { verified: false, alreadyVerified: true, userId, previousUnverifiedAt };
+      await this.notifyAdminQueueChanged("reviewed", params.requestId);
+      return {
+        verified: false,
+        alreadyVerified: true,
+        userId,
+        previousUnverifiedAt,
+      };
     }
 
-    this.posthog.capture(userId, 'verification_approved', {
-      source: params.source, $insert_id: `verification-approved:${userId}:${now.toISOString()}`,
+    this.posthog.capture(userId, "verification_approved", {
+      source: params.source,
+      $insert_id: `verification-approved:${userId}:${now.toISOString()}`,
     });
 
     try {
@@ -146,58 +180,85 @@ export class UserVerificationService {
     try {
       await this.billing.onUserVerified(userId, previousUnverifiedAt);
     } catch (err) {
-      this.logger.warn(`Failed to run billing hooks for verified user ${userId}: ${err}`);
+      this.logger.warn(
+        `Failed to run billing hooks for verified user ${userId}: ${err}`,
+      );
     }
 
     try {
       await this.coins.giftVerificationCoins(userId, 5);
     } catch (err) {
-      this.logger.warn(`Failed to gift verification coins for user ${userId}: ${err}`);
+      this.logger.warn(
+        `Failed to gift verification coins for user ${userId}: ${err}`,
+      );
     }
 
     try {
-      await this.affiliate.maybeRecordEarning(userId, 'verified');
+      await this.affiliate.maybeRecordEarning(userId, "verified");
     } catch (err) {
-      this.logger.warn(`[affiliate] Failed to record verified earning for user ${userId}: ${err}`);
+      this.logger.warn(
+        `[affiliate] Failed to record verified earning for user ${userId}: ${err}`,
+      );
     }
 
     try {
       await joinOfficialGroup(this.prisma, userId);
     } catch (err) {
-      this.logger.warn(`Failed to add verified user ${userId} to the official group: ${err}`);
+      this.logger.warn(
+        `Failed to add verified user ${userId} to the official group: ${err}`,
+      );
     }
 
-    this.sideEffects.dispatch('user.verified', { userId });
+    this.sideEffects.dispatch("user.verified", {
+      userId,
+      ...(previousUnverifiedAt ? { skipWelcome: true } : {}),
+    });
 
     try {
-      await this.notifyAdminQueueChanged('reviewed', params.requestId);
+      await this.notifyAdminQueueChanged("reviewed", params.requestId);
       await this.usersPublicRealtime.emitPublicProfileUpdated(userId);
     } catch {
       // Best-effort
     }
 
-    this.logger.log(`[verification] Verified user ${userId} via ${params.source}`);
-    return { verified: true, alreadyVerified: false, userId, previousUnverifiedAt };
+    this.logger.log(
+      `[verification] Verified user ${userId} via ${params.source}`,
+    );
+    return {
+      verified: true,
+      alreadyVerified: false,
+      userId,
+      previousUnverifiedAt,
+    };
   }
 
   /** Invalidate member progress even when a request changes but the badge does not. */
   async notifyMemberChanged(userId: string): Promise<void> {
     try {
-      await this.usersMeRealtime.emitMeUpdated(userId, 'verification_status_changed');
+      await this.usersMeRealtime.emitMeUpdated(
+        userId,
+        "verification_status_changed",
+      );
     } catch (error) {
       this.logger.warn(`Could not refresh member verification state: ${error}`);
     }
   }
 
   /** Every admin sees queue changes, including approvals outside the request screen. */
-  async notifyAdminQueueChanged(action: 'created' | 'reviewed', requestId?: string | null): Promise<void> {
+  async notifyAdminQueueChanged(
+    action: "created" | "reviewed",
+    requestId?: string | null,
+  ): Promise<void> {
     try {
       const admins = await this.prisma.user.findMany({
-        where: { siteAdmin: true, ...NOT_BANNED_USER_WHERE }, select: { id: true },
+        where: { siteAdmin: true, ...NOT_BANNED_USER_WHERE },
+        select: { id: true },
       });
       for (const admin of admins) {
         this.presenceRealtime.emitAdminUpdated(admin.id, {
-          kind: 'verification', action, ...(requestId ? { id: requestId } : {}),
+          kind: "verification",
+          action,
+          ...(requestId ? { id: requestId } : {}),
         });
       }
     } catch (error) {

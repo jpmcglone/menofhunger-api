@@ -1,6 +1,11 @@
-import { BadRequestException, ForbiddenException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { BillingService } from './billing.service';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from "@nestjs/common";
+import { Prisma } from "@prisma/client";
+import { BillingService } from "./billing.service";
 
 // ─── Stripe mock ─────────────────────────────────────────────────────────────
 // BillingService calls `require('stripe')` inside getStripe(). We replace it
@@ -20,9 +25,9 @@ declare global {
   var __stripeMock__: StripeMock | undefined;
 }
 
-jest.mock('stripe', () => {
+jest.mock("stripe", () => {
   return function StripeCtor() {
-    if (!global.__stripeMock__) throw new Error('stripe mock not configured');
+    if (!global.__stripeMock__) throw new Error("stripe mock not configured");
     return global.__stripeMock__;
   };
 });
@@ -32,7 +37,11 @@ function makeStripeMock(): StripeMock {
     checkout: { sessions: { create: jest.fn() } },
     billingPortal: { sessions: { create: jest.fn() } },
     customers: { create: jest.fn() },
-    subscriptions: { retrieve: jest.fn(), update: jest.fn(), cancel: jest.fn() },
+    subscriptions: {
+      retrieve: jest.fn(),
+      update: jest.fn(),
+      cancel: jest.fn(),
+    },
     webhooks: { constructEvent: jest.fn() },
   };
 }
@@ -49,6 +58,7 @@ type Deps = {
   slack: any;
   entitlement: any;
   referral: any;
+  sideEffects: any;
 };
 
 function makeDeps(overrides: Partial<Deps> = {}): Deps {
@@ -58,7 +68,7 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
         findUnique: jest.fn(),
         findFirst: jest.fn(),
         update: jest.fn(async () => ({})),
-        findUniqueOrThrow: jest.fn(async () => ({ id: 'u1', username: 'u' })),
+        findUniqueOrThrow: jest.fn(async () => ({ id: "u1", username: "u" })),
       },
       stripeWebhookEvent: {
         findUnique: jest.fn(async () => null),
@@ -69,18 +79,20 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
     },
     appConfig: {
       stripe: jest.fn(() => ({
-        secretKey: 'sk_test',
-        webhookSecret: 'whsec',
-        frontendBaseUrl: 'https://example.test',
-        pricePremiumMonthly: 'price_premium',
-        pricePremiumPlusMonthly: 'price_premium_plus',
+        secretKey: "sk_test",
+        webhookSecret: "whsec",
+        frontendBaseUrl: "https://example.test",
+        pricePremiumMonthly: "price_premium",
+        pricePremiumPlusMonthly: "price_premium_plus",
       })),
-      r2: jest.fn(() => ({ publicBaseUrl: 'https://cdn.example.test' })),
-      nodeEnv: jest.fn(() => 'development'),
+      r2: jest.fn(() => ({ publicBaseUrl: "https://cdn.example.test" })),
+      nodeEnv: jest.fn(() => "development"),
     },
     publicProfileCache: { invalidateForUser: jest.fn(async () => undefined) },
     usersMeRealtime: { emitMeUpdated: jest.fn(async () => undefined) },
-    usersPublicRealtime: { emitPublicProfileUpdated: jest.fn(async () => undefined) },
+    usersPublicRealtime: {
+      emitPublicProfileUpdated: jest.fn(async () => undefined),
+    },
     posthog: { capture: jest.fn() },
     slack: { notifyPremiumGranted: jest.fn() },
     entitlement: {
@@ -88,13 +100,14 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
       recomputeAndApply: jest.fn(async () => ({
         isPremium: true,
         isPremiumPlus: false,
-        effectiveTier: 'premium',
+        effectiveTier: "premium",
         grantExpiresAt: null,
         stripeExpiresAt: null,
       })),
       extendGrantsAfterPause: jest.fn(async () => undefined),
     },
     referral: { recordPremiumMilestone: jest.fn(async () => undefined) },
+    sideEffects: { dispatch: jest.fn() },
     ...overrides,
   };
 }
@@ -111,6 +124,7 @@ function makeService(overrides: Partial<Deps> = {}) {
     deps.slack,
     deps.entitlement,
     deps.referral,
+    deps.sideEffects,
   );
   return { service, deps };
 }
@@ -126,64 +140,66 @@ afterEach(() => {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-describe('BillingService.getStripe configuration guard', () => {
-  it('throws ServiceUnavailableException when Stripe is not configured', async () => {
+describe("BillingService.getStripe configuration guard", () => {
+  it("throws ServiceUnavailableException when Stripe is not configured", async () => {
     const { service } = makeService({
       appConfig: {
         stripe: jest.fn(() => null),
         r2: jest.fn(() => null),
-        nodeEnv: jest.fn(() => 'test'),
+        nodeEnv: jest.fn(() => "test"),
       },
     });
 
-    await expect(service.createPortalSession({ userId: 'u1' })).rejects.toThrow(ServiceUnavailableException);
+    await expect(service.createPortalSession({ userId: "u1" })).rejects.toThrow(
+      ServiceUnavailableException,
+    );
   });
 });
 
-describe('BillingService.getMe', () => {
-  it('returns billing state with grants and recruiter info', async () => {
+describe("BillingService.getMe", () => {
+  it("returns billing state with grants and recruiter info", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
       premium: true,
       premiumPlus: false,
-      verifiedStatus: 'identity',
-      stripeSubscriptionStatus: 'active',
+      verifiedStatus: "identity",
+      stripeSubscriptionStatus: "active",
       stripeCancelAtPeriodEnd: false,
-      stripeCurrentPeriodEnd: new Date('2030-01-01T00:00:00Z'),
-      referralCode: 'ABC123',
+      stripeCurrentPeriodEnd: new Date("2030-01-01T00:00:00Z"),
+      referralCode: "ABC123",
       referralBonusGrantedAt: null,
       recruitedBy: null,
       _count: { recruits: 0 },
     });
     deps.entitlement.getActiveGrants.mockResolvedValue([]);
 
-    const me = await service.getMe('u1');
+    const me = await service.getMe("u1");
 
     expect(me.premium).toBe(true);
     expect(me.premiumPlus).toBe(false);
     expect(me.verified).toBe(true);
-    expect(me.subscriptionStatus).toBe('active');
-    expect(me.currentPeriodEnd).toBe('2030-01-01T00:00:00.000Z');
-    expect(me.referralCode).toBe('ABC123');
+    expect(me.subscriptionStatus).toBe("active");
+    expect(me.currentPeriodEnd).toBe("2030-01-01T00:00:00.000Z");
+    expect(me.referralCode).toBe("ABC123");
     expect(me.recruiter).toBeNull();
     expect(me.recruitCount).toBe(0);
   });
 
-  it('throws NotFoundException when user is missing', async () => {
+  it("throws NotFoundException when user is missing", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue(null);
 
-    await expect(service.getMe('missing')).rejects.toThrow(NotFoundException);
+    await expect(service.getMe("missing")).rejects.toThrow(NotFoundException);
   });
 });
 
-describe('BillingService.createCheckoutSession', () => {
-  it('rejects unverified users', async () => {
+describe("BillingService.createCheckoutSession", () => {
+  it("rejects unverified users", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'u1',
-      email: 'a@b.test',
-      verifiedStatus: 'none',
+      id: "u1",
+      email: "a@b.test",
+      verifiedStatus: "none",
       premium: false,
       premiumPlus: false,
       stripeCustomerId: null,
@@ -193,133 +209,145 @@ describe('BillingService.createCheckoutSession', () => {
     });
 
     await expect(
-      service.createCheckoutSession({ userId: 'u1', tier: 'premium' }),
+      service.createCheckoutSession({ userId: "u1", tier: "premium" }),
     ).rejects.toThrow(ForbiddenException);
   });
 
-  it('rejects duplicate Premium subscription', async () => {
+  it("rejects duplicate Premium subscription", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'u1',
-      email: 'a@b.test',
-      verifiedStatus: 'identity',
+      id: "u1",
+      email: "a@b.test",
+      verifiedStatus: "identity",
       premium: true,
       premiumPlus: false,
-      stripeCustomerId: 'cus_1',
-      stripeSubscriptionId: 'sub_1',
-      stripeSubscriptionStatus: 'active',
-      stripeSubscriptionPriceId: 'price_premium',
+      stripeCustomerId: "cus_1",
+      stripeSubscriptionId: "sub_1",
+      stripeSubscriptionStatus: "active",
+      stripeSubscriptionPriceId: "price_premium",
     });
 
     await expect(
-      service.createCheckoutSession({ userId: 'u1', tier: 'premium' }),
+      service.createCheckoutSession({ userId: "u1", tier: "premium" }),
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('rejects Premium downgrade from Premium+ via checkout', async () => {
+  it("rejects Premium downgrade from Premium+ via checkout", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'u1',
-      email: 'a@b.test',
-      verifiedStatus: 'identity',
+      id: "u1",
+      email: "a@b.test",
+      verifiedStatus: "identity",
       premium: true,
       premiumPlus: true,
-      stripeCustomerId: 'cus_1',
-      stripeSubscriptionId: 'sub_1',
-      stripeSubscriptionStatus: 'active',
-      stripeSubscriptionPriceId: 'price_premium_plus',
+      stripeCustomerId: "cus_1",
+      stripeSubscriptionId: "sub_1",
+      stripeSubscriptionStatus: "active",
+      stripeSubscriptionPriceId: "price_premium_plus",
     });
 
     await expect(
-      service.createCheckoutSession({ userId: 'u1', tier: 'premium' }),
+      service.createCheckoutSession({ userId: "u1", tier: "premium" }),
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('creates a checkout session for a new subscriber', async () => {
+  it("creates a checkout session for a new subscriber", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'u1',
-      email: 'a@b.test',
-      verifiedStatus: 'identity',
+      id: "u1",
+      email: "a@b.test",
+      verifiedStatus: "identity",
       premium: false,
       premiumPlus: false,
-      stripeCustomerId: 'cus_existing',
+      stripeCustomerId: "cus_existing",
       stripeSubscriptionId: null,
       stripeSubscriptionStatus: null,
       stripeSubscriptionPriceId: null,
     });
     global.__stripeMock__!.checkout.sessions.create.mockResolvedValue({
-      url: 'https://checkout.stripe.test/session_123',
+      url: "https://checkout.stripe.test/session_123",
     });
 
-    const result = await service.createCheckoutSession({ userId: 'u1', tier: 'premium' });
+    const result = await service.createCheckoutSession({
+      userId: "u1",
+      tier: "premium",
+    });
 
-    expect(result.url).toBe('https://checkout.stripe.test/session_123');
-    expect(global.__stripeMock__!.checkout.sessions.create).toHaveBeenCalledWith(
+    expect(result.url).toBe("https://checkout.stripe.test/session_123");
+    expect(
+      global.__stripeMock__!.checkout.sessions.create,
+    ).toHaveBeenCalledWith(
       expect.objectContaining({
-        mode: 'subscription',
-        customer: 'cus_existing',
-        client_reference_id: 'u1',
-        line_items: [{ price: 'price_premium', quantity: 1 }],
+        mode: "subscription",
+        customer: "cus_existing",
+        client_reference_id: "u1",
+        line_items: [{ price: "price_premium", quantity: 1 }],
       }),
     );
   });
 });
 
-describe('BillingService.createPortalSession', () => {
-  it('rejects users without a Stripe customer', async () => {
+describe("BillingService.createPortalSession", () => {
+  it("rejects users without a Stripe customer", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
       stripeCustomerId: null,
-      verifiedStatus: 'identity',
+      verifiedStatus: "identity",
     });
 
-    await expect(service.createPortalSession({ userId: 'u1' })).rejects.toThrow(BadRequestException);
+    await expect(service.createPortalSession({ userId: "u1" })).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
-  it('returns portal URL for a verified user with a customer', async () => {
+  it("returns portal URL for a verified user with a customer", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
-      stripeCustomerId: 'cus_1',
-      verifiedStatus: 'identity',
+      stripeCustomerId: "cus_1",
+      verifiedStatus: "identity",
     });
     global.__stripeMock__!.billingPortal.sessions.create.mockResolvedValue({
-      url: 'https://billing.stripe.test/portal_123',
+      url: "https://billing.stripe.test/portal_123",
     });
 
-    const result = await service.createPortalSession({ userId: 'u1' });
+    const result = await service.createPortalSession({ userId: "u1" });
 
-    expect(result.url).toBe('https://billing.stripe.test/portal_123');
+    expect(result.url).toBe("https://billing.stripe.test/portal_123");
   });
 });
 
-describe('BillingService.devResetPremium', () => {
-  it('rejects outside development', async () => {
+describe("BillingService.devResetPremium", () => {
+  it("rejects outside development", async () => {
     const { service } = makeService({
       appConfig: {
         stripe: jest.fn(() => ({
-          secretKey: 'sk_test', webhookSecret: 'whsec', frontendBaseUrl: 'x',
-          pricePremiumMonthly: 'p', pricePremiumPlusMonthly: 'pp',
+          secretKey: "sk_test",
+          webhookSecret: "whsec",
+          frontendBaseUrl: "x",
+          pricePremiumMonthly: "p",
+          pricePremiumPlusMonthly: "pp",
         })),
         r2: jest.fn(() => null),
-        nodeEnv: jest.fn(() => 'production'),
+        nodeEnv: jest.fn(() => "production"),
       },
     });
 
-    await expect(service.devResetPremium('u1')).rejects.toThrow(ForbiddenException);
+    await expect(service.devResetPremium("u1")).rejects.toThrow(
+      ForbiddenException,
+    );
   });
 });
 
 // ─── Webhook tests ───────────────────────────────────────────────────────────
 
-describe('BillingService.handleWebhook', () => {
-  const rawBody = Buffer.from('raw');
-  const sig = 't=123,v1=abc';
+describe("BillingService.handleWebhook", () => {
+  const rawBody = Buffer.from("raw");
+  const sig = "t=123,v1=abc";
 
-  it('throws BadRequestException when signature verification fails', async () => {
+  it("throws BadRequestException when signature verification fails", async () => {
     const { service } = makeService();
     global.__stripeMock__!.webhooks.constructEvent.mockImplementation(() => {
-      throw new Error('bad signature');
+      throw new Error("bad signature");
     });
 
     await expect(
@@ -327,15 +355,17 @@ describe('BillingService.handleWebhook', () => {
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('is a no-op on already-processed event (processedAt set)', async () => {
+  it("is a no-op on already-processed event (processedAt set)", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
-      id: 'evt_dup',
-      type: 'checkout.session.completed',
-      data: { object: { customer: 'cus_1', subscription: 'sub_1' } },
+      id: "evt_dup",
+      type: "checkout.session.completed",
+      data: { object: { customer: "cus_1", subscription: "sub_1" } },
     });
     // findUnique returns a row that is already fully processed
-    deps.prisma.stripeWebhookEvent.findUnique.mockResolvedValue({ processedAt: new Date() });
+    deps.prisma.stripeWebhookEvent.findUnique.mockResolvedValue({
+      processedAt: new Date(),
+    });
 
     await expect(
       service.handleWebhook({ rawBody, stripeSignature: sig }),
@@ -343,141 +373,153 @@ describe('BillingService.handleWebhook', () => {
     expect(deps.prisma.user.findFirst).not.toHaveBeenCalled();
   });
 
-  it('retries (re-processes) when event row exists but processedAt is null', async () => {
+  it("retries (re-processes) when event row exists but processedAt is null", async () => {
     // Simulates a previous attempt that crashed after claiming but before marking processed.
     const { service, deps } = makeService();
     global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
-      id: 'evt_crash',
-      type: 'checkout.session.completed',
-      data: { object: { customer: 'cus_retry', subscription: 'sub_retry' } },
+      id: "evt_crash",
+      type: "checkout.session.completed",
+      data: { object: { customer: "cus_retry", subscription: "sub_retry" } },
     });
     // Row exists but processedAt is null -> retry should proceed
-    deps.prisma.stripeWebhookEvent.findUnique.mockResolvedValue({ processedAt: null });
+    deps.prisma.stripeWebhookEvent.findUnique.mockResolvedValue({
+      processedAt: null,
+    });
     deps.prisma.user.findFirst.mockResolvedValue({
-      id: 'u2',
-      username: 'bob',
-      name: 'Bob',
-      verifiedStatus: 'identity',
+      id: "u2",
+      username: "bob",
+      name: "Bob",
+      verifiedStatus: "identity",
       premium: false,
       premiumPlus: false,
       recruitedById: null,
       referralBonusGrantedAt: null,
     });
     global.__stripeMock__!.subscriptions.retrieve.mockResolvedValue({
-      id: 'sub_retry',
-      status: 'active',
+      id: "sub_retry",
+      status: "active",
       cancel_at_period_end: false,
       current_period_start: 1_000_000,
       current_period_end: 2_000_000,
-      items: { data: [{ price: { id: 'price_premium' } }] },
+      items: { data: [{ price: { id: "price_premium" } }] },
     });
 
     await service.handleWebhook({ rawBody, stripeSignature: sig });
 
     // Must have re-processed
-    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u2');
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith("u2");
     // Must have marked as processed
     expect(deps.prisma.stripeWebhookEvent.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'evt_crash' }, data: expect.objectContaining({ processedAt: expect.any(Date) }) }),
+      expect.objectContaining({
+        where: { id: "evt_crash" },
+        data: expect.objectContaining({ processedAt: expect.any(Date) }),
+      }),
     );
   });
 
-  it('marks processedAt after successful handler (success path)', async () => {
+  it("marks processedAt after successful handler (success path)", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
-      id: 'evt_success',
-      type: 'customer.subscription.updated',
+      id: "evt_success",
+      type: "customer.subscription.updated",
       data: {
         object: {
-          id: 'sub_2',
-          customer: 'cus_2',
-          status: 'active',
-          items: { data: [{ price: { id: 'price_premium' } }] },
+          id: "sub_2",
+          customer: "cus_2",
+          status: "active",
+          items: { data: [{ price: { id: "price_premium" } }] },
         },
       },
     });
     deps.prisma.user.findFirst.mockResolvedValue({
-      id: 'u3',
-      username: 'carol',
-      name: 'Carol',
-      verifiedStatus: 'identity',
+      id: "u3",
+      username: "carol",
+      name: "Carol",
+      verifiedStatus: "identity",
       premium: false,
       premiumPlus: false,
       recruitedById: null,
       referralBonusGrantedAt: null,
     });
     global.__stripeMock__!.subscriptions.retrieve.mockResolvedValue({
-      id: 'sub_2',
-      status: 'active',
+      id: "sub_2",
+      status: "active",
       cancel_at_period_end: false,
       current_period_start: 1_000_000,
       current_period_end: 2_000_000,
-      items: { data: [{ price: { id: 'price_premium' } }] },
+      items: { data: [{ price: { id: "price_premium" } }] },
     });
 
     await service.handleWebhook({ rawBody, stripeSignature: sig });
 
     expect(deps.prisma.stripeWebhookEvent.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'evt_success' }, data: expect.objectContaining({ processedAt: expect.any(Date) }) }),
+      expect.objectContaining({
+        where: { id: "evt_success" },
+        data: expect.objectContaining({ processedAt: expect.any(Date) }),
+      }),
     );
   });
 
-  it('syncs subscription on checkout.session.completed', async () => {
+  it("syncs subscription on checkout.session.completed", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
-      id: 'evt_cs',
-      type: 'checkout.session.completed',
-      data: { object: { customer: 'cus_1', subscription: 'sub_1' } },
+      id: "evt_cs",
+      type: "checkout.session.completed",
+      data: { object: { customer: "cus_1", subscription: "sub_1" } },
     });
     deps.prisma.user.findFirst.mockResolvedValue({
-      id: 'u1',
-      username: 'alice',
-      name: 'Alice',
-      verifiedStatus: 'identity',
+      id: "u1",
+      username: "alice",
+      name: "Alice",
+      verifiedStatus: "identity",
       premium: false,
       premiumPlus: false,
       recruitedById: null,
       referralBonusGrantedAt: null,
     });
     global.__stripeMock__!.subscriptions.retrieve.mockResolvedValue({
-      id: 'sub_1',
-      status: 'active',
+      id: "sub_1",
+      status: "active",
       cancel_at_period_end: false,
       current_period_start: 1_000_000,
       current_period_end: 2_000_000,
-      items: { data: [{ price: { id: 'price_premium' } }] },
+      items: { data: [{ price: { id: "price_premium" } }] },
     });
 
     await service.handleWebhook({ rawBody, stripeSignature: sig });
 
     expect(deps.prisma.user.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'u1' },
+        where: { id: "u1" },
         data: expect.objectContaining({
-          stripeSubscriptionId: 'sub_1',
-          stripeSubscriptionStatus: 'active',
-          stripeSubscriptionPriceId: 'price_premium',
+          stripeSubscriptionId: "sub_1",
+          stripeSubscriptionStatus: "active",
+          stripeSubscriptionPriceId: "price_premium",
           stripeCancelAtPeriodEnd: false,
         }),
       }),
     );
-    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u1');
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith("u1");
     expect(deps.slack.notifyPremiumGranted).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'u1', tier: 'premium', source: 'stripe' }),
+      expect.objectContaining({
+        userId: "u1",
+        tier: "premium",
+        source: "stripe",
+      }),
     );
   });
 
-  it('is a no-op when customer does not map to a user', async () => {
+  it("is a no-op when customer does not map to a user", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
-      id: 'evt_unknown',
-      type: 'customer.subscription.updated',
+      id: "evt_unknown",
+      type: "customer.subscription.updated",
       data: {
         object: {
-          id: 'sub_1',
-          customer: 'cus_missing',
-          status: 'active',
-          items: { data: [{ price: { id: 'price_premium' } }] },
+          id: "sub_1",
+          customer: "cus_missing",
+          status: "active",
+          items: { data: [{ price: { id: "price_premium" } }] },
         },
       },
     });
@@ -489,11 +531,11 @@ describe('BillingService.handleWebhook', () => {
     expect(deps.entitlement.recomputeAndApply).not.toHaveBeenCalled();
   });
 
-  it('ignores unrelated event types without side effects', async () => {
+  it("ignores unrelated event types without side effects", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
-      id: 'evt_unrelated',
-      type: 'product.created',
+      id: "evt_unrelated",
+      type: "product.created",
       data: { object: {} },
     });
 
@@ -503,28 +545,28 @@ describe('BillingService.handleWebhook', () => {
     expect(deps.entitlement.recomputeAndApply).not.toHaveBeenCalled();
   });
 
-  it('syncs user fields and recomputes on customer.subscription.updated', async () => {
+  it("syncs user fields and recomputes on customer.subscription.updated", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
-      id: 'evt_sub_upd',
-      type: 'customer.subscription.updated',
+      id: "evt_sub_upd",
+      type: "customer.subscription.updated",
       data: {
         object: {
-          id: 'sub_upd',
-          customer: 'cus_upd',
-          status: 'active',
+          id: "sub_upd",
+          customer: "cus_upd",
+          status: "active",
           cancel_at_period_end: false,
           current_period_start: 1_700_000_000,
           current_period_end: 1_730_000_000,
-          items: { data: [{ price: { id: 'price_premium' } }] },
+          items: { data: [{ price: { id: "price_premium" } }] },
         },
       },
     });
     deps.prisma.user.findFirst.mockResolvedValue({
-      id: 'u_upd',
-      username: 'alice',
-      name: 'Alice',
-      verifiedStatus: 'identity',
+      id: "u_upd",
+      username: "alice",
+      name: "Alice",
+      verifiedStatus: "identity",
       premium: false,
       premiumPlus: false,
       recruitedById: null,
@@ -535,43 +577,46 @@ describe('BillingService.handleWebhook', () => {
 
     expect(deps.prisma.user.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'u_upd' },
+        where: { id: "u_upd" },
         data: expect.objectContaining({
-          stripeSubscriptionId: 'sub_upd',
-          stripeSubscriptionStatus: 'active',
-          stripeSubscriptionPriceId: 'price_premium',
+          stripeSubscriptionId: "sub_upd",
+          stripeSubscriptionStatus: "active",
+          stripeSubscriptionPriceId: "price_premium",
           stripeCancelAtPeriodEnd: false,
         }),
       }),
     );
-    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u_upd');
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith("u_upd");
     expect(deps.prisma.stripeWebhookEvent.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'evt_sub_upd' }, data: expect.objectContaining({ processedAt: expect.any(Date) }) }),
+      expect.objectContaining({
+        where: { id: "evt_sub_upd" },
+        data: expect.objectContaining({ processedAt: expect.any(Date) }),
+      }),
     );
   });
 
-  it('syncs canceled status on customer.subscription.deleted', async () => {
+  it("syncs canceled status on customer.subscription.deleted", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
-      id: 'evt_sub_del',
-      type: 'customer.subscription.deleted',
+      id: "evt_sub_del",
+      type: "customer.subscription.deleted",
       data: {
         object: {
-          id: 'sub_del',
-          customer: 'cus_del',
-          status: 'canceled',
+          id: "sub_del",
+          customer: "cus_del",
+          status: "canceled",
           cancel_at_period_end: false,
           current_period_start: 1_700_000_000,
           current_period_end: 1_730_000_000,
-          items: { data: [{ price: { id: 'price_premium' } }] },
+          items: { data: [{ price: { id: "price_premium" } }] },
         },
       },
     });
     deps.prisma.user.findFirst.mockResolvedValue({
-      id: 'u_del',
-      username: 'bob',
-      name: 'Bob',
-      verifiedStatus: 'identity',
+      id: "u_del",
+      username: "bob",
+      name: "Bob",
+      verifiedStatus: "identity",
       premium: true,
       premiumPlus: false,
       recruitedById: null,
@@ -582,35 +627,35 @@ describe('BillingService.handleWebhook', () => {
 
     expect(deps.prisma.user.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'u_del' },
-        data: expect.objectContaining({ stripeSubscriptionStatus: 'canceled' }),
+        where: { id: "u_del" },
+        data: expect.objectContaining({ stripeSubscriptionStatus: "canceled" }),
       }),
     );
-    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u_del');
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith("u_del");
   });
 
-  it('syncs subscription on customer.subscription.created', async () => {
+  it("syncs subscription on customer.subscription.created", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
-      id: 'evt_sub_new',
-      type: 'customer.subscription.created',
+      id: "evt_sub_new",
+      type: "customer.subscription.created",
       data: {
         object: {
-          id: 'sub_new',
-          customer: 'cus_new',
-          status: 'trialing',
+          id: "sub_new",
+          customer: "cus_new",
+          status: "trialing",
           cancel_at_period_end: false,
           current_period_start: 1_700_000_000,
           current_period_end: 1_730_000_000,
-          items: { data: [{ price: { id: 'price_premium' } }] },
+          items: { data: [{ price: { id: "price_premium" } }] },
         },
       },
     });
     deps.prisma.user.findFirst.mockResolvedValue({
-      id: 'u_new',
-      username: 'carol',
-      name: 'Carol',
-      verifiedStatus: 'identity',
+      id: "u_new",
+      username: "carol",
+      name: "Carol",
+      verifiedStatus: "identity",
       premium: false,
       premiumPlus: false,
       recruitedById: null,
@@ -621,64 +666,73 @@ describe('BillingService.handleWebhook', () => {
 
     expect(deps.prisma.user.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'u_new' },
-        data: expect.objectContaining({ stripeSubscriptionId: 'sub_new', stripeSubscriptionStatus: 'trialing' }),
+        where: { id: "u_new" },
+        data: expect.objectContaining({
+          stripeSubscriptionId: "sub_new",
+          stripeSubscriptionStatus: "trialing",
+        }),
       }),
     );
-    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u_new');
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith("u_new");
     expect(deps.prisma.stripeWebhookEvent.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'evt_sub_new' }, data: expect.objectContaining({ processedAt: expect.any(Date) }) }),
+      expect.objectContaining({
+        where: { id: "evt_sub_new" },
+        data: expect.objectContaining({ processedAt: expect.any(Date) }),
+      }),
     );
   });
 
-  it('refreshes entitlement on invoice.payment_succeeded', async () => {
+  it("refreshes entitlement on invoice.payment_succeeded", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
-      id: 'evt_inv',
-      type: 'invoice.payment_succeeded',
-      data: { object: { customer: 'cus_inv', subscription: 'sub_inv' } },
+      id: "evt_inv",
+      type: "invoice.payment_succeeded",
+      data: { object: { customer: "cus_inv", subscription: "sub_inv" } },
     });
     deps.prisma.user.findFirst.mockResolvedValue({
-      id: 'u_inv',
-      username: 'dave',
-      name: 'Dave',
-      verifiedStatus: 'identity',
+      id: "u_inv",
+      username: "dave",
+      name: "Dave",
+      verifiedStatus: "identity",
       premium: true,
       premiumPlus: false,
       recruitedById: null,
       referralBonusGrantedAt: null,
     });
     global.__stripeMock__!.subscriptions.retrieve.mockResolvedValue({
-      id: 'sub_inv',
-      status: 'active',
+      id: "sub_inv",
+      status: "active",
       cancel_at_period_end: false,
       current_period_start: 1_700_000_000,
       current_period_end: 1_730_000_000,
-      items: { data: [{ price: { id: 'price_premium' } }] },
+      items: { data: [{ price: { id: "price_premium" } }] },
     });
 
     await service.handleWebhook({ rawBody, stripeSignature: sig });
 
-    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u_inv');
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith("u_inv");
     expect(deps.prisma.stripeWebhookEvent.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'evt_inv' }, data: expect.objectContaining({ processedAt: expect.any(Date) }) }),
+      expect.objectContaining({
+        where: { id: "evt_inv" },
+        data: expect.objectContaining({ processedAt: expect.any(Date) }),
+      }),
     );
   });
 
-  it('proceeds when P2002 race on create but concurrent row has processedAt=null', async () => {
+  it("proceeds when P2002 race on create but concurrent row has processedAt=null", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
-      id: 'evt_race',
-      type: 'customer.subscription.updated',
+      id: "evt_race",
+      type: "customer.subscription.updated",
       data: {
         object: {
-          id: 'sub_race',
-          customer: 'cus_race',
-          status: 'active',
+          id: "sub_race",
+          customer: "cus_race",
+          status: "active",
           cancel_at_period_end: false,
           current_period_start: 1_700_000_000,
           current_period_end: 1_730_000_000,
-          items: { data: [{ price: { id: 'price_premium' } }] },
+          items: { data: [{ price: { id: "price_premium" } }] },
         },
       },
     });
@@ -687,13 +741,16 @@ describe('BillingService.handleWebhook', () => {
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ processedAt: null });
     deps.prisma.stripeWebhookEvent.create.mockRejectedValue(
-      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '5.0.0' }),
+      new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+        code: "P2002",
+        clientVersion: "5.0.0",
+      }),
     );
     deps.prisma.user.findFirst.mockResolvedValue({
-      id: 'u_race',
-      username: 'eve',
-      name: 'Eve',
-      verifiedStatus: 'identity',
+      id: "u_race",
+      username: "eve",
+      name: "Eve",
+      verifiedStatus: "identity",
       premium: false,
       premiumPlus: false,
       recruitedById: null,
@@ -703,37 +760,42 @@ describe('BillingService.handleWebhook', () => {
     await service.handleWebhook({ rawBody, stripeSignature: sig });
 
     // Handler must have run despite the race.
-    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u_race');
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith("u_race");
     expect(deps.prisma.stripeWebhookEvent.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'evt_race' }, data: expect.objectContaining({ processedAt: expect.any(Date) }) }),
+      expect.objectContaining({
+        where: { id: "evt_race" },
+        data: expect.objectContaining({ processedAt: expect.any(Date) }),
+      }),
     );
   });
 });
 
 // ─── BillingService.syncCheckoutSession ──────────────────────────────────────
 
-describe('BillingService.syncCheckoutSession', () => {
-  function makeSessionMock(overrides: {
-    clientReferenceId?: string | null;
-    customerId?: string;
-    subscriptionId?: string | null;
-    subscriptionStatus?: string;
-  } = {}) {
+describe("BillingService.syncCheckoutSession", () => {
+  function makeSessionMock(
+    overrides: {
+      clientReferenceId?: string | null;
+      customerId?: string;
+      subscriptionId?: string | null;
+      subscriptionStatus?: string;
+    } = {},
+  ) {
     const {
-      clientReferenceId = 'u1',
-      customerId = 'cus_1',
-      subscriptionId = 'sub_1',
-      subscriptionStatus = 'active',
+      clientReferenceId = "u1",
+      customerId = "cus_1",
+      subscriptionId = "sub_1",
+      subscriptionStatus = "active",
     } = overrides;
     return {
-      id: 'cs_test_1',
+      id: "cs_test_1",
       client_reference_id: clientReferenceId,
       customer: customerId,
       subscription: subscriptionId
         ? {
             id: subscriptionId,
             status: subscriptionStatus,
-            items: { data: [{ price: { id: 'price_premium' } }] },
+            items: { data: [{ price: { id: "price_premium" } }] },
             cancel_at_period_end: false,
             current_period_start: 1700000000,
             current_period_end: 1730000000,
@@ -742,7 +804,7 @@ describe('BillingService.syncCheckoutSession', () => {
     };
   }
 
-  it('syncs subscription and returns updated billing when session belongs to caller', async () => {
+  it("syncs subscription and returns updated billing when session belongs to caller", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.checkout = {
       sessions: {
@@ -752,14 +814,15 @@ describe('BillingService.syncCheckoutSession', () => {
 
     // The ownership check looks up user by userId for stripeCustomerId.
     deps.prisma.user.findUnique
-      .mockResolvedValueOnce({ stripeCustomerId: 'cus_1' }) // ownership check
-      .mockResolvedValueOnce({                               // getMe call
+      .mockResolvedValueOnce({ stripeCustomerId: "cus_1" }) // ownership check
+      .mockResolvedValueOnce({
+        // getMe call
         premium: true,
         premiumPlus: false,
-        verifiedStatus: 'identity',
-        stripeSubscriptionStatus: 'active',
+        verifiedStatus: "identity",
+        stripeSubscriptionStatus: "active",
         stripeCancelAtPeriodEnd: false,
-        stripeCurrentPeriodEnd: new Date('2024-10-27T09:53:20.000Z'),
+        stripeCurrentPeriodEnd: new Date("2024-10-27T09:53:20.000Z"),
         referralCode: null,
         referralBonusGrantedAt: null,
         recruitedBy: null,
@@ -768,61 +831,86 @@ describe('BillingService.syncCheckoutSession', () => {
 
     // syncSubscriptionToUser looks up user by stripeCustomerId.
     deps.prisma.user.findFirst.mockResolvedValue({
-      id: 'u1',
-      username: 'testuser',
-      name: 'Test',
-      verifiedStatus: 'identity',
+      id: "u1",
+      username: "testuser",
+      name: "Test",
+      verifiedStatus: "identity",
       premium: false,
       premiumPlus: false,
       recruitedById: null,
       referralBonusGrantedAt: null,
     });
 
-    const result = await service.syncCheckoutSession({ userId: 'u1', sessionId: 'cs_test_1' });
+    const result = await service.syncCheckoutSession({
+      userId: "u1",
+      sessionId: "cs_test_1",
+    });
 
     expect(deps.prisma.user.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'u1' }, data: expect.objectContaining({ stripeSubscriptionId: 'sub_1' }) }),
+      expect.objectContaining({
+        where: { id: "u1" },
+        data: expect.objectContaining({ stripeSubscriptionId: "sub_1" }),
+      }),
     );
-    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u1');
-    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith('u1', 'billing_tier_changed');
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith("u1");
+    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith(
+      "u1",
+      "billing_tier_changed",
+    );
     expect(result.premium).toBe(true);
   });
 
-  it('throws NotFoundException when client_reference_id does not match caller', async () => {
+  it("throws NotFoundException when client_reference_id does not match caller", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.checkout = {
-      sessions: { retrieve: jest.fn(async () => makeSessionMock({ clientReferenceId: 'other-user' })) },
+      sessions: {
+        retrieve: jest.fn(async () =>
+          makeSessionMock({ clientReferenceId: "other-user" }),
+        ),
+      },
     } as any;
-    deps.prisma.user.findUnique.mockResolvedValue({ stripeCustomerId: 'cus_1' });
+    deps.prisma.user.findUnique.mockResolvedValue({
+      stripeCustomerId: "cus_1",
+    });
 
-    await expect(service.syncCheckoutSession({ userId: 'u1', sessionId: 'cs_test_1' })).rejects.toThrow('Checkout session not found.');
+    await expect(
+      service.syncCheckoutSession({ userId: "u1", sessionId: "cs_test_1" }),
+    ).rejects.toThrow("Checkout session not found.");
     expect(deps.entitlement.recomputeAndApply).not.toHaveBeenCalled();
   });
 
-  it('throws NotFoundException when Stripe customer does not match the user on file', async () => {
+  it("throws NotFoundException when Stripe customer does not match the user on file", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.checkout = {
-      sessions: { retrieve: jest.fn(async () => makeSessionMock({ customerId: 'cus_foreign' })) },
+      sessions: {
+        retrieve: jest.fn(async () =>
+          makeSessionMock({ customerId: "cus_foreign" }),
+        ),
+      },
     } as any;
     // User has a different customer ID on file.
-    deps.prisma.user.findUnique.mockResolvedValue({ stripeCustomerId: 'cus_mine' });
+    deps.prisma.user.findUnique.mockResolvedValue({
+      stripeCustomerId: "cus_mine",
+    });
 
-    await expect(service.syncCheckoutSession({ userId: 'u1', sessionId: 'cs_test_1' })).rejects.toThrow('Checkout session not found.');
+    await expect(
+      service.syncCheckoutSession({ userId: "u1", sessionId: "cs_test_1" }),
+    ).rejects.toThrow("Checkout session not found.");
     expect(deps.entitlement.recomputeAndApply).not.toHaveBeenCalled();
   });
 
-  it('is idempotent: calling after webhook already set premium still succeeds and returns updated billing', async () => {
+  it("is idempotent: calling after webhook already set premium still succeeds and returns updated billing", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.checkout = {
       sessions: { retrieve: jest.fn(async () => makeSessionMock()) },
     } as any;
     deps.prisma.user.findUnique
-      .mockResolvedValueOnce({ stripeCustomerId: 'cus_1' })
+      .mockResolvedValueOnce({ stripeCustomerId: "cus_1" })
       .mockResolvedValueOnce({
         premium: true,
         premiumPlus: false,
-        verifiedStatus: 'identity',
-        stripeSubscriptionStatus: 'active',
+        verifiedStatus: "identity",
+        stripeSubscriptionStatus: "active",
         stripeCancelAtPeriodEnd: false,
         stripeCurrentPeriodEnd: null,
         referralCode: null,
@@ -831,27 +919,40 @@ describe('BillingService.syncCheckoutSession', () => {
         _count: { recruits: 0 },
       });
     deps.prisma.user.findFirst.mockResolvedValue({
-      id: 'u1', username: 'testuser', name: 'Test', verifiedStatus: 'identity',
-      premium: true, premiumPlus: false, recruitedById: null, referralBonusGrantedAt: null,
+      id: "u1",
+      username: "testuser",
+      name: "Test",
+      verifiedStatus: "identity",
+      premium: true,
+      premiumPlus: false,
+      recruitedById: null,
+      referralBonusGrantedAt: null,
     });
 
-    const result = await service.syncCheckoutSession({ userId: 'u1', sessionId: 'cs_test_1' });
+    const result = await service.syncCheckoutSession({
+      userId: "u1",
+      sessionId: "cs_test_1",
+    });
     expect(result.premium).toBe(true);
     // recomputeAndApply still runs (idempotent — it just confirms the existing state)
     expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledTimes(1);
   });
 
-  it('skips sync when session has no subscription (e.g. still open/expired)', async () => {
+  it("skips sync when session has no subscription (e.g. still open/expired)", async () => {
     const { service, deps } = makeService();
     global.__stripeMock__!.checkout = {
-      sessions: { retrieve: jest.fn(async () => makeSessionMock({ subscriptionId: null })) },
+      sessions: {
+        retrieve: jest.fn(async () =>
+          makeSessionMock({ subscriptionId: null }),
+        ),
+      },
     } as any;
     deps.prisma.user.findUnique
-      .mockResolvedValueOnce({ stripeCustomerId: 'cus_1' })
+      .mockResolvedValueOnce({ stripeCustomerId: "cus_1" })
       .mockResolvedValueOnce({
         premium: false,
         premiumPlus: false,
-        verifiedStatus: 'identity',
+        verifiedStatus: "identity",
         stripeSubscriptionStatus: null,
         stripeCancelAtPeriodEnd: false,
         stripeCurrentPeriodEnd: null,
@@ -861,7 +962,10 @@ describe('BillingService.syncCheckoutSession', () => {
         _count: { recruits: 0 },
       });
 
-    const result = await service.syncCheckoutSession({ userId: 'u1', sessionId: 'cs_test_1' });
+    const result = await service.syncCheckoutSession({
+      userId: "u1",
+      sessionId: "cs_test_1",
+    });
     expect(deps.entitlement.recomputeAndApply).not.toHaveBeenCalled();
     expect(result.premium).toBe(false);
   });
@@ -869,25 +973,25 @@ describe('BillingService.syncCheckoutSession', () => {
 
 // ─── BillingService.onUserUnverified ─────────────────────────────────────────
 
-describe('BillingService.onUserUnverified', () => {
-  it('pauses Stripe subscription and recomputes entitlement', async () => {
+describe("BillingService.onUserUnverified", () => {
+  it("pauses Stripe subscription and recomputes entitlement", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
       premium: true,
       premiumPlus: false,
-      stripeSubscriptionId: 'sub_unver',
+      stripeSubscriptionId: "sub_unver",
     });
 
-    await service.onUserUnverified('u1');
+    await service.onUserUnverified("u1");
 
     expect(global.__stripeMock__!.subscriptions.update).toHaveBeenCalledWith(
-      'sub_unver',
-      { pause_collection: { behavior: 'void' } },
+      "sub_unver",
+      { pause_collection: { behavior: "void" } },
     );
-    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u1');
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith("u1");
   });
 
-  it('still recomputes entitlement when the user has no Stripe subscription', async () => {
+  it("still recomputes entitlement when the user has no Stripe subscription", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
       premium: false,
@@ -895,110 +999,125 @@ describe('BillingService.onUserUnverified', () => {
       stripeSubscriptionId: null,
     });
 
-    await service.onUserUnverified('u1');
+    await service.onUserUnverified("u1");
 
     expect(global.__stripeMock__!.subscriptions.update).not.toHaveBeenCalled();
-    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u1');
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith("u1");
   });
 });
 
 // ─── BillingService.onUserVerified ───────────────────────────────────────────
 
-describe('BillingService.onUserVerified', () => {
-  it('resumes a paused Stripe subscription and recomputes entitlement', async () => {
+describe("BillingService.onUserVerified", () => {
+  it("resumes a paused Stripe subscription and recomputes entitlement", async () => {
     const { service, deps } = makeService();
     // First findUnique: called in onUserVerified to get stripeSubscriptionId.
     // Second findUnique: called by syncGrantTrialToSubscription.
     deps.prisma.user.findUnique
-      .mockResolvedValueOnce({ stripeSubscriptionId: 'sub_ver' })
-      .mockResolvedValueOnce({ stripeSubscriptionId: 'sub_ver', stripeSubscriptionStatus: 'active' });
+      .mockResolvedValueOnce({ stripeSubscriptionId: "sub_ver" })
+      .mockResolvedValueOnce({
+        stripeSubscriptionId: "sub_ver",
+        stripeSubscriptionStatus: "active",
+      });
     global.__stripeMock__!.subscriptions.retrieve.mockResolvedValue({
-      id: 'sub_ver',
-      pause_collection: { behavior: 'void' },
+      id: "sub_ver",
+      pause_collection: { behavior: "void" },
     });
     deps.entitlement.getActiveGrants.mockResolvedValue([]);
 
-    await service.onUserVerified('u1', new Date(Date.now() - 1000));
+    await service.onUserVerified("u1", new Date(Date.now() - 1000));
 
     expect(global.__stripeMock__!.subscriptions.update).toHaveBeenCalledWith(
-      'sub_ver',
-      { pause_collection: '' },
+      "sub_ver",
+      { pause_collection: "" },
     );
-    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u1');
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith("u1", {
+      welcomeHandled: true,
+    });
   });
 
-  it('still recomputes entitlement when the user has no Stripe subscription', async () => {
+  it("still recomputes entitlement when the user has no Stripe subscription", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique
       .mockResolvedValueOnce({ stripeSubscriptionId: null })
-      .mockResolvedValueOnce({ stripeSubscriptionId: null, stripeSubscriptionStatus: null });
+      .mockResolvedValueOnce({
+        stripeSubscriptionId: null,
+        stripeSubscriptionStatus: null,
+      });
     deps.entitlement.getActiveGrants.mockResolvedValue([]);
 
-    await service.onUserVerified('u1', null);
+    await service.onUserVerified("u1", null);
 
-    expect(global.__stripeMock__!.subscriptions.retrieve).not.toHaveBeenCalled();
+    expect(
+      global.__stripeMock__!.subscriptions.retrieve,
+    ).not.toHaveBeenCalled();
     expect(global.__stripeMock__!.subscriptions.update).not.toHaveBeenCalled();
-    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith('u1');
+    expect(deps.entitlement.recomputeAndApply).toHaveBeenCalledWith("u1", {
+      welcomeHandled: true,
+    });
   });
 });
 
 // ─── BillingService.syncGrantTrialToSubscription ─────────────────────────────
 
-describe('BillingService.syncGrantTrialToSubscription', () => {
-  it('sets trial_end to the grant window when the user has active grants and an active subscription', async () => {
+describe("BillingService.syncGrantTrialToSubscription", () => {
+  it("sets trial_end to the grant window when the user has active grants and an active subscription", async () => {
     const { service, deps } = makeService();
     const grantEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     deps.prisma.user.findUnique.mockResolvedValue({
-      stripeSubscriptionId: 'sub_trial',
-      stripeSubscriptionStatus: 'active',
+      stripeSubscriptionId: "sub_trial",
+      stripeSubscriptionStatus: "active",
     });
     deps.entitlement.getActiveGrants.mockResolvedValue([{ endsAt: grantEnd }]);
 
-    await service.syncGrantTrialToSubscription('u1');
+    await service.syncGrantTrialToSubscription("u1");
 
     expect(global.__stripeMock__!.subscriptions.update).toHaveBeenCalledWith(
-      'sub_trial',
-      { trial_end: Math.floor(grantEnd.getTime() / 1000), proration_behavior: 'none' },
+      "sub_trial",
+      {
+        trial_end: Math.floor(grantEnd.getTime() / 1000),
+        proration_behavior: "none",
+      },
     );
   });
 
-  it('ends the trial immediately when there are no grants but the subscription is still trialing', async () => {
+  it("ends the trial immediately when there are no grants but the subscription is still trialing", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
-      stripeSubscriptionId: 'sub_trialing',
-      stripeSubscriptionStatus: 'trialing',
+      stripeSubscriptionId: "sub_trialing",
+      stripeSubscriptionStatus: "trialing",
     });
     deps.entitlement.getActiveGrants.mockResolvedValue([]);
 
-    await service.syncGrantTrialToSubscription('u1');
+    await service.syncGrantTrialToSubscription("u1");
 
     expect(global.__stripeMock__!.subscriptions.update).toHaveBeenCalledWith(
-      'sub_trialing',
-      { trial_end: 'now' },
+      "sub_trialing",
+      { trial_end: "now" },
     );
   });
 
-  it('does not touch Stripe when there are no grants and the subscription is already active', async () => {
+  it("does not touch Stripe when there are no grants and the subscription is already active", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
-      stripeSubscriptionId: 'sub_active',
-      stripeSubscriptionStatus: 'active',
+      stripeSubscriptionId: "sub_active",
+      stripeSubscriptionStatus: "active",
     });
     deps.entitlement.getActiveGrants.mockResolvedValue([]);
 
-    await service.syncGrantTrialToSubscription('u1');
+    await service.syncGrantTrialToSubscription("u1");
 
     expect(global.__stripeMock__!.subscriptions.update).not.toHaveBeenCalled();
   });
 
-  it('returns early without calling Stripe when the user has no subscription', async () => {
+  it("returns early without calling Stripe when the user has no subscription", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
       stripeSubscriptionId: null,
       stripeSubscriptionStatus: null,
     });
 
-    await service.syncGrantTrialToSubscription('u1');
+    await service.syncGrantTrialToSubscription("u1");
 
     expect(global.__stripeMock__!.subscriptions.update).not.toHaveBeenCalled();
   });
@@ -1006,24 +1125,157 @@ describe('BillingService.syncGrantTrialToSubscription', () => {
 
 // ─── BillingService.cancelSubscriptionForAccountDeletion ─────────────────────
 
-describe('BillingService.cancelSubscriptionForAccountDeletion', () => {
-  it('cancels the Stripe subscription when the user has one', async () => {
+describe("BillingService.cancelSubscriptionForAccountDeletion", () => {
+  it("cancels the Stripe subscription when the user has one", async () => {
     const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({ stripeSubscriptionId: 'sub_del_acct' });
+    deps.prisma.user.findUnique.mockResolvedValue({
+      stripeSubscriptionId: "sub_del_acct",
+    });
 
-    await service.cancelSubscriptionForAccountDeletion('u1');
+    await service.cancelSubscriptionForAccountDeletion("u1");
 
     expect(global.__stripeMock__!.subscriptions.cancel).toHaveBeenCalledWith(
-      'sub_del_acct',
+      "sub_del_acct",
       { prorate: false },
     );
   });
 
-  it('resolves without throwing when the user has no Stripe subscription', async () => {
+  it("resolves without throwing when the user has no Stripe subscription", async () => {
     const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({ stripeSubscriptionId: null });
+    deps.prisma.user.findUnique.mockResolvedValue({
+      stripeSubscriptionId: null,
+    });
 
-    await expect(service.cancelSubscriptionForAccountDeletion('u1')).resolves.toBeUndefined();
+    await expect(
+      service.cancelSubscriptionForAccountDeletion("u1"),
+    ).resolves.toBeUndefined();
     expect(global.__stripeMock__!.subscriptions.cancel).not.toHaveBeenCalled();
+  });
+});
+
+describe("BillingService lifecycle receipts", () => {
+  it("uses the confirmed invoice ID and current subscription sync for a failed payment, while webhook replay stays idempotent", async () => {
+    const { service, deps } = makeService();
+    global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
+      id: "evt-failure",
+      created: Math.floor(Date.now() / 1000),
+      type: "invoice.payment_failed",
+      data: {
+        object: {
+          id: "invoice-one",
+          customer: "customer",
+          parent: { subscription_details: { subscription: "subscription" } },
+        },
+      },
+    });
+    deps.prisma.user.findFirst.mockResolvedValue({
+      id: "member",
+      stripeSubscriptionId: "subscription",
+      stripeCancelAtPeriodEnd: false,
+    });
+    global.__stripeMock__!.subscriptions.retrieve.mockResolvedValue({
+      id: "subscription",
+      status: "past_due",
+      current_period_end: Math.floor(Date.now() / 1000) + 86400,
+      items: { data: [{ price: { id: "price_premium" } }] },
+    });
+    await service.handleWebhook({
+      rawBody: Buffer.from("{}"),
+      stripeSignature: "signed",
+    });
+    expect(deps.sideEffects.dispatch).toHaveBeenCalledWith(
+      "email.lifecycle",
+      expect.objectContaining({
+        kind: "paymentAttention",
+        source: "stripe",
+        eventId: "invoice-one",
+        userId: "member",
+      }),
+    );
+    deps.prisma.stripeWebhookEvent.findUnique.mockResolvedValue({
+      processedAt: new Date(),
+    });
+    await service.handleWebhook({
+      rawBody: Buffer.from("{}"),
+      stripeSignature: "signed",
+    });
+    expect(deps.sideEffects.dispatch).toHaveBeenCalledTimes(1);
+  });
+  it.each([null, "another-subscription"])(
+    "ignores failed one-off or unrelated subscription invoices (%s)",
+    async (subscription) => {
+      const { service, deps } = makeService();
+      global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
+        id: "evt-other",
+        created: Math.floor(Date.now() / 1000),
+        type: "invoice.payment_failed",
+        data: {
+          object: {
+            id: "invoice-other",
+            customer: "customer",
+            parent: subscription
+              ? { subscription_details: { subscription } }
+              : null,
+          },
+        },
+      });
+      deps.prisma.user.findFirst.mockResolvedValue({
+        id: "member",
+        stripeSubscriptionId: "subscription",
+      });
+      await service.handleWebhook({
+        rawBody: Buffer.from("{}"),
+        stripeSignature: "signed",
+      });
+      expect(
+        global.__stripeMock__!.subscriptions.retrieve,
+      ).not.toHaveBeenCalled();
+      expect(deps.sideEffects.dispatch).not.toHaveBeenCalled();
+    },
+  );
+  it("confirms cancellation only when renewal changes from on to off", async () => {
+    const { service, deps } = makeService();
+    const end = Math.floor(Date.now() / 1000) + 86400;
+    global.__stripeMock__!.webhooks.constructEvent.mockReturnValue({
+      id: "evt-cancel",
+      created: Math.floor(Date.now() / 1000),
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "subscription",
+          customer: "customer",
+          status: "active",
+          cancel_at_period_end: true,
+          current_period_end: end,
+          items: { data: [{ price: { id: "price_premium" } }] },
+        },
+      },
+    });
+    deps.prisma.user.findFirst.mockResolvedValue({
+      id: "member",
+      stripeCancelAtPeriodEnd: false,
+    });
+    await service.handleWebhook({
+      rawBody: Buffer.from("{}"),
+      stripeSignature: "signed",
+    });
+    expect(deps.sideEffects.dispatch).toHaveBeenCalledWith(
+      "email.lifecycle",
+      expect.objectContaining({
+        kind: "cancellation",
+        source: "stripe",
+        eventId: `subscription-${new Date(end * 1000).toISOString()}`,
+      }),
+    );
+    deps.sideEffects.dispatch.mockClear();
+    deps.prisma.user.findFirst.mockResolvedValue({
+      id: "member",
+      stripeCancelAtPeriodEnd: true,
+    });
+    await service.handleWebhook({
+      rawBody: Buffer.from("{}"),
+      stripeSignature: "signed",
+    });
+    expect(deps.sideEffects.dispatch).not.toHaveBeenCalled();
   });
 });

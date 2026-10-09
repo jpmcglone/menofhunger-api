@@ -65,7 +65,7 @@ export class AdminEmailSamplesController {
     const from = emailCfg.fromEmail.notifications || emailCfg.fromEmail.default;
     const sent = await this.email.sendText({ to, from, subject: sample.subject, text: sample.text, html: sample.html });
 
-    return { data: { sent: sent.sent, reason: sent.reason ?? null, type: parsed.type } };
+    return { data: { sent: sent.sent, reason: sent.sent ? null : sent.reason, type: parsed.type } };
   }
 
   private async renderSample(
@@ -286,7 +286,7 @@ export class AdminEmailSamplesController {
             `<div style="margin-top:12px;">${renderButton({ href: notificationsUrl, label: 'Open notifications', variant: 'secondary' })}</div>`,
           ].join(''),
         ),
-        `<div style="margin-top:14px;font-size:13px;line-height:1.8;color:${EMAIL.muted};">You can turn off instant emails in <a href="${escapeHtml(
+        `<div style="margin-top:14px;font-size:13px;line-height:1.8;color:${EMAIL.muted};">You can manage message, mention, and reply emails in <a href="${escapeHtml(
           settingsUrl,
         )}" style="color:${EMAIL.text};text-decoration:underline;">Settings → Notifications</a>.</div>`,
       ].join(''),
@@ -355,7 +355,7 @@ export class AdminEmailSamplesController {
     const settingsUrl = `${ctx.baseUrl}/settings/notifications`;
     const currentStreak = 7;
 
-    const subject = `Sample — Don’t lose your streak (${currentStreak} days)`;
+    const subject = `Sample — Check in today. Keep your ${currentStreak}-day streak.`;
     const text = [
       `${ctx.greeting}`,
       '',

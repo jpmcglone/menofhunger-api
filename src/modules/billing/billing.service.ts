@@ -1,26 +1,47 @@
-import { isUniqueViolation } from '../../common/prisma/errors';
-import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
-import type Stripe from 'stripe';
-import { PrismaService } from '../prisma/prisma.service';
-import { AppConfigService } from '../app/app-config.service';
-import type { BillingCheckoutSessionDto, BillingMeDto, BillingPortalSessionDto, BillingTier } from '../../common/dto';
-import type { VerifiedStatus } from '@prisma/client';
+import { SideEffectsService } from "../side-effects/side-effects.service";
+import { isUniqueViolation } from "../../common/prisma/errors";
+import { toAvatarVideoDto } from "../../common/dto/avatar-video.dto";
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from "@nestjs/common";
+import type Stripe from "stripe";
+import { PrismaService } from "../prisma/prisma.service";
+import { AppConfigService } from "../app/app-config.service";
+import type {
+  BillingCheckoutSessionDto,
+  BillingMeDto,
+  BillingPortalSessionDto,
+  BillingTier,
+} from "../../common/dto";
+import type { VerifiedStatus } from "@prisma/client";
 
-import { publicAssetUrl } from '../../common/assets/public-asset-url';
-import { PublicProfileCacheService } from '../users/public-profile-cache.service';
-import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
-import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
-import { PosthogService } from '../../common/posthog/posthog.service';
-import { SlackService } from '../../common/slack/slack.service';
-import { EntitlementService, laterDate } from './entitlement.service';
-import { ReferralService } from './referral.service';
-import { USER_BRIEF_SELECT, USER_REF_SELECT } from '../../common/prisma-selects/user.select';
+import { publicAssetUrl } from "../../common/assets/public-asset-url";
+import { PublicProfileCacheService } from "../users/public-profile-cache.service";
+import { UsersMeRealtimeService } from "../users/users-me-realtime.service";
+import { UsersPublicRealtimeService } from "../users/users-public-realtime.service";
+import { PosthogService } from "../../common/posthog/posthog.service";
+import { SlackService } from "../../common/slack/slack.service";
+import { EntitlementService, laterDate } from "./entitlement.service";
+import { ReferralService } from "./referral.service";
+import {
+  USER_BRIEF_SELECT,
+  USER_REF_SELECT,
+} from "../../common/prisma-selects/user.select";
 
-type StripeCtx = { stripe: Stripe; cfg: NonNullable<ReturnType<AppConfigService['stripe']>> };
+type StripeCtx = {
+  stripe: Stripe;
+  cfg: NonNullable<ReturnType<AppConfigService["stripe"]>>;
+};
 
-function isVerified(status: VerifiedStatus | string | null | undefined): boolean {
-  return Boolean(status && status !== 'none');
+function isVerified(
+  status: VerifiedStatus | string | null | undefined,
+): boolean {
+  return Boolean(status && status !== "none");
 }
 
 @Injectable()
@@ -30,22 +51,27 @@ export class BillingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
-    private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
+    private readonly publicProfileCache: PublicProfileCacheService<{
+      id: string;
+      username: string | null;
+    }>,
     private readonly usersMeRealtime: UsersMeRealtimeService,
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
     private readonly posthog: PosthogService,
     private readonly slack: SlackService,
     private readonly entitlement: EntitlementService,
     private readonly referral: ReferralService,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   private getStripe(): StripeCtx {
     const cfg = this.appConfig.stripe();
-    if (!cfg) throw new ServiceUnavailableException('Billing is not configured.');
+    if (!cfg)
+      throw new ServiceUnavailableException("Billing is not configured.");
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const StripeCtor = require('stripe');
+    const StripeCtor = require("stripe");
     const stripe = new StripeCtor(cfg.secretKey, {
-      apiVersion: '2026-03-25.dahlia',
+      apiVersion: "2026-03-25.dahlia",
       typescript: true,
     }) as unknown as Stripe;
     return { stripe, cfg };
@@ -66,9 +92,11 @@ export class BillingService {
       await stripe.subscriptions.cancel(user.stripeSubscriptionId, {
         prorate: false,
       });
-      this.logger.log(`[billing] Cancelled Stripe subscription on account deletion for user ${userId}`);
+      this.logger.log(
+        `[billing] Cancelled Stripe subscription on account deletion for user ${userId}`,
+      );
     } catch (err) {
-      if ((err as { code?: string })?.code === 'resource_missing') return;
+      if ((err as { code?: string })?.code === "resource_missing") return;
       throw err;
     }
   }
@@ -94,7 +122,9 @@ export class BillingService {
         recruitedBy: {
           select: {
             ...USER_BRIEF_SELECT,
-            avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
+            avatarKey: true,
+            avatarVideoKey: true,
+            avatarVideoDurationMs: true,
             avatarUpdatedAt: true,
             premium: true,
             premiumPlus: true,
@@ -104,31 +134,47 @@ export class BillingService {
         _count: { select: { recruits: true } },
       },
     });
-    if (!user) throw new NotFoundException('User not found.');
+    if (!user) throw new NotFoundException("User not found.");
 
     const activeGrants = await this.entitlement.getActiveGrants(userId);
-    const grantExpiresAt = activeGrants.length > 0 ? activeGrants[0]!.endsAt : null;
+    const grantExpiresAt =
+      activeGrants.length > 0 ? activeGrants[0]!.endsAt : null;
     const stripeExpiresAt = user.stripeCurrentPeriodEnd ?? null;
     const productionAppleExpiresAt =
-      (user.appleStatus === 'active' || user.appleStatus === 'grace') && user.appleExpiresAt != null && user.appleExpiresAt > now
+      (user.appleStatus === "active" || user.appleStatus === "grace") &&
+      user.appleExpiresAt != null &&
+      user.appleExpiresAt > now
         ? user.appleExpiresAt
         : null;
-    const sandboxExpiresAt = (user.appleSandboxStatus === 'active' || user.appleSandboxStatus === 'grace') && user.appleSandboxExpiresAt && user.appleSandboxExpiresAt > now
-      ? user.appleSandboxExpiresAt : null;
-    const appleExpiresAt = laterDate(productionAppleExpiresAt, sandboxExpiresAt);
-    const effectiveExpiresAt = laterDate(laterDate(stripeExpiresAt, grantExpiresAt), appleExpiresAt);
+    const sandboxExpiresAt =
+      (user.appleSandboxStatus === "active" ||
+        user.appleSandboxStatus === "grace") &&
+      user.appleSandboxExpiresAt &&
+      user.appleSandboxExpiresAt > now
+        ? user.appleSandboxExpiresAt
+        : null;
+    const appleExpiresAt = laterDate(
+      productionAppleExpiresAt,
+      sandboxExpiresAt,
+    );
+    const effectiveExpiresAt = laterDate(
+      laterDate(stripeExpiresAt, grantExpiresAt),
+      appleExpiresAt,
+    );
 
     // Determine the primary billing source for cross-platform purchase guard.
-    const ENTITLED_STRIPE = new Set(['active', 'trialing', 'past_due']);
-    const stripeActive = ENTITLED_STRIPE.has(user.stripeSubscriptionStatus ?? '');
-    const source: import('../../common/dto').BillingSource = !user.premium
+    const ENTITLED_STRIPE = new Set(["active", "trialing", "past_due"]);
+    const stripeActive = ENTITLED_STRIPE.has(
+      user.stripeSubscriptionStatus ?? "",
+    );
+    const source: import("../../common/dto").BillingSource = !user.premium
       ? null
       : stripeActive
-        ? 'stripe'
+        ? "stripe"
         : appleExpiresAt
-          ? 'apple'
+          ? "apple"
           : activeGrants.length > 0
-            ? 'grant'
+            ? "grant"
             : null;
 
     return {
@@ -138,9 +184,13 @@ export class BillingService {
       source,
       subscriptionStatus: user.stripeSubscriptionStatus ?? null,
       cancelAtPeriodEnd: Boolean(user.stripeCancelAtPeriodEnd),
-      currentPeriodEnd: user.stripeCurrentPeriodEnd ? user.stripeCurrentPeriodEnd.toISOString() : null,
+      currentPeriodEnd: user.stripeCurrentPeriodEnd
+        ? user.stripeCurrentPeriodEnd.toISOString()
+        : null,
       appleExpiresAt: appleExpiresAt ? appleExpiresAt.toISOString() : null,
-      effectiveExpiresAt: effectiveExpiresAt ? effectiveExpiresAt.toISOString() : null,
+      effectiveExpiresAt: effectiveExpiresAt
+        ? effectiveExpiresAt.toISOString()
+        : null,
       grants: activeGrants.map((g) => ({
         id: g.id,
         tier: g.tier,
@@ -160,15 +210,23 @@ export class BillingService {
               publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
               key: user.recruitedBy.avatarKey ?? null,
               updatedAt: user.recruitedBy.avatarUpdatedAt ?? null,
-            }), avatarVideo: toAvatarVideoDto(user.recruitedBy, this.appConfig.r2()?.publicBaseUrl ?? null),
+            }),
+            avatarVideo: toAvatarVideoDto(
+              user.recruitedBy,
+              this.appConfig.r2()?.publicBaseUrl ?? null,
+            ),
             premium: Boolean(user.recruitedBy.premium),
             premiumPlus: Boolean(user.recruitedBy.premiumPlus),
-            verifiedStatus: (user.recruitedBy.verifiedStatus ?? 'none') as 'none' | 'identity' | 'manual',
+            verifiedStatus: (user.recruitedBy.verifiedStatus ?? "none") as
+              | "none"
+              | "identity"
+              | "manual",
           }
         : null,
       recruitCount: user._count.recruits,
       referralBonusGranted: user.referralBonusGrantedAt !== null,
-      recruitBonusEligible: !user.referralBonusGrantedAt && user.recruitedBy !== null,
+      recruitBonusEligible:
+        !user.referralBonusGrantedAt && user.recruitedBy !== null,
     };
   }
 
@@ -187,9 +245,11 @@ export class BillingService {
         stripeSubscriptionPriceId: true,
       },
     });
-    if (!user) throw new NotFoundException('User not found.');
+    if (!user) throw new NotFoundException("User not found.");
     if (!isVerified(user.verifiedStatus)) {
-      throw new ForbiddenException('Verify your account to subscribe to Premium.');
+      throw new ForbiddenException(
+        "Verify your account to subscribe to Premium.",
+      );
     }
     return user;
   }
@@ -203,7 +263,10 @@ export class BillingService {
    *
    * Pass previousUnverifiedAt (read before clearing it in the DB) so the extension is accurate.
    */
-  async onUserVerified(userId: string, previousUnverifiedAt: Date | null): Promise<void> {
+  async onUserVerified(
+    userId: string,
+    previousUnverifiedAt: Date | null,
+  ): Promise<void> {
     await this.entitlement.extendGrantsAfterPause(userId, previousUnverifiedAt);
 
     // Resume Stripe subscription if it was paused during unverification (best-effort).
@@ -214,21 +277,31 @@ export class BillingService {
       });
       if (user?.stripeSubscriptionId) {
         const { stripe } = this.getStripe();
-        const sub = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
+        const sub = await stripe.subscriptions.retrieve(
+          user.stripeSubscriptionId,
+        );
         if (sub.pause_collection) {
-          await stripe.subscriptions.update(user.stripeSubscriptionId, { pause_collection: '' });
-          this.logger.log(`[billing] Resumed Stripe subscription for user ${userId}`);
+          await stripe.subscriptions.update(user.stripeSubscriptionId, {
+            pause_collection: "",
+          });
+          this.logger.log(
+            `[billing] Resumed Stripe subscription for user ${userId}`,
+          );
         }
       }
     } catch (err) {
-      this.logger.warn(`[billing] Could not resume Stripe subscription for user ${userId}: ${err}`);
+      this.logger.warn(
+        `[billing] Could not resume Stripe subscription for user ${userId}: ${err}`,
+      );
     }
 
     // Re-sync grant trial window — grants may have been extended by the unverified pause.
     await this.syncGrantTrialToSubscription(userId);
 
-    const result = await this.entitlement.recomputeAndApply(userId);
-    this.posthog.capture(userId, 'user_verified', {
+    const result = await this.entitlement.recomputeAndApply(userId, {
+      welcomeHandled: true,
+    });
+    this.posthog.capture(userId, "user_verified", {
       is_premium: result.isPremium,
       is_premium_plus: result.isPremiumPlus,
       effective_tier: result.effectiveTier,
@@ -264,8 +337,8 @@ export class BillingService {
       });
 
       const subId = user?.stripeSubscriptionId;
-      const status = user?.stripeSubscriptionStatus ?? '';
-      if (!subId || !['active', 'trialing'].includes(status)) return;
+      const status = user?.stripeSubscriptionStatus ?? "";
+      if (!subId || !["active", "trialing"].includes(status)) return;
 
       const { stripe } = this.getStripe();
       const activeGrants = await this.entitlement.getActiveGrants(userId);
@@ -275,17 +348,23 @@ export class BillingService {
         // Defer next Stripe charge until the grant window closes.
         await stripe.subscriptions.update(subId, {
           trial_end: Math.floor(latestGrantEnd.getTime() / 1000),
-          proration_behavior: 'none',
+          proration_behavior: "none",
         });
-        this.logger.log(`[billing] Grant trial set for user ${userId} until ${latestGrantEnd.toISOString()}`);
-      } else if (status === 'trialing') {
+        this.logger.log(
+          `[billing] Grant trial set for user ${userId} until ${latestGrantEnd.toISOString()}`,
+        );
+      } else if (status === "trialing") {
         // Grants are gone but the sub is still in trial — end it now so Stripe charges.
-        await stripe.subscriptions.update(subId, { trial_end: 'now' });
-        this.logger.log(`[billing] Grant trial ended early for user ${userId} — no active grants`);
+        await stripe.subscriptions.update(subId, { trial_end: "now" });
+        this.logger.log(
+          `[billing] Grant trial ended early for user ${userId} — no active grants`,
+        );
       }
       // status === 'active' with no grants: billing is already running, nothing to do.
     } catch (err) {
-      this.logger.warn(`[billing] Could not sync grant trial for user ${userId}: ${err}`);
+      this.logger.warn(
+        `[billing] Could not sync grant trial for user ${userId}: ${err}`,
+      );
     }
   }
 
@@ -307,60 +386,90 @@ export class BillingService {
       if (before?.stripeSubscriptionId) {
         const { stripe } = this.getStripe();
         await stripe.subscriptions.update(before.stripeSubscriptionId, {
-          pause_collection: { behavior: 'void' },
+          pause_collection: { behavior: "void" },
         });
         stripePaused = true;
-        this.logger.log(`[billing] Paused Stripe subscription for user ${userId}`);
+        this.logger.log(
+          `[billing] Paused Stripe subscription for user ${userId}`,
+        );
       }
     } catch (err) {
-      this.logger.warn(`[billing] Could not pause Stripe subscription for user ${userId}: ${err}`);
+      this.logger.warn(
+        `[billing] Could not pause Stripe subscription for user ${userId}: ${err}`,
+      );
     }
 
     await this.entitlement.recomputeAndApply(userId);
-    this.posthog.capture(userId, 'user_unverified', {
+    this.posthog.capture(userId, "user_unverified", {
       had_premium: before?.premium ?? false,
       had_premium_plus: before?.premiumPlus ?? false,
       stripe_subscription_paused: stripePaused,
     });
   }
 
-  async createCheckoutSession(params: { userId: string; tier: BillingTier }): Promise<BillingCheckoutSessionDto> {
+  async createCheckoutSession(params: {
+    userId: string;
+    tier: BillingTier;
+  }): Promise<BillingCheckoutSessionDto> {
     const { stripe, cfg } = this.getStripe();
     const user = await this.requireVerifiedUser(params.userId);
 
     const price =
-      params.tier === 'premiumPlus' ? cfg.pricePremiumPlusMonthly : cfg.pricePremiumMonthly;
-    const ACTIVE_STATUSES = new Set(['active', 'trialing', 'past_due']);
-    const hasActiveSub = user.stripeSubscriptionId && ACTIVE_STATUSES.has(user.stripeSubscriptionStatus ?? '');
+      params.tier === "premiumPlus"
+        ? cfg.pricePremiumPlusMonthly
+        : cfg.pricePremiumMonthly;
+    const ACTIVE_STATUSES = new Set(["active", "trialing", "past_due"]);
+    const hasActiveSub =
+      user.stripeSubscriptionId &&
+      ACTIVE_STATUSES.has(user.stripeSubscriptionStatus ?? "");
 
     if (hasActiveSub) {
       const currentPriceId = user.stripeSubscriptionPriceId;
-      const isCurrentPremiumPlus = currentPriceId === cfg.pricePremiumPlusMonthly;
+      const isCurrentPremiumPlus =
+        currentPriceId === cfg.pricePremiumPlusMonthly;
       const isCurrentPremium = currentPriceId === cfg.pricePremiumMonthly;
 
-      if (params.tier === 'premiumPlus' && isCurrentPremiumPlus) {
-        throw new BadRequestException('You already have a Premium+ subscription.');
+      if (params.tier === "premiumPlus" && isCurrentPremiumPlus) {
+        throw new BadRequestException(
+          "You already have a Premium+ subscription.",
+        );
       }
-      if (params.tier === 'premium' && isCurrentPremium) {
-        throw new BadRequestException('You already have a Premium subscription.');
+      if (params.tier === "premium" && isCurrentPremium) {
+        throw new BadRequestException(
+          "You already have a Premium subscription.",
+        );
       }
-      if (params.tier === 'premium' && isCurrentPremiumPlus) {
-        throw new BadRequestException('You already have Premium+ which includes everything in Premium. Manage your subscription to make changes.');
+      if (params.tier === "premium" && isCurrentPremiumPlus) {
+        throw new BadRequestException(
+          "You already have Premium+ which includes everything in Premium. Manage your subscription to make changes.",
+        );
       }
 
       // Upgrading Premium → Premium+: swap the price on the existing subscription.
-      if (params.tier === 'premiumPlus' && isCurrentPremium) {
-        const sub = await stripe.subscriptions.retrieve(user.stripeSubscriptionId!);
+      if (params.tier === "premiumPlus" && isCurrentPremium) {
+        const sub = await stripe.subscriptions.retrieve(
+          user.stripeSubscriptionId!,
+        );
         const itemId = sub.items?.data?.[0]?.id;
-        if (!itemId) throw new BadRequestException('Could not find subscription item to upgrade.');
+        if (!itemId)
+          throw new BadRequestException(
+            "Could not find subscription item to upgrade.",
+          );
         await stripe.subscriptions.update(user.stripeSubscriptionId!, {
           items: [{ id: itemId, price: cfg.pricePremiumPlusMonthly }],
-          proration_behavior: 'create_prorations',
-          metadata: { ...(sub.metadata ?? {}), tier: 'premiumPlus' },
+          proration_behavior: "create_prorations",
+          metadata: { ...(sub.metadata ?? {}), tier: "premiumPlus" },
         });
-        this.logger.log(`[billing] Upgraded user ${params.userId} from Premium → Premium+`);
-        await this.syncSubscriptionToUser({ customerId: user.stripeCustomerId!, subscriptionId: user.stripeSubscriptionId! });
-        return { url: `${cfg.frontendBaseUrl}/settings/billing?checkout=success` };
+        this.logger.log(
+          `[billing] Upgraded user ${params.userId} from Premium → Premium+`,
+        );
+        await this.syncSubscriptionToUser({
+          customerId: user.stripeCustomerId!,
+          subscriptionId: user.stripeSubscriptionId!,
+        });
+        return {
+          url: `${cfg.frontendBaseUrl}/settings/billing?checkout=success`,
+        };
       }
     }
 
@@ -383,8 +492,11 @@ export class BillingService {
     const now = new Date();
     const activeGrants = await this.entitlement.getActiveGrants(user.id);
     const latestGrantEnd = activeGrants[0]?.endsAt ?? null;
-    const remainingMs = latestGrantEnd ? latestGrantEnd.getTime() - now.getTime() : 0;
-    const trialDays = remainingMs > 0 ? Math.ceil(remainingMs / (24 * 60 * 60 * 1000)) : 0;
+    const remainingMs = latestGrantEnd
+      ? latestGrantEnd.getTime() - now.getTime()
+      : 0;
+    const trialDays =
+      remainingMs > 0 ? Math.ceil(remainingMs / (24 * 60 * 60 * 1000)) : 0;
 
     // {CHECKOUT_SESSION_ID} is a Stripe template literal — Stripe substitutes the real session ID
     // in the redirect URL so the client can call the sync endpoint without polling.
@@ -392,7 +504,7 @@ export class BillingService {
     const cancelUrl = `${cfg.frontendBaseUrl}/settings/billing?checkout=cancel`;
 
     const session = await stripe.checkout.sessions.create({
-      mode: 'subscription',
+      mode: "subscription",
       customer: stripeCustomerId,
       client_reference_id: user.id,
       metadata: { userId: user.id, tier: params.tier },
@@ -415,7 +527,8 @@ export class BillingService {
     });
 
     const url = session?.url as string | null | undefined;
-    if (!url) throw new BadRequestException('Stripe did not return a checkout URL.');
+    if (!url)
+      throw new BadRequestException("Stripe did not return a checkout URL.");
     return { url };
   }
 
@@ -424,17 +537,20 @@ export class BillingService {
    * Works whether or not the webhook already ran — if premium is already set the call is a no-op.
    * Returns the caller's updated billing summary so the UI can update immediately.
    */
-  async syncCheckoutSession(params: { userId: string; sessionId: string }): Promise<BillingMeDto> {
+  async syncCheckoutSession(params: {
+    userId: string;
+    sessionId: string;
+  }): Promise<BillingMeDto> {
     const { stripe } = this.getStripe();
 
     // Retrieve with subscription expanded so we don't need a second Stripe round-trip.
     const session = await stripe.checkout.sessions.retrieve(params.sessionId, {
-      expand: ['subscription'],
+      expand: ["subscription"],
     });
 
     // Ownership check: ensure the session belongs to this user.
     if (session.client_reference_id !== params.userId) {
-      throw new NotFoundException('Checkout session not found.');
+      throw new NotFoundException("Checkout session not found.");
     }
 
     // Also cross-check the Stripe customer matches what we have on file, guarding against
@@ -443,54 +559,84 @@ export class BillingService {
       where: { id: params.userId },
       select: { stripeCustomerId: true },
     });
-    if (!user) throw new NotFoundException('User not found.');
-    const sessionCustomerId = typeof session.customer === 'string' ? session.customer : session.customer?.id ?? null;
-    if (user.stripeCustomerId && sessionCustomerId && user.stripeCustomerId !== sessionCustomerId) {
-      throw new NotFoundException('Checkout session not found.');
+    if (!user) throw new NotFoundException("User not found.");
+    const sessionCustomerId =
+      typeof session.customer === "string"
+        ? session.customer
+        : (session.customer?.id ?? null);
+    if (
+      user.stripeCustomerId &&
+      sessionCustomerId &&
+      user.stripeCustomerId !== sessionCustomerId
+    ) {
+      throw new NotFoundException("Checkout session not found.");
     }
 
     // Sync the subscription if one exists (may not if the session status is still 'open' / 'expired').
     const sub = session.subscription;
     if (sub) {
       const customerId = sessionCustomerId;
-      const subscriptionId = typeof sub === 'string' ? sub : sub.id;
+      const subscriptionId = typeof sub === "string" ? sub : sub.id;
       if (customerId && subscriptionId) {
-        const subscription = typeof sub === 'string' ? undefined : (sub as Stripe.Subscription);
-        await this.syncSubscriptionToUser({ customerId, subscriptionId, subscription });
+        const subscription =
+          typeof sub === "string" ? undefined : (sub as Stripe.Subscription);
+        await this.syncSubscriptionToUser({
+          customerId,
+          subscriptionId,
+          subscription,
+        });
       }
     }
 
     return this.getMe(params.userId);
   }
 
-  async createPortalSession(params: { userId: string }): Promise<BillingPortalSessionDto> {
+  async createPortalSession(params: {
+    userId: string;
+  }): Promise<BillingPortalSessionDto> {
     const { stripe, cfg } = this.getStripe();
     const user = await this.prisma.user.findUnique({
       where: { id: params.userId },
       select: { stripeCustomerId: true, verifiedStatus: true },
     });
-    if (!user) throw new NotFoundException('User not found.');
-    if (!isVerified(user.verifiedStatus)) throw new ForbiddenException('Verify your account to manage a subscription.');
-    if (!user.stripeCustomerId) throw new BadRequestException('No Stripe customer found for this account.');
+    if (!user) throw new NotFoundException("User not found.");
+    if (!isVerified(user.verifiedStatus))
+      throw new ForbiddenException(
+        "Verify your account to manage a subscription.",
+      );
+    if (!user.stripeCustomerId)
+      throw new BadRequestException(
+        "No Stripe customer found for this account.",
+      );
 
     const returnUrl = `${cfg.frontendBaseUrl}/settings/billing`;
     const session = await stripe.billingPortal.sessions.create({
       customer: user.stripeCustomerId,
       return_url: returnUrl,
     });
-    if (!session.url) throw new BadRequestException('Stripe did not return a portal URL.');
+    if (!session.url)
+      throw new BadRequestException("Stripe did not return a portal URL.");
     return { url: session.url };
   }
 
-  async handleWebhook(params: { rawBody: Buffer; stripeSignature: string }): Promise<void> {
+  async handleWebhook(params: {
+    rawBody: Buffer;
+    stripeSignature: string;
+  }): Promise<void> {
     const { stripe, cfg } = this.getStripe();
 
     let event: Stripe.Event;
     try {
-      event = stripe.webhooks.constructEvent(params.rawBody, params.stripeSignature, cfg.webhookSecret);
+      event = stripe.webhooks.constructEvent(
+        params.rawBody,
+        params.stripeSignature,
+        cfg.webhookSecret,
+      );
     } catch (err: unknown) {
-      this.logger.warn(`Stripe webhook signature verification failed: ${(err as Error)?.message ?? String(err)}`);
-      throw new BadRequestException('Invalid Stripe signature.');
+      this.logger.warn(
+        `Stripe webhook signature verification failed: ${(err as Error)?.message ?? String(err)}`,
+      );
+      throw new BadRequestException("Invalid Stripe signature.");
     }
 
     // Two-phase dedup: only skip when processedAt is set (handler completed successfully).
@@ -505,7 +651,7 @@ export class BillingService {
       try {
         await this.prisma.stripeWebhookEvent.create({ data: { id: event.id } });
       } catch (e: unknown) {
-        if (!(isUniqueViolation(e))) throw e;
+        if (!isUniqueViolation(e)) throw e;
         // Concurrent request raced us to the insert — re-check processedAt before proceeding.
         const concurrent = await this.prisma.stripeWebhookEvent.findUnique({
           where: { id: event.id },
@@ -516,56 +662,146 @@ export class BillingService {
     }
 
     // Only process the events we care about.
-    if (event.type === 'checkout.session.completed') {
+    if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
-      const customerId = typeof session.customer === 'string' ? session.customer : session.customer?.id ?? null;
-      const subscriptionId = typeof session.subscription === 'string' ? session.subscription : session.subscription?.id ?? null;
+      const customerId =
+        typeof session.customer === "string"
+          ? session.customer
+          : (session.customer?.id ?? null);
+      const subscriptionId =
+        typeof session.subscription === "string"
+          ? session.subscription
+          : (session.subscription?.id ?? null);
       if (!customerId || !subscriptionId) {
-        await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
+        await this.prisma.stripeWebhookEvent.update({
+          where: { id: event.id },
+          data: { processedAt: new Date() },
+        });
         return;
       }
       await this.syncSubscriptionToUser({ customerId, subscriptionId });
-      await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
+      await this.prisma.stripeWebhookEvent.update({
+        where: { id: event.id },
+        data: { processedAt: new Date() },
+      });
       return;
     }
 
     if (
-      event.type === 'customer.subscription.created' ||
-      event.type === 'customer.subscription.updated' ||
-      event.type === 'customer.subscription.deleted'
+      event.type === "customer.subscription.created" ||
+      event.type === "customer.subscription.updated" ||
+      event.type === "customer.subscription.deleted"
     ) {
       const sub = event.data.object as Stripe.Subscription;
-      const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id ?? null;
+      const customerId =
+        typeof sub.customer === "string"
+          ? sub.customer
+          : (sub.customer?.id ?? null);
       if (!customerId) {
-        await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
+        await this.prisma.stripeWebhookEvent.update({
+          where: { id: event.id },
+          data: { processedAt: new Date() },
+        });
         return;
       }
-      await this.syncSubscriptionToUser({ customerId, subscriptionId: sub.id, subscription: sub });
-      await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
+      await this.syncSubscriptionToUser({
+        customerId,
+        subscriptionId: sub.id,
+        subscription: sub,
+      });
+      await this.prisma.stripeWebhookEvent.update({
+        where: { id: event.id },
+        data: { processedAt: new Date() },
+      });
+      return;
+    }
+
+    if (event.type === "invoice.payment_failed") {
+      const invoice = event.data.object as Stripe.Invoice;
+      const customerId =
+        typeof invoice.customer === "string"
+          ? invoice.customer
+          : (invoice.customer?.id ?? null);
+      const owner = customerId
+        ? await this.prisma.user.findFirst({
+            where: { stripeCustomerId: customerId },
+            select: { id: true, stripeSubscriptionId: true },
+          })
+        : null;
+      if (
+        owner?.stripeSubscriptionId &&
+        invoice.id &&
+        this.invoiceSubscriptionId(invoice) === owner.stripeSubscriptionId
+      ) {
+        // Provider state, not a browser checkout redirect, proves a billing problem.
+        await this.syncSubscriptionToUser({
+          customerId: customerId!,
+          subscriptionId: owner.stripeSubscriptionId,
+        });
+        this.sideEffects.dispatch("email.lifecycle", {
+          kind: "paymentAttention",
+          userId: owner.id,
+          source: "stripe",
+          eventId: invoice.id,
+          occurredAt: new Date(event.created * 1000).toISOString(),
+        });
+      }
+      await this.prisma.stripeWebhookEvent.update({
+        where: { id: event.id },
+        data: { processedAt: new Date() },
+      });
       return;
     }
 
     // Refresh entitlement on every successful payment to keep period dates in sync.
-    if (event.type === 'invoice.payment_succeeded') {
+    if (event.type === "invoice.payment_succeeded") {
       const invoice = event.data.object as Stripe.Invoice;
-      const customerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id ?? null;
-      // The pinned Stripe typings omit `Invoice.subscription`, which the webhook payload still carries.
-      const invoiceSubscription = (invoice as Stripe.Invoice & { subscription?: string | { id: string } | null }).subscription;
-      const subscriptionId = typeof invoiceSubscription === 'string' ? invoiceSubscription : invoiceSubscription?.id ?? null;
+      const customerId =
+        typeof invoice.customer === "string"
+          ? invoice.customer
+          : (invoice.customer?.id ?? null);
+      const subscriptionId = this.invoiceSubscriptionId(invoice);
       if (!customerId || !subscriptionId) {
-        await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
+        await this.prisma.stripeWebhookEvent.update({
+          where: { id: event.id },
+          data: { processedAt: new Date() },
+        });
         return;
       }
       await this.syncSubscriptionToUser({ customerId, subscriptionId });
-      await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
+      await this.prisma.stripeWebhookEvent.update({
+        where: { id: event.id },
+        data: { processedAt: new Date() },
+      });
       return;
     }
 
     // Unrecognised event type — mark processed so we don't log it repeatedly on retry.
-    await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
+    await this.prisma.stripeWebhookEvent.update({
+      where: { id: event.id },
+      data: { processedAt: new Date() },
+    });
   }
 
-  private async syncSubscriptionToUser(params: { customerId: string; subscriptionId: string; subscription?: Stripe.Subscription }) {
+  private invoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
+    // Current API payloads nest subscription identity under parent; accept older signed events too.
+    const subscription =
+      invoice.parent?.subscription_details?.subscription ??
+      (
+        invoice as Stripe.Invoice & {
+          subscription?: string | { id: string } | null;
+        }
+      ).subscription;
+    return typeof subscription === "string"
+      ? subscription
+      : (subscription?.id ?? null);
+  }
+
+  private async syncSubscriptionToUser(params: {
+    customerId: string;
+    subscriptionId: string;
+    subscription?: Stripe.Subscription;
+  }) {
     const { stripe } = this.getStripe();
 
     const user = await this.prisma.user.findFirst({
@@ -577,6 +813,7 @@ export class BillingService {
         premiumPlus: true,
         recruitedById: true,
         referralBonusGrantedAt: true,
+        stripeCancelAtPeriodEnd: true,
       },
     });
     if (!user) return;
@@ -584,18 +821,25 @@ export class BillingService {
     const sub =
       params.subscription ??
       (await stripe.subscriptions.retrieve(params.subscriptionId, {
-        expand: ['items.data.price'],
+        expand: ["items.data.price"],
       }));
 
     const priceId = sub.items?.data?.[0]?.price?.id ?? null;
-    const status = String(sub.status ?? '');
+    const status = String(sub.status ?? "");
     const cancelAtPeriodEnd = Boolean(sub.cancel_at_period_end);
     // Period bounds moved off `Subscription` in newer typings but are still present on the payload.
-    const periodBounds = sub as Stripe.Subscription & { current_period_start?: number | null; current_period_end?: number | null };
+    const periodBounds = sub as Stripe.Subscription & {
+      current_period_start?: number | null;
+      current_period_end?: number | null;
+    };
     const currentPeriodEndSec = periodBounds.current_period_end;
-    const currentPeriodEnd = currentPeriodEndSec ? new Date(currentPeriodEndSec * 1000) : null;
+    const currentPeriodEnd = currentPeriodEndSec
+      ? new Date(currentPeriodEndSec * 1000)
+      : null;
     const currentPeriodStartSec = periodBounds.current_period_start;
-    const currentPeriodStart = currentPeriodStartSec ? new Date(currentPeriodStartSec * 1000) : null;
+    const currentPeriodStart = currentPeriodStartSec
+      ? new Date(currentPeriodStartSec * 1000)
+      : null;
 
     // Save Stripe state to DB first, then let EntitlementService resolve the effective tier
     // (which may be elevated by active grants).
@@ -611,28 +855,45 @@ export class BillingService {
       },
     });
 
+    if (
+      cancelAtPeriodEnd &&
+      !user.stripeCancelAtPeriodEnd &&
+      currentPeriodEnd
+    ) {
+      this.sideEffects.dispatch("email.lifecycle", {
+        kind: "cancellation",
+        userId: user.id,
+        source: "stripe",
+        eventId: `${sub.id}-${currentPeriodEnd.toISOString()}`,
+        occurredAt: new Date().toISOString(),
+      });
+    }
+
     const result = await this.entitlement.recomputeAndApply(user.id);
     const { isPremium, isPremiumPlus } = result;
 
-    await this.publicProfileCache.invalidateForUser({ id: user.id, username: user.username ?? null });
+    await this.publicProfileCache.invalidateForUser({
+      id: user.id,
+      username: user.username ?? null,
+    });
 
     if (!user.premium && isPremium) {
       this.slack.notifyPremiumGranted({
         userId: user.id,
         username: user.username ?? null,
         name: user.name ?? null,
-        tier: isPremiumPlus ? 'premiumPlus' : 'premium',
-        source: 'stripe',
+        tier: isPremiumPlus ? "premiumPlus" : "premium",
+        source: "stripe",
       });
     }
 
     // The referral month is granted on verification. A paid subscription only records the
     // affiliate premium milestone (idempotent).
-    if (status === 'active' && user.recruitedById) {
+    if (status === "active" && user.recruitedById) {
       await this.referral.recordPremiumMilestone(user.id);
     }
 
-    this.posthog.capture(user.id, 'tier_changed', {
+    this.posthog.capture(user.id, "tier_changed", {
       stripe_status: status,
       price_id: priceId,
       is_premium: isPremium,
@@ -642,7 +903,7 @@ export class BillingService {
 
     // Realtime: update both public tier badge + self auth state.
     void this.usersPublicRealtime.emitPublicProfileUpdated(user.id);
-    void this.usersMeRealtime.emitMeUpdated(user.id, 'billing_tier_changed');
+    void this.usersMeRealtime.emitMeUpdated(user.id, "billing_tier_changed");
   }
 
   /**
@@ -650,8 +911,8 @@ export class BillingService {
    * Allows re-testing the checkout flow without creating a new account.
    */
   async devResetPremium(userId: string): Promise<void> {
-    if (this.appConfig.nodeEnv() !== 'development') {
-      throw new ForbiddenException('Only available in development.');
+    if (this.appConfig.nodeEnv() !== "development") {
+      throw new ForbiddenException("Only available in development.");
     }
 
     await this.prisma.user.update({
@@ -672,10 +933,13 @@ export class BillingService {
     await this.prisma.subscriptionGrant.deleteMany({ where: { userId } });
 
     await this.publicProfileCache.invalidateForUser(
-      await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: USER_REF_SELECT }),
+      await this.prisma.user.findUniqueOrThrow({
+        where: { id: userId },
+        select: USER_REF_SELECT,
+      }),
     );
     void this.usersPublicRealtime.emitPublicProfileUpdated(userId);
-    void this.usersMeRealtime.emitMeUpdated(userId, 'billing_tier_changed');
+    void this.usersMeRealtime.emitMeUpdated(userId, "billing_tier_changed");
 
     this.logger.log(`[dev] Reset premium for user ${userId}`);
   }

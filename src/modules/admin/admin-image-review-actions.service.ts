@@ -75,10 +75,10 @@ export class AdminImageReviewActionsService {
     ).get(a.r2Key)!;
     if (
       publicationRefs.announcements.length ||
-      publicationRefs.newsletters.length
+      publicationRefs.newsletters.length || publicationRefs.emailDeliveries.length
     ) {
       throw new BadRequestException(
-        "This media is still used by an announcement or newsletter. Remove or replace it there first; sent newsletter images must be retained.",
+        "This media is still used by an announcement, newsletter, or retained email. Sent email images must remain available.",
       );
     }
 

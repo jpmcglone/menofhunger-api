@@ -322,6 +322,8 @@ export class NewslettersService {
           headers: rendered.headers,
           category: 'broadcast',
           userId: user.id,
+          preference: 'emailNewsletter',
+          eventKey: `newsletter:${newsletterId}:${user.id}`,
         });
         if (sent.sent) sentCount += 1;
         else failedCount += 1;

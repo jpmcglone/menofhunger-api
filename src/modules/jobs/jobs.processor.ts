@@ -119,8 +119,8 @@ export class JobsProcessor extends WorkerHost {
         case JOBS.notificationsStreakReminderEmail:
           await this.notificationsEmailWeekly.runSendStreakReminderEmail(job.data ?? undefined);
           return { ok: true };
-        case JOBS.notificationsProfileReminderEmail:
-          await this.notificationsEmail.runSendProfileReminderEmail();
+        // Drain jobs queued before profile reminders joined the onboarding sequence.
+        case 'notifications.profileReminderEmail':
           return { ok: true };
         case JOBS.notificationsReplyNudgePush:
           await this.notificationsReplyNudge.runReplyNudgeSweep();

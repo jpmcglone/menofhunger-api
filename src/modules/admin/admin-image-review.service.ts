@@ -152,6 +152,7 @@ export class AdminImageReviewService {
         articles: refs.articles,
         announcements: refs.announcements,
         newsletters: refs.newsletters,
+        emailDeliveries: refs.emailDeliveries,
       },
     };
   }

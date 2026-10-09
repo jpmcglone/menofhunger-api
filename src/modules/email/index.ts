@@ -1,5 +1,5 @@
 /** Public API of the email module. Other modules import from here, not from internal files. */
-export * from './email-content';
+export * from './email-content-lifecycle';
 export * from './email-content-article';
 export * from './email-content-space';
 export * from './email-rich-text';

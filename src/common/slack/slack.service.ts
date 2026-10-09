@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { AppConfigService } from '../../modules/app/app-config.service';
-import { describeMissingProfileFields, type MissingProfileField } from '../../modules/email/email-content';
 
 type SlackBlock = Record<string, unknown>;
 
@@ -40,14 +39,6 @@ export interface SlackFeedbackPayload {
   details: string;
   email: string | null;
   userId?: string | null;
-}
-
-export interface SlackProfileReminderPayload {
-  userId: string;
-  username: string | null;
-  email: string | null;
-  checkpoint: '24h' | '7d';
-  missingFields: MissingProfileField[];
 }
 
 export interface SlackDailyDigestPayload {
@@ -269,25 +260,6 @@ export class SlackService {
         text: { type: 'mrkdwn', text: `*"${subject}"*\n${snippet}` },
       },
       this.contextBlock(reviewLink, ts),
-    ]);
-  }
-
-  notifyProfileReminderSent({ userId, username, email, checkpoint, missingFields }: SlackProfileReminderPayload): void {
-    const ts = this.formatTime(new Date());
-    const checkpointLabel = checkpoint === '24h' ? '24-hour' : '7-day';
-    const missingLabel = describeMissingProfileFields(missingFields);
-    const profileLink = username ? this.link(`/u/${username}`, `@${username}`) : null;
-    const adminLink = this.link(`/admin/users`, 'Admin');
-
-    void this.send(`:envelope: Profile reminder sent (${checkpointLabel})`, [
-      this.section(`:envelope: *Profile Reminder Sent (${checkpointLabel})*`),
-      this.fieldsSection([
-        ['User', profileLink ?? this.userReference(username, userId)],
-        ['Email', email ?? '—'],
-        ['Missing', missingLabel],
-        ['Checkpoint', `${checkpointLabel} after signup`],
-      ]),
-      this.contextBlock(`\`${userId}\``, adminLink, ts),
     ]);
   }
 

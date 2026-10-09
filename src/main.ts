@@ -280,6 +280,8 @@ async function bootstrap() {
     // Allow third-party webhooks (no Origin/Referer).
     if (isStripeWebhookPath(req)) return next();
     if (isAppleIapNotificationPath(req)) return next();
+    // Exact path only; the Resend controller verifies the raw-body Svix signature.
+    if (stripVersionPrefix(String(req.originalUrl || req.url || '')).split('?')[0] === '/email/webhook/resend') return next();
     // Gmail one-click unsubscribe POSTs with no Origin/Referer.
     if (isOneClickUnsubscribePath(String(req.originalUrl || req.url || ''))) return next();
     // Defense-in-depth: any request carrying a Stripe signature header is a

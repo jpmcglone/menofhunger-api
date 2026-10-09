@@ -274,6 +274,10 @@ export const RedisKeys = {
 
   // Email quota budget (daily team counter + per-user engagement cap)
   /** Transactional email send count for a UTC date (e.g. "2026-08-04"). TTL 48h. */
+  emailBudgetReservation(dateKey: string, deliveryId: string): string {
+    return `email:reservation:${clean(dateKey)}:${clean(deliveryId)}`;
+  },
+
   emailDailyCount(dateKey: string): string {
     return `email:daily:count:${clean(dateKey)}`;
   },

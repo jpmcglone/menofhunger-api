@@ -54,6 +54,26 @@ export class GroupEmailService {
     const to = getVerifiedRecipientEmail(user);
     if (!to) return false;
 
+    let eventKey: string;
+    if (input.kind === 'invite') {
+      if (!input.inviteId) return false;
+      const invite = await this.prisma.communityGroupInvite.findFirst({
+        where: { id: input.inviteId, groupId: input.groupId, inviteeUserId: user.id, status: 'pending', expiresAt: { gt: new Date() } },
+        select: { id: true, updatedAt: true, lastNotifiedAt: true },
+      });
+      if (!invite) return false;
+      eventKey = `group-invite:${invite.id}:${(invite.lastNotifiedAt ?? invite.updatedAt).toISOString()}`;
+    } else if (input.kind === 'approved') {
+      const member = await this.prisma.communityGroupMember.findFirst({
+        where: { groupId: input.groupId, userId: user.id, status: 'active' }, select: { updatedAt: true },
+      });
+      if (!member) return false;
+      eventKey = `group-approved:${input.groupId}:${user.id}:${member.updatedAt.toISOString()}`;
+    } else {
+      if (!input.messageId) return false;
+      eventKey = `channel-mention:${input.messageId}:${user.id}`;
+    }
+
     const base = ((this.appConfig.frontendBaseUrl() ?? '').trim() || 'https://menofhunger.com').replace(/\/$/, '');
     const slug = encodeURIComponent(group.slug);
     let url = `${base}/g/${slug}`;
@@ -82,8 +102,10 @@ export class GroupEmailService {
       subject: rendered.subject,
       text: rendered.text,
       html: rendered.html,
-      category: 'engagement',
+      category: 'service',
       userId: user.id,
+      preference: 'emailInstantHighSignal',
+      eventKey,
     });
     if (!sent.sent) this.logger.debug(`[group-email] ${input.kind} skipped ${user.id}: ${sent.reason ?? 'unknown'}`);
     return sent.sent;

@@ -130,6 +130,19 @@ export class BillingSideEffectsHandler implements OnModuleInit {
   private async onReferralVerified(
     payload: SideEffectPayloads["referral.verified"],
   ): Promise<void> {
-    await this.referral.onMemberVerified(payload.userId);
+    await this.referral.onMemberVerified(payload.userId, {
+      combinedVerification: !payload.skipWelcome,
+    });
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.userId },
+      select: { verifiedAt: true },
+    });
+    if (user?.verifiedAt && !payload.skipWelcome)
+      this.sideEffects.dispatch("email.lifecycle", {
+        kind: "verified",
+        userId: payload.userId,
+        eventId: user.verifiedAt.toISOString(),
+        occurredAt: user.verifiedAt.toISOString(),
+      });
   }
 }

@@ -6,12 +6,6 @@ type ResendSendEmailResponseOk = {
   id: string;
 };
 
-type ResendSendEmailResponseErr = {
-  message?: string;
-  name?: string;
-  statusCode?: number;
-};
-
 @Injectable()
 export class ResendEmailProvider implements EmailProvider {
   private readonly logger = new Logger(ResendEmailProvider.name);
@@ -20,15 +14,15 @@ export class ResendEmailProvider implements EmailProvider {
 
   async sendEmail(req: EmailSendRequest): Promise<EmailSendResult> {
     const cfg = this.appConfig.email();
-    if (!cfg) return { sent: false, reason: 'email_not_configured' };
-    if (cfg.provider !== 'resend') return { sent: false, reason: 'email_provider_not_supported' };
+    if (!cfg) return { sent: false, reason: 'email_not_configured', definitiveRejection: true };
+    if (cfg.provider !== 'resend') return { sent: false, reason: 'email_provider_not_supported', definitiveRejection: true };
 
     const to = (req.to ?? '').trim();
     const subject = (req.subject ?? '').trim();
     const text = (req.text ?? '').trim();
     const html = (req.html ?? '').trim();
     const from = (req.from ?? '').trim() || cfg.fromEmail.default;
-    if (!to || !subject || !text) return { sent: false, reason: 'email_invalid' };
+    if (!to || !subject || !text) return { sent: false, reason: 'email_invalid', definitiveRejection: true };
 
     try {
       const res = await fetch('https://api.resend.com/emails', {
@@ -36,7 +30,9 @@ export class ResendEmailProvider implements EmailProvider {
         headers: {
           Authorization: `Bearer ${cfg.apiKey}`,
           'Content-Type': 'application/json',
+          ...(req.idempotencyKey ? { 'Idempotency-Key': req.idempotencyKey } : {}),
         },
+        signal: AbortSignal.timeout(10_000),
         body: JSON.stringify({
           from,
           to: [to],
@@ -49,29 +45,20 @@ export class ResendEmailProvider implements EmailProvider {
       });
 
       if (!res.ok) {
-        const raw = await res.text().catch(() => '');
-        // Best-effort parse.
-        let msg = raw;
-        try {
-          const parsed = JSON.parse(raw) as ResendSendEmailResponseErr;
-          msg = parsed.message || parsed.name || raw;
-        } catch {
-          // ignore
-        }
-        this.logger.warn(`[resend] send failed: ${res.status} ${String(msg).slice(0, 300)}`);
-        return { sent: false, reason: 'resend_failed' };
+        this.logger.warn(`[resend] send failed status=${res.status}`);
+        return { sent: false, reason: 'resend_failed', retryable: res.status === 429 || res.status >= 500, definitiveRejection: [400, 401, 403, 404, 422, 429].includes(res.status) };
       }
 
       // Drain response; helps debugging if API changes shape later.
       const data = (await res.json().catch(() => null)) as ResendSendEmailResponseOk | null;
       if (!data?.id) {
-        // Still treat as success if HTTP 2xx.
-        return { sent: true };
+        // An ambiguous acceptance is retried with the same provider key.
+        return { sent: false, reason: 'resend_response_invalid', retryable: true };
       }
-      return { sent: true };
+      return { sent: true, providerMessageId: data.id };
     } catch (err: unknown) {
-      this.logger.warn(`[resend] send failed: ${(err as Error)?.message ?? String(err)}`);
-      return { sent: false, reason: 'email_failed' };
+      this.logger.warn(`[resend] send failed kind=${err instanceof Error ? err.name : 'unknown'}`);
+      return { sent: false, reason: 'email_failed', retryable: true };
     }
   }
 }

@@ -1,9 +1,18 @@
-import { isUniqueViolation } from '../../common/prisma/errors';
+import { SideEffectsService } from "../side-effects/side-effects.service";
+import { isUniqueViolation } from "../../common/prisma/errors";
 import { publicPreviewUrl } from "../../common/urls/public-preview-url";
 import { normalizeSocialProfileUrl } from "../../common/urls/social-profile-url";
-import { ProfileLinksWriteService, type LegacyLinkField } from "./profile-links-write.service";
+import {
+  ProfileLinksWriteService,
+  type LegacyLinkField,
+} from "./profile-links-write.service";
 import { UsersProfileWriteService } from "./users-profile-write.service";
-import { Injectable, BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
+import {
+  Injectable,
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { PrismaService } from "../prisma/prisma.service";
@@ -11,7 +20,13 @@ import { AuthService } from "../auth/auth-public-api";
 import { AppConfigService } from "../app/app-config.service";
 import { FollowsService } from "../follows/follows.service";
 import { validateUsername } from "./users.utils";
-import { HEARD_ABOUT_US_OTHER_MAX, HEARD_ABOUT_US_VALUES, isFullyOnboarded, resolveHeardAboutUs, resolveOnboardingUsername } from "./onboarding.utils";
+import {
+  HEARD_ABOUT_US_OTHER_MAX,
+  HEARD_ABOUT_US_VALUES,
+  isFullyOnboarded,
+  resolveHeardAboutUs,
+  resolveOnboardingUsername,
+} from "./onboarding.utils";
 import { toUserDto } from "./user.dto";
 import { PublicProfileCacheService } from "./public-profile-cache.service";
 import type { PublicProfilePayload } from "./public-profiles.service";
@@ -23,10 +38,13 @@ import { EmailVerificationService } from "../email/email-verification.service";
 import { PosthogService } from "../../common/posthog/posthog.service";
 import { SlackService } from "../../common/slack/slack.service";
 import { PresenceService } from "../presence/presence.service";
-import { MEMBERS_MAP_SNAPSHOT_SELECT, MembersMapRealtimeService } from "./members-map-realtime.service";
-import { PostsReadService } from '../posts-read/posts-read.service';
-import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
-import { NOT_DELETED } from '../../common/prisma/where';
+import {
+  MEMBERS_MAP_SNAPSHOT_SELECT,
+  MembersMapRealtimeService,
+} from "./members-map-realtime.service";
+import { PostsReadService } from "../posts-read/posts-read.service";
+import { USER_REF_SELECT } from "../../common/prisma-selects/user.select";
+import { NOT_DELETED } from "../../common/prisma/where";
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -136,6 +154,7 @@ export class UsersMeService {
     private readonly membersMapRealtime: MembersMapRealtimeService,
     private readonly postsRead: PostsReadService,
     private readonly profileLinks: ProfileLinksWriteService,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   /**
@@ -274,18 +293,13 @@ export class UsersMeService {
         },
       };
     } catch (err: unknown) {
-      if (
-        isUniqueViolation(err)
-      ) {
+      if (isUniqueViolation(err)) {
         throw new ConflictException("That username is taken.");
       }
       throw err;
     }
   }
-  async updateMyProfile(
-    body: unknown,
-    userId: string,
-  ) {
+  async updateMyProfile(body: unknown, userId: string) {
     const parsed = profileSchema.parse(body);
 
     try {
@@ -293,6 +307,7 @@ export class UsersMeService {
         where: { id: userId },
         select: {
           email: true,
+          emailVerifiedAt: true,
           username: true,
           name: true,
           ...MEMBERS_MAP_SNAPSHOT_SELECT,
@@ -330,7 +345,10 @@ export class UsersMeService {
         ["youtubeUrl", "youtube", "youtube"],
       ] as const) {
         if (parsed[field] !== undefined)
-          legacyLinks[legacy] = normalizeSocialProfileUrl(parsed[field], provider);
+          legacyLinks[legacy] = normalizeSocialProfileUrl(
+            parsed[field],
+            provider,
+          );
       }
       if (parsed.website !== undefined) {
         const raw = (parsed.website ?? "").trim();
@@ -387,6 +405,16 @@ export class UsersMeService {
       this.presence.markSeenFromHttp(userId);
       this.membersMapRealtime.notifyChange(userId, existing, updated);
 
+      if (emailChanged && existing.email && existing.emailVerifiedAt) {
+        this.sideEffects.dispatch("email.lifecycle", {
+          kind: "accountChanged",
+          userId,
+          eventId: `email-${userId}-${now.toISOString()}`,
+          occurredAt: now.toISOString(),
+          changedField: "email",
+          previousVerifiedEmail: existing.email,
+        });
+      }
       if (emailChanged && nextEmail) {
         const greetingName =
           (updated.name ?? updated.username ?? "").trim() || null;
@@ -405,9 +433,7 @@ export class UsersMeService {
         },
       };
     } catch (err: unknown) {
-      if (
-        isUniqueViolation(err)
-      ) {
+      if (isUniqueViolation(err)) {
         throw new ConflictException("That email is already in use.");
       }
       throw err;
@@ -454,10 +480,7 @@ export class UsersMeService {
     void this.usersMeRealtime.emitMeUpdated(updated.id, "pinned_post_changed");
     return { data: { pinnedPostId: null } };
   }
-  async updateMyOnboarding(
-    body: unknown,
-    userId: string,
-  ) {
+  async updateMyOnboarding(body: unknown, userId: string) {
     const parsed = onboardingSchema.parse(body);
 
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
@@ -622,6 +645,17 @@ export class UsersMeService {
       );
       this.presence.markSeenFromHttp(userId);
 
+      if (emailChanged && user.email && user.emailVerifiedAt) {
+        const changedAt = now.toISOString();
+        this.sideEffects.dispatch("email.lifecycle", {
+          kind: "accountChanged",
+          userId,
+          eventId: `email-${userId}-${changedAt}`,
+          occurredAt: changedAt,
+          changedField: "email",
+          previousVerifiedEmail: user.email,
+        });
+      }
       if (emailChanged && nextEmail) {
         const greetingName =
           (updated.name ?? updated.username ?? "").trim() || null;
@@ -639,9 +673,7 @@ export class UsersMeService {
         },
       };
     } catch (err: unknown) {
-      if (
-        isUniqueViolation(err)
-      ) {
+      if (isUniqueViolation(err)) {
         // Could be username or email unique violations; keep it generic here.
         throw new ConflictException("That value is already in use.");
       }

@@ -50,7 +50,6 @@ function makeCron(overrides?: {
   const messages = {
     getUnreadSummary: jest.fn(async () => ({ primary: 0, requests: 0 })),
   } as any;
-  const slack = { post: jest.fn() } as any;
 
   const postsRead = new PostsReadService(prisma as never);
   const support = new NotificationsEmailSupportService(
@@ -65,7 +64,6 @@ function makeCron(overrides?: {
     appConfig,
     jobs,
     messages,
-    slack,
     postsRead,
     support,
   );

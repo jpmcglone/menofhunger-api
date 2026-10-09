@@ -22,7 +22,7 @@ function makeHandler() {
         ownerUsername: "ocaptain",
       }),
     ),
-    listSubscriberUserIds: jest.fn(async () => []),
+    listSubscriberUserIds: jest.fn(async () => [] as string[]),
     listFollowerUserIds: jest.fn(async () => [] as string[]),
     listAudienceUserIds: jest.fn(async () => [] as string[]),
     isDayReminderStillValid: jest.fn(() => true),
@@ -384,5 +384,50 @@ describe("SpacesSideEffectsHandler space.schedule.ended", () => {
         resurface: false,
       }),
     );
+  });
+});
+
+describe("subscribed Space change email", () => {
+  it("emails the new time as service mail and cancels stale reschedule events", async () => {
+    const { handler, spaces, email, prisma, appConfig } = makeHandler();
+    const time = new Date(Date.now() + 86400000);
+    spaces.getScheduleSnapshot.mockResolvedValue({
+      scheduledAt: time,
+      title: null,
+      playbackTitle: null,
+      watchPartyUrl: null,
+      eventTitle: "Conversation",
+      ownerUserId: "host",
+      ownerUsername: "host",
+    });
+    spaces.listSubscriberUserIds.mockResolvedValue(["member"]);
+    appConfig.email.mockReturnValue({
+      fromEmail: { default: "hello@example.invalid" },
+    });
+    prisma.user.findUnique.mockResolvedValue({
+      id: "member",
+      email: "member@example.invalid",
+      emailVerifiedAt: new Date(),
+      name: "Thomas",
+      notificationPreferences: { emailFollowedArticle: true },
+    });
+    await (handler as any).onRescheduled({
+      spaceId: "space",
+      scheduledAt: time.toISOString(),
+    });
+    expect(email.sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: "service",
+        preference: "emailFollowedArticle",
+        eventKey: `space-rescheduled:space:${time.toISOString()}:member`,
+        text: expect.stringContaining("rescheduled"),
+      }),
+    );
+    email.sendText.mockClear();
+    await (handler as any).onRescheduled({
+      spaceId: "space",
+      scheduledAt: new Date(time.getTime() - 1000).toISOString(),
+    });
+    expect(email.sendText).not.toHaveBeenCalled();
   });
 });

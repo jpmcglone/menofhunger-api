@@ -1,3 +1,4 @@
+import { EmailLifecycleModule } from '../email-lifecycle/email-lifecycle.module';
 import { OutboundModule } from '../outbound/outbound.service';
 import { AvatarVideoConsumersModule } from '../uploads/avatar-video.module';
 import { Module } from '@nestjs/common';
@@ -78,6 +79,7 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
     ContentFeaturesModule,
     CommunityFeaturesModule,
     IntegrationFeaturesModule,
+    EmailLifecycleModule,
     ...(RUN_JOB_CONSUMERS ? [JobsConsumersModule, SideEffectsConsumersModule, AvatarVideoConsumersModule] : []),
   ],
   controllers: [AppController],

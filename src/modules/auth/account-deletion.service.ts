@@ -137,6 +137,7 @@ export class AccountDeletionService {
     await this.cache.bumpSearchGlobal();
     if (receipt.confirmationEmail) {
       const result = await this.email.sendText({ to: receipt.confirmationEmail,
+        eventKey: `account-deleted:${receiptId}`,
         subject: 'Your Men of Hunger account has been deleted',
         text: 'Your account and associated personal content and fitness data have been deleted. Apple subscriptions are managed separately in your Apple subscription settings. Contact hello@menofhunger.com if you need help.', category: 'transactional' });
       if (!result.sent) throw new Error('Deletion confirmation will retry.');

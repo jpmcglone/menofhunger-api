@@ -1,3 +1,4 @@
+import { SideEffectsService } from '../side-effects/side-effects.service';
 import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { toPage } from '../../common/pagination/page';
 import { PosthogService } from '../../common/posthog/posthog.service';
@@ -16,6 +17,7 @@ export class VerificationService {
     private readonly slack: SlackService,
     private readonly userVerification: UserVerificationService,
     private readonly posthog: PosthogService,
+    private readonly sideEffects: SideEffectsService,
   ) {}
 
   async createRequestForUser(params: { userId: string | null; providerHint: string | null }) {
@@ -232,6 +234,7 @@ export class VerificationService {
 
     await this.userVerification.notifyAdminQueueChanged('reviewed', updated.id);
     await this.userVerification.notifyMemberChanged(updated.userId);
+    this.sideEffects.dispatch('email.lifecycle', { kind: 'verificationAction', userId: updated.userId, requestId: updated.id, eventId: updated.id, occurredAt: now.toISOString() });
 
     return updated;
   }

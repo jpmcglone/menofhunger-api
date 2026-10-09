@@ -1,4 +1,4 @@
-import { UserVerificationService } from './user-verification.service';
+import { UserVerificationService } from "./user-verification.service";
 
 type Deps = {
   auth: any;
@@ -23,14 +23,16 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
     prisma: {
       user: {
         findUnique: jest.fn(),
-        findMany: jest.fn(async () => [{ id: 'a1' }, { id: 'a2' }]),
+        findMany: jest.fn(async () => [{ id: "a1" }, { id: "a2" }]),
         update: jest.fn(async () => ({})),
       },
       verificationRequest: {
         updateMany: jest.fn(async () => ({ count: 0 })),
       },
       __tx: tx,
-      $transaction: jest.fn(async (fn: (tx: any) => Promise<unknown>) => fn(tx)),
+      $transaction: jest.fn(async (fn: (tx: any) => Promise<unknown>) =>
+        fn(tx),
+      ),
     },
     billing: { onUserVerified: jest.fn(async () => undefined) },
     affiliate: { maybeRecordEarning: jest.fn(async () => undefined) },
@@ -38,7 +40,9 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
     sideEffects: { dispatch: jest.fn() },
     publicProfileCache: { invalidateForUser: jest.fn(async () => undefined) },
     usersMeRealtime: { emitMeUpdated: jest.fn(async () => undefined) },
-    usersPublicRealtime: { emitPublicProfileUpdated: jest.fn(async () => undefined) },
+    usersPublicRealtime: {
+      emitPublicProfileUpdated: jest.fn(async () => undefined),
+    },
     presenceRealtime: { emitAdminUpdated: jest.fn() },
     ...overrides,
   };
@@ -66,143 +70,216 @@ afterEach(() => {
   jest.clearAllMocks();
 });
 
-describe('UserVerificationService.verifyUser', () => {
-  it('closes stale pending requests without repeating verification side effects', async () => {
+describe("UserVerificationService.verifyUser", () => {
+  it("closes stale pending requests without repeating verification side effects", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'u1',
-      username: 'alice',
-      verifiedStatus: 'manual',
+      id: "u1",
+      username: "alice",
+      verifiedStatus: "manual",
       unverifiedAt: null,
     });
 
-    const result = await service.verifyUser({ userId: 'u1', source: 'auto_signup' });
+    const result = await service.verifyUser({
+      userId: "u1",
+      source: "auto_signup",
+    });
 
     expect(result).toEqual({
       verified: false,
       alreadyVerified: true,
-      userId: 'u1',
+      userId: "u1",
       previousUnverifiedAt: null,
     });
-    expect(deps.prisma.verificationRequest.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { userId: 'u1', status: 'pending' },
-      data: expect.objectContaining({ status: 'approved' }),
-    }));
-    expect(deps.presenceRealtime.emitAdminUpdated).toHaveBeenCalledWith('a2', { kind: 'verification', action: 'reviewed' });
+    expect(deps.prisma.verificationRequest.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: "u1", status: "pending" },
+        data: expect.objectContaining({ status: "approved" }),
+      }),
+    );
+    expect(deps.presenceRealtime.emitAdminUpdated).toHaveBeenCalledWith("a2", {
+      kind: "verification",
+      action: "reviewed",
+    });
     expect(deps.prisma.$transaction).not.toHaveBeenCalled();
     expect(deps.sideEffects.dispatch).not.toHaveBeenCalled();
     expect(deps.billing.onUserVerified).not.toHaveBeenCalled();
   });
 
-  it('verifies an unverified user, notifies, and emits realtime updates', async () => {
+  it("restores a previously unverified user without repeating onboarding, and emits realtime updates", async () => {
     const { service, deps } = makeService();
-    const previousUnverifiedAt = new Date('2026-01-01T00:00:00.000Z');
+    const previousUnverifiedAt = new Date("2026-01-01T00:00:00.000Z");
     deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'u1',
-      username: 'alice',
-      verifiedStatus: 'none',
+      id: "u1",
+      username: "alice",
+      verifiedStatus: "none",
       unverifiedAt: previousUnverifiedAt,
     });
 
-    const result = await service.verifyUser({ userId: 'u1', source: 'auto_referral' });
+    const result = await service.verifyUser({
+      userId: "u1",
+      source: "auto_referral",
+    });
 
     expect(result).toEqual({
       verified: true,
       alreadyVerified: false,
-      userId: 'u1',
+      userId: "u1",
       previousUnverifiedAt,
     });
     expect(deps.prisma.$transaction).toHaveBeenCalled();
-    expect(deps.billing.onUserVerified).toHaveBeenCalledWith('u1', previousUnverifiedAt);
-    expect(deps.coins.giftVerificationCoins).toHaveBeenCalledWith('u1', 5);
-    expect(deps.affiliate.maybeRecordEarning).toHaveBeenCalledWith('u1', 'verified');
-    expect(deps.sideEffects.dispatch).toHaveBeenCalledWith('user.verified', { userId: 'u1' });
-    expect(deps.usersPublicRealtime.emitPublicProfileUpdated).toHaveBeenCalledWith('u1');
-    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith('u1', 'verification_status_changed');
+    expect(deps.billing.onUserVerified).toHaveBeenCalledWith(
+      "u1",
+      previousUnverifiedAt,
+    );
+    expect(deps.coins.giftVerificationCoins).toHaveBeenCalledWith("u1", 5);
+    expect(deps.affiliate.maybeRecordEarning).toHaveBeenCalledWith(
+      "u1",
+      "verified",
+    );
+    expect(deps.sideEffects.dispatch).toHaveBeenCalledWith("user.verified", {
+      userId: "u1",
+      skipWelcome: true,
+    });
+    expect(
+      deps.usersPublicRealtime.emitPublicProfileUpdated,
+    ).toHaveBeenCalledWith("u1");
+    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith(
+      "u1",
+      "verification_status_changed",
+    );
   });
 
-  it.each(['admin_request', 'admin_patch', 'auto_referral', 'auto_signup'] as const)(
-    'resolves all pending requests through %s without overwriting call consent', async (source) => {
+  it.each([
+    "admin_request",
+    "admin_patch",
+    "auto_referral",
+    "auto_signup",
+  ] as const)(
+    "resolves all pending requests through %s without overwriting call consent",
+    async (source) => {
       const { service, deps } = makeService();
-      deps.prisma.user.findUnique.mockResolvedValue({ id: 'u1', verifiedStatus: 'none' });
-      await service.verifyUser({ userId: 'u1', source, requestId: 'vr1' });
-      expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith('u1');
-      const write = deps.prisma.__tx.verificationRequest.updateMany.mock.calls[0][0];
-      expect(write.where).toEqual({ userId: 'u1', status: 'pending' });
-      expect(write.data.status).toBe('approved');
-      expect(write.data).not.toHaveProperty('provider');
+      deps.prisma.user.findUnique.mockResolvedValue({
+        id: "u1",
+        verifiedStatus: "none",
+      });
+      await service.verifyUser({ userId: "u1", source, requestId: "vr1" });
+      expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith("u1");
+      const write =
+        deps.prisma.__tx.verificationRequest.updateMany.mock.calls[0][0];
+      expect(write.where).toEqual({ userId: "u1", status: "pending" });
+      expect(write.data.status).toBe("approved");
+      expect(write.data).not.toHaveProperty("provider");
       expect(deps.presenceRealtime.emitAdminUpdated).toHaveBeenCalledTimes(2);
     },
   );
 
-  it('waits for session invalidation before publishing verification or running rewards', async () => {
+  it("waits for session invalidation before publishing verification or running rewards", async () => {
     const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({ id: 'u1', verifiedStatus: 'none' });
+    deps.prisma.user.findUnique.mockResolvedValue({
+      id: "u1",
+      verifiedStatus: "none",
+    });
     let release!: () => void;
     let started!: () => void;
-    const invalidating = new Promise<void>((resolve) => { started = resolve; });
+    const invalidating = new Promise<void>((resolve) => {
+      started = resolve;
+    });
     deps.auth.bustSessionCachesForUser.mockImplementation(() => {
       started();
-      return new Promise<void>((resolve) => { release = resolve; });
+      return new Promise<void>((resolve) => {
+        release = resolve;
+      });
     });
 
-    const approval = service.verifyUser({ userId: 'u1', source: 'admin_request' });
+    const approval = service.verifyUser({
+      userId: "u1",
+      source: "admin_request",
+    });
     await invalidating;
     expect(deps.prisma.__tx.user.updateMany).toHaveBeenCalled();
     expect(deps.usersMeRealtime.emitMeUpdated).not.toHaveBeenCalled();
     expect(deps.billing.onUserVerified).not.toHaveBeenCalled();
     release();
     await approval;
-    expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith('u1');
-    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith('u1', 'verification_status_changed');
+    expect(deps.auth.bustSessionCachesForUser).toHaveBeenCalledWith("u1");
+    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith(
+      "u1",
+      "verification_status_changed",
+    );
   });
 
-  it('delivers the member update even if public profile broadcasting fails', async () => {
-    const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({ id: 'u1', verifiedStatus: 'none' });
-    deps.usersPublicRealtime.emitPublicProfileUpdated.mockRejectedValue(new Error('broadcast failed'));
-    await service.verifyUser({ userId: 'u1', source: 'admin_request' });
-    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith('u1', 'verification_status_changed');
-  });
-
-  it('emits admin:updated when approving a request', async () => {
+  it("delivers the member update even if public profile broadcasting fails", async () => {
     const { service, deps } = makeService();
     deps.prisma.user.findUnique.mockResolvedValue({
-      id: 'u1',
-      username: 'alice',
-      verifiedStatus: 'none',
+      id: "u1",
+      verifiedStatus: "none",
+    });
+    deps.usersPublicRealtime.emitPublicProfileUpdated.mockRejectedValue(
+      new Error("broadcast failed"),
+    );
+    await service.verifyUser({ userId: "u1", source: "admin_request" });
+    expect(deps.usersMeRealtime.emitMeUpdated).toHaveBeenCalledWith(
+      "u1",
+      "verification_status_changed",
+    );
+  });
+
+  it("emits admin:updated when approving a request", async () => {
+    const { service, deps } = makeService();
+    deps.prisma.user.findUnique.mockResolvedValue({
+      id: "u1",
+      username: "alice",
+      verifiedStatus: "none",
       unverifiedAt: null,
     });
 
     await service.verifyUser({
-      userId: 'u1',
-      source: 'admin_request',
-      requestId: 'vr1',
-      adminUserId: 'a1',
+      userId: "u1",
+      source: "admin_request",
+      requestId: "vr1",
+      adminUserId: "a1",
     });
 
-    expect(deps.presenceRealtime.emitAdminUpdated).toHaveBeenCalledWith('a1', {
-      kind: 'verification',
-      action: 'reviewed',
-      id: 'vr1',
+    expect(deps.presenceRealtime.emitAdminUpdated).toHaveBeenCalledWith("a1", {
+      kind: "verification",
+      action: "reviewed",
+      id: "vr1",
     });
   });
 });
 
- describe('concurrent approval', () => {
-  it('resolves pending requests without repeating rewards when another approval won', async () => {
+describe("concurrent approval", () => {
+  it("resolves pending requests without repeating rewards when another approval won", async () => {
     const { service, deps } = makeService();
-    deps.prisma.user.findUnique.mockResolvedValue({ id: 'u1', verifiedStatus: 'none' });
+    deps.prisma.user.findUnique.mockResolvedValue({
+      id: "u1",
+      verifiedStatus: "none",
+    });
     deps.prisma.__tx.user.updateMany.mockResolvedValue({ count: 0 });
-    const result = await service.verifyUser({ userId: 'u1', source: 'admin_patch', adminUserId: 'a1' });
+    const result = await service.verifyUser({
+      userId: "u1",
+      source: "admin_patch",
+      adminUserId: "a1",
+    });
     expect(result.alreadyVerified).toBe(true);
-    expect(deps.prisma.__tx.user.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'u1', verifiedStatus: 'none' },
-    }));
-    expect(deps.prisma.__tx.verificationRequest.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { userId: 'u1', status: 'pending' },
-      data: expect.objectContaining({ status: 'approved', reviewedByAdminId: 'a1', reviewedAt: expect.any(Date) }),
-    }));
+    expect(deps.prisma.__tx.user.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "u1", verifiedStatus: "none" },
+      }),
+    );
+    expect(
+      deps.prisma.__tx.verificationRequest.updateMany,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: "u1", status: "pending" },
+        data: expect.objectContaining({
+          status: "approved",
+          reviewedByAdminId: "a1",
+          reviewedAt: expect.any(Date),
+        }),
+      }),
+    );
     expect(deps.coins.giftVerificationCoins).not.toHaveBeenCalled();
     expect(deps.billing.onUserVerified).not.toHaveBeenCalled();
     expect(deps.sideEffects.dispatch).not.toHaveBeenCalled();

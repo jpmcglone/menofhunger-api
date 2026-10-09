@@ -10,12 +10,14 @@ describe('EmailUnsubscribeController', () => {
     const appConfig = {
       frontendBaseUrl: () => 'https://menofhunger.com',
     };
+    const preferences = { unsubscribe: jest.fn(async () => ({ ok: true, family: 'getting-started tips' })) };
     const res = { redirect: jest.fn() };
     const controller = new EmailUnsubscribeController(
       newsletters as unknown as NewslettersService,
       appConfig as unknown as AppConfigService,
+      preferences as never,
     );
-    return { controller, newsletters, res };
+    return { controller, newsletters, preferences, res };
   }
 
   it('GET redirects to the site with the token and does not unsubscribe', () => {
@@ -33,6 +35,13 @@ describe('EmailUnsubscribeController', () => {
     controller.unsubscribeGet(undefined, res as never);
     expect(newsletters.unsubscribeWithToken).not.toHaveBeenCalled();
     expect(res.redirect).toHaveBeenCalledWith(302, 'https://menofhunger.com/email/unsubscribe');
+  });
+
+  it('POST signed family token unsubscribes only its optional family', async () => {
+    const { controller, newsletters, preferences } = makeController();
+    await expect(controller.unsubscribePost('family.signed.token', {})).resolves.toEqual({ data: { ok: true, family: 'getting-started tips' } });
+    expect(preferences.unsubscribe).toHaveBeenCalledWith('family.signed.token');
+    expect(newsletters.unsubscribeWithToken).not.toHaveBeenCalled();
   });
 
   it('POST unsubscribes newsletters only via the token', async () => {

@@ -15,6 +15,8 @@ const reviewedMediaFields = new Set([
   'MediaAsset.r2Key', 'MediaContentHash.r2Key',
   // Derived text note keyed by file; deleted with the R2 object (orphan sweep and admin media delete).
   'MediaSearchNote.r2Key',
+  // Email retry payload is temporary; embedded image references survive terminal delivery.
+  'EmailDelivery.mediaUrls',
   'GroupChannelUpload.sourceKey', 'GroupChannelUpload.r2Key',
   // External OpenGraph metadata is provider-hosted, not an upload surface.
   'LinkMetadata.imageUrl',
@@ -36,6 +38,11 @@ describe('media ownership schema coverage', () => {
     const fields = Prisma.dmmf.datamodel.models.filter(model => models.has(model.name))
       .flatMap(model => model.fields.filter(field => field.type === 'Json').map(field => `${model.name}.${field.name}`));
     expect(fields.filter(field => !reviewedIntegrationJsonFields.has(field))).toEqual([]);
+  });
+  it('explicitly reviews email payload and retained image ownership', () => {
+    const model = Prisma.dmmf.datamodel.models.find(model => model.name === 'EmailDelivery');
+    expect(model?.fields.some(field => field.name === 'mediaUrls' && field.isList)).toBe(true);
+    expect(reviewedMediaFields.has('EmailDelivery.mediaUrls')).toBe(true);
   });
   it('requires review of every media key/URL field added to the schema', () => {
     const mediaFields = Prisma.dmmf.datamodel.models.flatMap((model) => model.fields

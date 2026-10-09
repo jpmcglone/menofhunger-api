@@ -40,7 +40,10 @@ export class VerificationSideEffectsHandler implements OnModuleInit {
       body: "Your account is now verified. Welcome.",
     });
     // Billing owns referral rewards and invite codes; hand off by event to avoid a module cycle.
-    this.sideEffects.dispatch("referral.verified", { userId: payload.userId });
+    this.sideEffects.dispatch("referral.verified", {
+      userId: payload.userId,
+      ...(payload.skipWelcome ? { skipWelcome: true } : {}),
+    });
   }
 
   private async onAutoVerify(

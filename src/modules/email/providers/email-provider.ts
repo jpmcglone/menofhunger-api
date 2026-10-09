@@ -1,5 +1,7 @@
 export type EmailSendRequest = {
   to: string;
+  /** Stable logical send key used at the provider boundary. */
+  idempotencyKey?: string;
   subject: string;
   /** Plain text version (required). */
   text: string;
@@ -13,7 +15,7 @@ export type EmailSendRequest = {
   headers?: Record<string, string> | null;
 };
 
-export type EmailSendResult = { sent: true } | { sent: false; reason: string };
+export type EmailSendResult = { sent: true; providerMessageId?: string } | { sent: false; reason: string; retryable?: boolean; definitiveRejection?: boolean };
 
 export interface EmailProvider {
   sendEmail(req: EmailSendRequest): Promise<EmailSendResult>;

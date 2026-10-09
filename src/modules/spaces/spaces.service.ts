@@ -207,6 +207,7 @@ export class SpacesService {
       );
       this.sideEffects.dispatch("space.schedule.cancelled", {
         spaceId: id,
+        scheduledAt: space.scheduledAt.toISOString(),
         ownerUserId: space.ownerId,
         spaceTitle: resolveSpaceEventTitle({ title: space.title }),
         ownerUsername: space.owner.username,

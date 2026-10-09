@@ -170,7 +170,7 @@ export class NotificationsEmailWeeklyService {
 
         const greeting = buildGreeting({ name: u.name, username: u.username, tone: 'hey' });
 
-        const subject = `Don’t lose your streak (${currentStreak} day${currentStreak === 1 ? '' : 's'})`;
+        const subject = `Check in today. Keep your ${currentStreak}-day streak.`;
 
         const text = [
           greeting,
@@ -179,7 +179,6 @@ export class NotificationsEmailWeeklyService {
           `Check in today before midnight ET to keep it.`,
           '',
           `Today’s multiplier: ${reward.multiplier}x (${reward.coinsAdd} coin${reward.coinsAdd === 1 ? '' : 's'} for today’s check-in)`,
-          `If you skip today, your streak resets to 0.`,
           '',
           `Open: ${homeUrl}`,
           '',
@@ -198,7 +197,6 @@ export class NotificationsEmailWeeklyService {
                 `<div style="font-size:14px;line-height:1.8;color:${EMAIL.text};">You’re on a <strong>${currentStreak}</strong>-day check-in streak.</div>`,
                 `<div style="margin-top:10px;font-size:14px;line-height:1.8;color:${EMAIL.text};">Check in <strong>today</strong> before midnight ET to keep it.</div>`,
                 `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:${EMAIL.muted};">Today’s multiplier: <strong style="color:${EMAIL.text};">${reward.multiplier}x</strong> (${reward.coinsAdd} coin${reward.coinsAdd === 1 ? '' : 's'}).</div>`,
-                `<div style="margin-top:10px;font-size:13px;line-height:1.7;color:${EMAIL.muted};">If you skip today, your streak resets to 0.</div>`,
                 `<div style="margin-top:12px;">${renderButton({ href: homeUrl, label: 'Check in' })}</div>`,
               ].join(''),
             ),
@@ -218,6 +216,8 @@ export class NotificationsEmailWeeklyService {
           html,
           userId: u.id,
           logTag: 'streak-reminder',
+          preference: 'emailStreakReminder',
+          eventKey: `streak:${u.id}:${todayKey}`,
           onSent: async () => {
             await this.prisma.notificationPreferences.upsert({
               where: { userId: u.id },
@@ -758,6 +758,8 @@ export class NotificationsEmailWeeklyService {
             html,
             userId: u.id,
             logTag: 'weekly-digest',
+            preference: 'emailDigestWeekly',
+            eventKey: `weekly:${u.id}:${weekWindowEnd.toISOString()}`,
             onSent: async () => {
               await this.prisma.notificationPreferences.upsert({
                 where: { userId: u.id },
