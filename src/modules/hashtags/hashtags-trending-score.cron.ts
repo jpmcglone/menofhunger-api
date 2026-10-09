@@ -37,7 +37,7 @@ export class HashtagsTrendingScoreCron implements OnModuleInit {
       }
     }, 4000);
     // Don't keep the process open just for this.
-    (t as any)?.unref?.();
+    t?.unref?.();
   }
 
   /**

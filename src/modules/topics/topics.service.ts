@@ -1,19 +1,22 @@
+import { Inject } from '@nestjs/common';
+import { PostsFeedComposeService } from '../posts/posts-feed-compose.service';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import type { PostVisibility, VerifiedStatus } from '@prisma/client';
+import type { PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { FeedPost } from '../posts/posts-feed.types';
 import { type TopicCategoryDto, type TopicDto } from '../../common/dto';
-import { PostsService } from '../posts/posts.service';
-import { ViewerContextService } from '../viewer/viewer-context.service';
+
+import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
 import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
 import { buildPostVisibilityWhere } from '../../common/posts/post-visibility';
 import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
 import { POST_BASE_INCLUDE } from '../../common/prisma-includes/post.include';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
-import { toPage } from '../../common/pagination/page';
-type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean } | null;
+import { toPage, clampLimit } from '../../common/pagination/page';
+import { NOT_DELETED } from '../../common/prisma/where';
+type Viewer = ViewerContext | null;
 
 function normalizeTopic(s: string): string {
   const trimmed = (s ?? '').trim().toLowerCase();
@@ -38,7 +41,7 @@ const TOPIC_POST_INCLUDE = POST_BASE_INCLUDE;
 export class TopicsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly posts: PostsService,
+    @Inject(PostsFeedComposeService) private readonly postsCompose: Pick<PostsFeedComposeService, 'composeFeedPostDtos'>,
     private readonly viewerContext: ViewerContextService,
     private readonly postsRead: PostsReadService,
   ) {}
@@ -95,11 +98,11 @@ export class TopicsService {
   }
 
   private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
-    return this.viewerContext.allowedPostVisibilities(viewer as any);
+    return this.viewerContext.allowedPostVisibilities(viewer);
   }
 
   private async combinedTopicsCached(params: { viewerUserId: string | null }): Promise<TopicDto[]> {
-    const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
+    const viewer = await this.viewerContext.getViewer(params.viewerUserId ?? null);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
     const now = Date.now();
@@ -184,14 +187,14 @@ export class TopicsService {
   }
 
   async listTopics(params: { viewerUserId: string | null; limit: number }): Promise<TopicDto[]> {
-    const limit = Math.max(1, Math.min(50, params.limit || 30));
+    const limit = clampLimit(params.limit, { default: 30, max: 50 });
     const combined = await this.combinedTopicsCached({ viewerUserId: params.viewerUserId ?? null });
     const followed = await this.followedTopicSet(params.viewerUserId ?? null);
     return combined.slice(0, limit).map((t) => (followed.size > 0 ? { ...t, viewerFollows: followed.has(t.topic) } : t));
   }
 
   async listCategories(params: { viewerUserId: string | null; limit: number }): Promise<TopicCategoryDto[]> {
-    const limit = Math.max(1, Math.min(50, params.limit || 30));
+    const limit = clampLimit(params.limit, { default: 30, max: 50 });
     const combined = await this.combinedTopicsCached({ viewerUserId: params.viewerUserId ?? null });
     const labelByKey = this.categoryLabelByKey();
 
@@ -244,14 +247,14 @@ export class TopicsService {
   async listCategoryPosts(params: { viewerUserId: string | null; category: string; limit: number; cursor: string | null }) {
     const resolved = this.resolveCategoryKeyOrThrow(params.category);
 
-    const limit = Math.max(1, Math.min(50, params.limit || 30));
+    const limit = clampLimit(params.limit, { default: 30, max: 50 });
     const cursor = (params.cursor ?? '').trim() || null;
 
     const combined = await this.combinedTopicsCached({ viewerUserId: params.viewerUserId ?? null });
     const topicValues = combined.filter((t) => t.category === resolved.key).map((t) => t.topic);
     if (topicValues.length === 0) return { posts: [], nextCursor: null };
 
-    const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
+    const viewer = await this.viewerContext.getViewer(params.viewerUserId ?? null);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
     const visibilityWhere = buildPostVisibilityWhere({
       viewerUserId: viewer?.id ?? null,
@@ -261,13 +264,13 @@ export class TopicsService {
 
     const cursorWhere = await createdAtIdCursorWhere({
       cursor,
-      lookup: async (id) => await this.postsRead.read.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+      lookup: async (id) => await this.postsRead.findIncludingDeleted({ where: { id }, select: { id: true, createdAt: true } }),
     });
 
-    const rows = await this.postsRead.read.findMany({
+    const rows = await this.postsRead.findMany({
       where: {
         AND: [
-          { deletedAt: null, isDraft: false },
+          { ...NOT_DELETED, isDraft: false },
           { communityGroupId: null, boardOnly: false },
           { parentId: null },
           visibilityWhere,
@@ -282,7 +285,7 @@ export class TopicsService {
 
     const { items: slice, nextCursor: nextCursor } = toPage(rows, limit, (r) => r.id);
 
-    const posts = await this.posts.composeFeedPostDtos({
+    const posts = await this.postsCompose.composeFeedPostDtos({
       viewerUserId: params.viewerUserId,
       filteredPosts: slice as FeedPost[],
       collapsedItemsByItemId: new Map(),
@@ -292,7 +295,7 @@ export class TopicsService {
   }
 
   async listFollowedTopics(params: { viewerUserId: string; limit: number }): Promise<TopicDto[]> {
-    const limit = Math.max(1, Math.min(50, params.limit || 30));
+    const limit = clampLimit(params.limit, { default: 30, max: 50 });
     const followed = await this.followedTopicSet(params.viewerUserId);
     if (followed.size === 0) return [];
     const combined = await this.combinedTopicsCached({ viewerUserId: params.viewerUserId });
@@ -319,10 +322,10 @@ export class TopicsService {
   async listTopicPosts(params: { viewerUserId: string | null; topic: string; limit: number; cursor: string | null }) {
     const q = this.resolveAllowlistedTopicOrThrow(params.topic);
 
-    const limit = Math.max(1, Math.min(50, params.limit || 30));
+    const limit = clampLimit(params.limit, { default: 30, max: 50 });
     const cursor = (params.cursor ?? '').trim() || null;
 
-    const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
+    const viewer = await this.viewerContext.getViewer(params.viewerUserId ?? null);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
     const visibilityWhere = buildPostVisibilityWhere({
       viewerUserId: viewer?.id ?? null,
@@ -332,13 +335,13 @@ export class TopicsService {
 
     const cursorWhere = await createdAtIdCursorWhere({
       cursor,
-      lookup: async (id) => await this.postsRead.read.findUnique({ where: { id }, select: { id: true, createdAt: true } }),
+      lookup: async (id) => await this.postsRead.findIncludingDeleted({ where: { id }, select: { id: true, createdAt: true } }),
     });
 
-    const rows = await this.postsRead.read.findMany({
+    const rows = await this.postsRead.findMany({
       where: {
         AND: [
-          { deletedAt: null, isDraft: false },
+          { ...NOT_DELETED, isDraft: false },
           { communityGroupId: null, boardOnly: false },
           { parentId: null },
           visibilityWhere,
@@ -353,7 +356,7 @@ export class TopicsService {
 
     const { items: slice, nextCursor: nextCursor } = toPage(rows, limit, (r) => r.id);
 
-    const posts = await this.posts.composeFeedPostDtos({
+    const posts = await this.postsCompose.composeFeedPostDtos({
       viewerUserId: params.viewerUserId,
       filteredPosts: slice as FeedPost[],
       collapsedItemsByItemId: new Map(),

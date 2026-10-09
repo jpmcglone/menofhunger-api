@@ -96,8 +96,8 @@ export class ViewerContextService {
 
   allowedPostVisibilities(viewer: Pick<ViewerContext, 'verifiedStatus' | 'premium' | 'premiumPlus'> | null): PostVisibility[] {
     const allowed: PostVisibility[] = ['public'];
-    if (this.isVerified(viewer as any)) allowed.push('verifiedOnly');
-    if (this.isPremium(viewer as any)) allowed.push('premiumOnly');
+    if (this.isVerified(viewer)) allowed.push('verifiedOnly');
+    if (this.isPremium(viewer)) allowed.push('premiumOnly');
     return allowed;
   }
 }

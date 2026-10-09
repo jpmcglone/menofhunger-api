@@ -1,10 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
-import { PrismaService } from '../prisma/prisma.service';
-import { JobsService } from '../jobs/jobs.service';
-import { JOBS } from '../jobs/jobs.constants';
-import { AppConfigService } from '../app/app-config.service';
-import { NotificationsService } from './notifications.service';
+import { NotificationPushService } from "./notification-push.service";
+import { Injectable, Logger, Inject } from "@nestjs/common";
+import { Cron } from "@nestjs/schedule";
+import { PrismaService } from "../prisma/prisma.service";
+import { JobsService } from "../jobs/jobs.service";
+import { JOBS } from "../jobs/jobs.constants";
+import { AppConfigService } from "../app/app-config.service";
 
 /**
  * Once-per-notification "still waiting on you" push for reply notifications.
@@ -25,17 +25,26 @@ export class NotificationsReplyNudgeCron {
     private readonly prisma: PrismaService,
     private readonly jobs: JobsService,
     private readonly appConfig: AppConfigService,
-    private readonly notifications: NotificationsService,
+    @Inject(NotificationPushService)
+    private readonly notifications: Pick<
+      NotificationPushService,
+      "sendReplyNudgePush"
+    >,
   ) {}
 
-  @Cron('*/15 * * * *')
+  @Cron("*/15 * * * *")
   async enqueueReplyNudgeSweep() {
     if (!this.appConfig.runSchedulers()) return;
     try {
-      await this.jobs.enqueueCron(JOBS.notificationsReplyNudgePush, {}, 'cron-notificationsReplyNudgePush', {
-        attempts: 2,
-        backoff: { type: 'exponential', delay: 5 * 60_000 },
-      });
+      await this.jobs.enqueueCron(
+        JOBS.notificationsReplyNudgePush,
+        {},
+        "cron-notificationsReplyNudgePush",
+        {
+          attempts: 2,
+          backoff: { type: "exponential", delay: 5 * 60_000 },
+        },
+      );
     } catch {
       // duplicate jobId while previous run is still active — treat as no-op
     }
@@ -54,7 +63,7 @@ export class NotificationsReplyNudgeCron {
       // Cap per run — protects the queue if the table grows large after backlog.
       const candidates = await this.prisma.notification.findMany({
         where: {
-          kind: 'comment',
+          kind: "comment",
           readAt: null,
           nudgedBackAt: null,
           createdAt: { lt: olderThan, gt: newerThan },
@@ -67,7 +76,7 @@ export class NotificationsReplyNudgeCron {
           actorPostId: true,
           body: true,
         },
-        orderBy: { createdAt: 'asc' },
+        orderBy: { createdAt: "asc" },
         take: 200,
       });
 
@@ -94,13 +103,17 @@ export class NotificationsReplyNudgeCron {
           });
           sent += 1;
         } catch (err) {
-          this.logger.debug(`[reply-nudge] push failed for ${n.id}: ${(err as Error).message}`);
+          this.logger.debug(
+            `[reply-nudge] push failed for ${n.id}: ${(err as Error).message}`,
+          );
         }
       }
 
       const ms = Date.now() - startedAt;
       if (sent > 0) {
-        this.logger.log(`Reply nudge sweep: sent=${sent} candidates=${candidates.length} (${ms}ms)`);
+        this.logger.log(
+          `Reply nudge sweep: sent=${sent} candidates=${candidates.length} (${ms}ms)`,
+        );
       }
     } catch (err) {
       this.logger.warn(`Reply nudge sweep failed: ${(err as Error).message}`);

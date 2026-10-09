@@ -1,3 +1,4 @@
+import { ViewerBlockSetsService } from '../viewer/viewer-block-sets.service';
 import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
 
 function makeService(postViewRows: Array<{ postId: string; lastSeenAt?: Date; createdAt?: Date }> = []) {
@@ -37,7 +38,7 @@ function makeService(postViewRows: Array<{ postId: string; lastSeenAt?: Date; cr
     prisma,
     requestCache,
     viewerContextService,
-    redis,
+    new ViewerBlockSetsService(prisma, redis),
   );
 
   return { service, prisma, requestCache };

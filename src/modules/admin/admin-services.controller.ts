@@ -1,10 +1,8 @@
 import { Controller, Get, Query, UseGuards } from "@nestjs/common";
-import { z } from "zod";
 import { AdminGuard } from "./admin.guard";
 import { AdminServiceStatusService } from "./admin-service-status.service";
 import type { AdminServiceStatusDto } from "../../common/dto/admin-service-status.dto";
-
-const querySchema = z.object({ refresh: z.enum(["true", "false"]).default("false") }).strict();
+import { querySchema } from './admin-services.schemas';
 
 @Controller("admin/services")
 @UseGuards(AdminGuard)

@@ -1,3 +1,4 @@
+import { MarvinPublicReplyContextService } from './marvin-public-reply-context.service';
 import { MARV_NO_REPLY } from '../marvin-prompt-instructions';
 import { Prisma } from '@prisma/client';
 import { MarvinPublicReplyProcessor } from './marvin-public-reply.processor';
@@ -233,6 +234,7 @@ function makeProcessor(opts?: {
   const presenceRealtime: any = { emitPostsTyping: jest.fn() };
   const platform: any = { briefing: jest.fn(async () => 'Public Men of Hunger briefing.') };
 
+  const postsRead = new PostsReadService(prisma as never);
   const processor = new MarvinPublicReplyProcessor(
     prisma,
     appConfig,
@@ -250,8 +252,9 @@ function makeProcessor(opts?: {
     threadContext,
     linkMetadata,
     presenceRealtime,
-    new PostsReadService(prisma as never),
+    postsRead,
     platform,
+    new MarvinPublicReplyContextService(prisma, appConfig, identity, threadContext, presenceRealtime, postsRead, opts?.jev),
     opts?.jev,
   );
 

@@ -1,28 +1,16 @@
+import { socketData, payloadIdList, type GatewayViewer } from './gateway-socket-data';
 import { isSiteAdminViewer } from '../../viewer/site-admin';
 import { Injectable } from '@nestjs/common';
 import { isPostVisibleToViewer } from '../../../common/posts/post-visibility';
 import type { Socket } from 'socket.io';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CommunityGroupReadAccessService } from '../../viewer/community-group-read-access.service';
-import {
-  WsEventNames,
-  type ArticlesSubscribePayloadDto,
-  type GroupsSubscribePayloadDto,
-  type PostsSubscribePayloadDto,
-} from '../../../common/dto';
-import {
-  MAX_ARTICLE_SUBSCRIPTIONS_PER_SOCKET,
-  MAX_GROUP_SUBSCRIPTIONS_PER_SOCKET,
-  MAX_POST_SUBSCRIPTIONS_PER_SOCKET,
-  articleRoom,
-  boardRoom,
-  groupRoom,
-  membersMapRoom,
-  postRoom,
-} from './gateway-rooms';
-import { canSeeMembers } from '../../auth/member-visibility';
+import { WsEventNames, type ArticlesSubscribePayloadDto, type GroupsSubscribePayloadDto, type PostsSubscribePayloadDto } from '../../../common/dto';
+import { MAX_ARTICLE_SUBSCRIPTIONS_PER_SOCKET, MAX_GROUP_SUBSCRIPTIONS_PER_SOCKET, MAX_POST_SUBSCRIPTIONS_PER_SOCKET, articleRoom, boardRoom, groupRoom, membersMapRoom, postRoom } from './gateway-rooms';
+import { canSeeMembers } from '../../auth/auth-public-api';
 
 import { PostsReadService } from '../../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../../common/prisma/where';
 /**
  * Content room subscriptions: posts, groups, and articles. Each subscribe is
  * access-gated (visibility tier, group membership) so a socket can never sit
@@ -37,32 +25,32 @@ export class ContentSubscriptionsHandler {
   ) {}
 
   async handlePostsSubscribe(client: Socket, payload: Partial<PostsSubscribePayloadDto>): Promise<void> {
-    const raw = Array.isArray((payload as any)?.postIds) ? ((payload as any).postIds as unknown[]) : [];
+    const raw = payloadIdList(payload, 'postIds');
     const requested = raw.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 200);
     if (requested.length === 0) return;
 
-    const subs: Set<string> = (client.data as any).postSubs ?? new Set<string>();
-    (client.data as any).postSubs = subs;
+    const subs: Set<string> = socketData(client).postSubs ?? new Set<string>();
+    socketData(client).postSubs = subs;
     const remainingCap = Math.max(0, MAX_POST_SUBSCRIPTIONS_PER_SOCKET - subs.size);
     if (remainingCap <= 0) return;
 
     const toConsider = Array.from(new Set(requested)).filter((id) => !subs.has(id)).slice(0, remainingCap);
     if (toConsider.length === 0) return;
 
-    const viewerId = (client.data as { userId?: string })?.userId ?? null;
-    const viewer = (client.data as any)?.viewer ?? {};
+    const viewerId = socketData(client).userId ?? null;
+    const viewer: Partial<GatewayViewer> = socketData(client).viewer ?? {};
     const viewerIsAdmin = isSiteAdminViewer(viewer);
     const viewerIsVerified = viewerIsAdmin || Boolean(viewer?.verified);
     const viewerIsPremium = viewerIsAdmin || Boolean(viewer?.premium) || Boolean(viewer?.premiumPlus);
 
-    const rows = await this.postsRead.read.findMany({
-      where: { id: { in: toConsider }, deletedAt: null },
+    const rows = await this.postsRead.findMany({
+      where: { id: { in: toConsider }, ...NOT_DELETED },
       select: { id: true, userId: true, visibility: true, communityGroupId: true },
     });
     const byId = new Map(rows.map((r) => [r.id, r]));
 
     // Batch-check group read access for any group-scoped posts.
-    const groupIds = [...new Set(rows.map((r) => (r as any).communityGroupId).filter(Boolean))] as string[];
+    const groupIds = [...new Set(rows.map((r) => r.communityGroupId).filter(Boolean))] as string[];
     const readableGroupIds = groupIds.length
       ? await this.groupReadAccess.filterReadableGroupIds({
           viewerUserId: viewerId,
@@ -77,8 +65,8 @@ export class ContentSubscriptionsHandler {
     for (const postId of toConsider) {
       const row = byId.get(postId);
       if (!row) continue;
-      const vis = String((row as any).visibility ?? '');
-      const gid: string | null = (row as any).communityGroupId ?? null;
+      const vis = String(row.visibility ?? '');
+      const gid: string | null = row.communityGroupId ?? null;
       const isSelf = Boolean(viewerId && row.userId === viewerId);
 
       // Tier gate (applies to all posts, including group posts).
@@ -98,32 +86,32 @@ export class ContentSubscriptionsHandler {
   }
 
   handlePostsUnsubscribe(client: Socket, payload: Partial<PostsSubscribePayloadDto>): void {
-    const raw = Array.isArray((payload as any)?.postIds) ? ((payload as any).postIds as unknown[]) : [];
+    const raw = payloadIdList(payload, 'postIds');
     const ids = raw.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 200);
     if (ids.length === 0) return;
-    const subs: Set<string> = (client.data as any).postSubs ?? new Set<string>();
+    const subs: Set<string> = socketData(client).postSubs ?? new Set<string>();
     for (const postId of ids) {
       subs.delete(postId);
       client.leave(postRoom(postId));
     }
-    (client.data as any).postSubs = subs;
+    socketData(client).postSubs = subs;
   }
 
   async handleGroupsSubscribe(client: Socket, payload: Partial<GroupsSubscribePayloadDto>): Promise<void> {
-    const raw = Array.isArray((payload as any)?.groupIds) ? ((payload as any).groupIds as unknown[]) : [];
+    const raw = payloadIdList(payload, 'groupIds');
     const requested = raw.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 50);
     if (requested.length === 0) return;
 
-    const subs: Set<string> = (client.data as any).groupSubs ?? new Set<string>();
-    (client.data as any).groupSubs = subs;
+    const subs: Set<string> = socketData(client).groupSubs ?? new Set<string>();
+    socketData(client).groupSubs = subs;
     const remainingCap = Math.max(0, MAX_GROUP_SUBSCRIPTIONS_PER_SOCKET - subs.size);
     if (remainingCap <= 0) return;
 
     const toConsider = Array.from(new Set(requested)).filter((id) => !subs.has(id)).slice(0, remainingCap);
     if (toConsider.length === 0) return;
 
-    const viewerId = (client.data as { userId?: string })?.userId ?? null;
-    const viewer = (client.data as any)?.viewer ?? {};
+    const viewerId = socketData(client).userId ?? null;
+    const viewer: Partial<GatewayViewer> = socketData(client).viewer ?? {};
     const viewerIsAdmin = isSiteAdminViewer(viewer);
     const viewerIsVerified = viewerIsAdmin || Boolean(viewer?.verified);
 
@@ -151,20 +139,20 @@ export class ContentSubscriptionsHandler {
   }
 
   handleGroupsUnsubscribe(client: Socket, payload: Partial<GroupsSubscribePayloadDto>): void {
-    const raw = Array.isArray((payload as any)?.groupIds) ? ((payload as any).groupIds as unknown[]) : [];
+    const raw = payloadIdList(payload, 'groupIds');
     const ids = raw.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 50);
     if (ids.length === 0) return;
-    const subs: Set<string> = (client.data as any).groupSubs ?? new Set<string>();
+    const subs: Set<string> = socketData(client).groupSubs ?? new Set<string>();
     for (const groupId of ids) {
       subs.delete(groupId);
       client.leave(groupRoom(groupId));
     }
-    (client.data as any).groupSubs = subs;
+    socketData(client).groupSubs = subs;
   }
 
   /** Board list: join the public room plus every tier room the viewer can read. */
   handleBoardSubscribe(client: Socket): void {
-    const viewer = (client.data as any)?.viewer ?? {};
+    const viewer: Partial<GatewayViewer> = socketData(client).viewer ?? {};
     const isAdmin = isSiteAdminViewer(viewer);
     client.join(boardRoom('public'));
     if (isAdmin || Boolean(viewer?.verified)) client.join(boardRoom('verified'));
@@ -179,7 +167,7 @@ export class ContentSubscriptionsHandler {
 
   /** Members map: verified viewers get the room with faces; everyone else only counts. */
   handleMembersMapSubscribe(client: Socket): void {
-    const viewer = (client.data as any)?.viewer ?? {};
+    const viewer: Partial<GatewayViewer> = socketData(client).viewer ?? {};
     client.join(membersMapRoom(canSeeMembers(viewer) ? 'members' : 'counts'));
   }
 
@@ -189,25 +177,25 @@ export class ContentSubscriptionsHandler {
   }
 
   async handleArticlesSubscribe(client: Socket, payload: Partial<ArticlesSubscribePayloadDto>): Promise<void> {
-    const raw = Array.isArray((payload as any)?.articleIds) ? ((payload as any).articleIds as unknown[]) : [];
+    const raw = payloadIdList(payload, 'articleIds');
     const requested = raw.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 200);
     if (requested.length === 0) return;
 
-    const subs: Set<string> = (client.data as any).articleSubs ?? new Set<string>();
-    (client.data as any).articleSubs = subs;
+    const subs: Set<string> = socketData(client).articleSubs ?? new Set<string>();
+    socketData(client).articleSubs = subs;
     const remainingCap = Math.max(0, MAX_ARTICLE_SUBSCRIPTIONS_PER_SOCKET - subs.size);
     if (remainingCap <= 0) return;
 
     const toConsider = Array.from(new Set(requested)).filter((id) => !subs.has(id)).slice(0, remainingCap);
     if (toConsider.length === 0) return;
 
-    const viewerId = (client.data as { userId?: string })?.userId ?? null;
-    const viewer = (client.data as any)?.viewer ?? {};
+    const viewerId = socketData(client).userId ?? null;
+    const viewer: Partial<GatewayViewer> = socketData(client).viewer ?? {};
     const viewerIsVerified = isSiteAdminViewer(viewer) || Boolean(viewer?.verified);
     const viewerIsPremium = isSiteAdminViewer(viewer) || Boolean(viewer?.premium) || Boolean(viewer?.premiumPlus);
 
     const rows = await this.prisma.article.findMany({
-      where: { id: { in: toConsider }, deletedAt: null },
+      where: { id: { in: toConsider }, ...NOT_DELETED },
       select: { id: true, authorId: true, visibility: true },
     });
     const byId = new Map(rows.map((r) => [r.id, r]));
@@ -216,7 +204,7 @@ export class ContentSubscriptionsHandler {
     for (const articleId of toConsider) {
       const row = byId.get(articleId);
       if (!row) continue;
-      const vis = String((row as any).visibility ?? '');
+      const vis = String(row.visibility ?? '');
       const isSelf = Boolean(viewerId && row.authorId === viewerId);
       if (!isPostVisibleToViewer({ visibility: vis, isSelf, viewerIsVerified, viewerIsPremium })) continue;
 
@@ -231,14 +219,14 @@ export class ContentSubscriptionsHandler {
   }
 
   handleArticlesUnsubscribe(client: Socket, payload: Partial<ArticlesSubscribePayloadDto>): void {
-    const raw = Array.isArray((payload as any)?.articleIds) ? ((payload as any).articleIds as unknown[]) : [];
+    const raw = payloadIdList(payload, 'articleIds');
     const ids = raw.map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 200);
     if (ids.length === 0) return;
-    const subs: Set<string> = (client.data as any).articleSubs ?? new Set<string>();
+    const subs: Set<string> = socketData(client).articleSubs ?? new Set<string>();
     for (const articleId of ids) {
       subs.delete(articleId);
       client.leave(articleRoom(articleId));
     }
-    (client.data as any).articleSubs = subs;
+    socketData(client).articleSubs = subs;
   }
 }

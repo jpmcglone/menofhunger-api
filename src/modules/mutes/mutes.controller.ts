@@ -1,12 +1,10 @@
 import { Body, Controller, Delete, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { z } from 'zod';
-import { AuthGuard } from '../auth/auth.guard';
+import { AuthGuard } from '../auth/auth-public-api';
 import { CurrentUserId } from '../users/users.decorator';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { MutesService } from './mutes.service';
-
-const muteUserSchema = z.object({ user_id: z.string().trim().min(1) });
+import { muteUserSchema } from './mutes.schemas';
 
 @ApiTags('Mutes')
 @UseGuards(AuthGuard)

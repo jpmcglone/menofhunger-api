@@ -1,15 +1,11 @@
 import { Controller, Get, Query, Res, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
 import type { Response } from 'express';
 import { publicCacheControl } from '../../common/http-cache';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
 import { ScriptureService } from './scripture.service';
 import { Throttle } from '@nestjs/throttler';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-
-const getSchema = z.object({
-  ref: z.string().trim().min(1),
-});
+import { getSchema } from './scripture.schemas';
 
 @UseGuards(OptionalAuthGuard)
 @Controller('scripture')

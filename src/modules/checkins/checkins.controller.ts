@@ -1,25 +1,13 @@
 import { Body, Controller, Get, Header, Post, UseGuards, Query } from '@nestjs/common';
-import { z } from 'zod';
 import { ApiTags } from '@nestjs/swagger';
-import { AuthGuard } from '../auth/auth.guard';
-import { VerifiedGuard } from '../auth/verified.guard';
+import { AuthGuard } from '../auth/auth-public-api';
+import { VerifiedGuard } from '../auth/auth-public-api';
 import { AppConfigService } from '../app/app-config.service';
 import { CurrentUserId } from '../users/users.decorator';
 import { PersonAccountGuard } from '../pages/person-account.guard';
 import { toPostDto } from '../posts/post.dto';
 import { CheckinsService } from './checkins.service';
-
-const createSchema = z.object({
-  body: z.string().trim().min(1).max(1000),
-  visibility: z.enum(['verifiedOnly', 'premiumOnly']),
-  /** Reject stale answers when the displayed prompt no longer matches today's prompt. */
-  prompt: z.string().trim().min(1).max(500).optional(),
-});
-
-const leaderboardQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  scope: z.enum(['weekly', 'best']).optional(),
-});
+import { createSchema, leaderboardQuerySchema } from './checkins.schemas';
 
 @ApiTags('Check-ins & Streaks')
 @Controller('checkins')
@@ -97,7 +85,7 @@ export class CheckinsController {
     return {
       data: {
         ...res,
-        post: toPostDto(res.post as any, this.appConfig.r2()?.publicBaseUrl ?? null),
+        post: toPostDto(res.post, this.appConfig.r2()?.publicBaseUrl ?? null),
       },
     };
   }

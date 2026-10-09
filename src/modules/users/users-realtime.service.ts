@@ -1,4 +1,5 @@
 import { toAvatarVideoDto } from "../../common/dto/avatar-video.dto";
+import { clampLimit } from '../../common/pagination/page';
 import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AppConfigService } from "../app/app-config.service";
@@ -6,7 +7,9 @@ import { publicAssetUrl } from "../../common/assets/public-asset-url";
 import type { PublicProfileDto } from "../../common/dto";
 import { PublicProfileCacheService } from "./public-profile-cache.service";
 
+import { ProfileLinksService } from './profile-links.service';
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 function formatBirthdayMonthDay(birthdate: Date): string {
   // Use UTC to avoid timezone surprises.
   const month = birthdate.getUTCMonth(); // 0-11
@@ -73,6 +76,7 @@ export class UsersRealtimeService {
       username: string | null;
     }>,
     private readonly postsRead: PostsReadService,
+    private readonly profileLinks: ProfileLinksService,
   ) {}
 
   async getPublicProfileDtoByUserId(
@@ -126,8 +130,8 @@ export class UsersRealtimeService {
     // Safety: only-me posts should never be pinnable/show on profiles.
     let pinnedPostId: string | null = user.pinnedPostId ?? null;
     if (pinnedPostId) {
-      const pinned = await this.postsRead.read.findFirst({
-        where: { id: pinnedPostId, userId: user.id, deletedAt: null },
+      const pinned = await this.postsRead.findFirst({
+        where: { id: pinnedPostId, userId: user.id, ...NOT_DELETED },
         select: { visibility: true },
       });
       if (!pinned || pinned.visibility === "onlyMe") {
@@ -156,6 +160,7 @@ export class UsersRealtimeService {
       name: user.name,
       bio: user.bio,
       website: user.website ?? null,
+      links: await this.profileLinks.listPublicLinks(user.id, user.verifiedStatus),
       xUsername: user.xUsername ?? null,
       pickaxUsername: user.pickaxUsername ?? null,
       rumbleUrl: user.rumbleUrl ?? null,
@@ -169,7 +174,7 @@ export class UsersRealtimeService {
       locationCountry: user.locationCountry ?? null,
       birthdayDisplay: formatBirthdayDisplay(
         user.birthdate,
-        (user as any).birthdayVisibility ?? "monthDay",
+        user.birthdayVisibility ?? "monthDay",
       ),
       birthdayMonthDay: user.birthdate
         ? formatBirthdayMonthDay(user.birthdate)
@@ -215,7 +220,7 @@ export class UsersRealtimeService {
   ): Promise<string[]> {
     const id = (userId ?? "").trim();
     if (!id) return [];
-    const max = Math.max(1, Math.min(10_000, Math.floor(opts?.max ?? 2000)));
+    const max = clampLimit(opts?.max, { default: 2000, max: 10_000 });
 
     const [followers, following] = await Promise.all([
       this.prisma.follow.findMany({

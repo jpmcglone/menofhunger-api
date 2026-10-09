@@ -10,7 +10,7 @@ import { SideEffectsService } from '../side-effects/side-effects.service';
 import { toUserListDto } from '../../common/dto';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { PresenceRealtimeService } from './presence-realtime.service';
-import { PresenceRedisStateService } from './presence-redis-state.service';
+import { PresenceRedisReadService } from './presence-redis-read.service';
 
 /** A reconnect after less time than this is a blip, not "came online". */
 export const FOLLOW_ONLINE_MIN_OFFLINE_MS = 15 * 60_000;
@@ -34,7 +34,7 @@ export class PresenceSideEffectsHandler implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly redis: RedisService,
-    private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presenceRedis: PresenceRedisReadService,
     private readonly realtime: PresenceRealtimeService,
     private readonly registry: SideEffectsRegistry,
     private readonly sideEffects: SideEffectsService,

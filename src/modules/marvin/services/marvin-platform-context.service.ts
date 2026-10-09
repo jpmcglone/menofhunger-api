@@ -1,3 +1,4 @@
+import { NOT_BANNED_USER_WHERE } from '../../../common/prisma-selects/user.where';
 import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { marvChannelSourceWhere } from '../../group-channels/channel-marv-scope.service';
@@ -5,6 +6,7 @@ import { PostsPublicRecordService } from '../../posts/posts-public-record.servic
 import { PrismaService } from '../../prisma/prisma.service';
 import { MARV_PUBLIC_KNOWLEDGE } from '../marvin-prompt-instructions';
 import { clampLimit } from '../../../common/pagination/page';
+import { NOT_DELETED } from '../../../common/prisma/where';
 
 /** Where this reply is being delivered. The model never supplies these ids. */
 export type MarvPlatformScope = {
@@ -118,11 +120,11 @@ export class MarvinPlatformContextService {
   async listPublicArticles(limit = ARTICLES): Promise<{ articles: ArticleRow[] }> {
     const rows = await this.prisma.article.findMany({
       where: {
-        deletedAt: null,
+        ...NOT_DELETED,
         isDraft: false,
         publishedAt: { not: null },
         visibility: 'public',
-        author: { bannedAt: null },
+        author: NOT_BANNED_USER_WHERE,
       },
       orderBy: { publishedAt: 'desc' },
       take: clampLimit(limit, { default: 5, max: 8 }),
@@ -167,7 +169,7 @@ export class MarvinPlatformContextService {
         deletedForAll: false,
         kind: 'text',
         body: { contains: q, mode: 'insensitive' },
-        sender: { bannedAt: null },
+        sender: NOT_BANNED_USER_WHERE,
         conversation: { groupChannel: this.channelWhere(groupId, scope, false) },
       },
       orderBy: { createdAt: 'desc' },
@@ -199,7 +201,7 @@ export class MarvinPlatformContextService {
 
   private async groupSection(groupId: string, scope: MarvPlatformScope) {
     const group = await this.prisma.communityGroup.findFirst({
-      where: { id: groupId, deletedAt: null },
+      where: { id: groupId, ...NOT_DELETED },
       select: { name: true },
     });
     if (!group) return null;
@@ -215,7 +217,7 @@ export class MarvinPlatformContextService {
       where: {
         deletedForAll: false,
         kind: 'text',
-        sender: { bannedAt: null },
+        sender: NOT_BANNED_USER_WHERE,
         conversation: { groupChannel: this.channelWhere(groupId, scope, true) },
       },
       orderBy: { createdAt: 'desc' },

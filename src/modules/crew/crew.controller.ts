@@ -9,93 +9,37 @@ import {
   Put,
   Query,
   UseGuards,
-} from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
-import { z } from 'zod';
-import { ApiTags } from '@nestjs/swagger';
-import { AuthGuard } from '../auth/auth.guard';
-import { PersonAccountGuard } from '../pages/person-account.guard';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
-import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
-import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import { type MessageMediaInput } from '../messages/messages.service';
-import { CrewService } from './crew.service';
-import { CrewInvitesService } from './crew-invites.service';
-import { CrewWallService } from './crew-wall.service';
-import { CrewTransferService } from './crew-transfer.service';
-import { UserLookupService } from '../user-lookup/user-lookup.service';
-import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
+} from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
+import { z } from "zod";
+import { ApiTags } from "@nestjs/swagger";
+import { AuthGuard } from "../auth/auth-public-api";
+import { PersonAccountGuard } from "../pages/person-account.guard";
+import { OptionalAuthGuard } from "../auth/auth-public-api";
+import { CurrentUserId, OptionalCurrentUserId } from "../users/users.decorator";
+import {
+  rateLimitLimit,
+  rateLimitTtl,
+} from "../../common/throttling/rate-limit.resolver";
+import { type MessageMediaInput } from "../messages";
+import { CrewService } from "./crew.service";
+import { CrewInvitesService } from "./crew-invites.service";
+import { CrewWallService } from "./crew-wall.service";
+import { CrewTransferService } from "./crew-transfer.service";
+import { UserLookupService } from "../user-lookup/user-lookup.service";
+import {
+  updateCrewSchema,
+  inviteSchema,
+  sendWallMessageSchema,
+  listWallSchema,
+  transferSchema,
+  openVoteSchema,
+  ballotSchema,
+  reorderMembersSchema,
+} from "./crew.schemas";
 
-const updateCrewSchema = z.object({
-  name: z.string().trim().max(80).nullish(),
-  tagline: z.string().trim().max(160).nullish(),
-  bio: z.string().trim().max(4000).nullish(),
-  avatarImageUrl: z.string().trim().max(2000).nullish(),
-  coverImageUrl: z.string().trim().max(2000).nullish(),
-  designatedSuccessorUserId: z.string().trim().min(1).nullish(),
-});
-
-const inviteSchema = z.object({
-  inviteeUserId: z.string().trim().min(1),
-  message: z.string().trim().max(500).nullish(),
-  /**
-   * For founding invites only: name to use for the new crew when this invite is
-   * accepted. Ignored for invites tied to an existing crew (rename via PATCH /crew/me).
-   */
-  crewName: z.string().trim().max(80).nullish(),
-});
-
-const messageMediaSchema = z.discriminatedUnion('source', [
-  z.object({
-    source: z.literal('upload'),
-    kind: z.enum(['image', 'gif', 'video']),
-    r2Key: z.string().min(1),
-    thumbnailR2Key: z.string().optional().nullable(),
-    width: z.coerce.number().int().positive().optional().nullable(),
-    height: z.coerce.number().int().positive().optional().nullable(),
-    durationSeconds: z.coerce.number().min(0).optional().nullable(),
-    alt: z.string().max(500).optional().nullable(),
-  }),
-  z.object({
-    source: z.literal('giphy'),
-    kind: z.literal('gif'),
-    url: z.string().url(),
-    mp4Url: z.string().url().optional().nullable(),
-    width: z.coerce.number().int().positive().optional().nullable(),
-    height: z.coerce.number().int().positive().optional().nullable(),
-    alt: z.string().max(500).optional().nullable(),
-  }),
-]);
-
-const sendWallMessageSchema = z
-  .object({
-    body: z.string().trim().max(2000).optional(),
-    media: z.array(messageMediaSchema).max(1).optional(),
-  })
-  .refine((v) => (v.body?.trim()?.length ?? 0) > 0 || (v.media?.length ?? 0) > 0, {
-    message: 'Message must have a body or media.',
-  });
-
-const listWallSchema = cursorPageQuerySchema();
-
-const transferSchema = z.object({
-  newOwnerUserId: z.string().trim().min(1),
-});
-
-const openVoteSchema = z.object({
-  targetUserId: z.string().trim().min(1),
-});
-
-const ballotSchema = z.object({
-  inFavor: z.boolean(),
-});
-
-const reorderMembersSchema = z.object({
-  order: z.array(z.string().trim().min(1)).min(1).max(5),
-});
-
-@ApiTags('Crews & Groups')
-@Controller('crew')
+@ApiTags("Crews & Groups")
+@Controller("crew")
 export class CrewController {
   constructor(
     private readonly crew: CrewService,
@@ -109,9 +53,12 @@ export class CrewController {
 
   @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
-    default: { limit: rateLimitLimit('publicRead', 240), ttl: rateLimitTtl('publicRead', 60) },
+    default: {
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
+    },
   })
-  @Get('me')
+  @Get("me")
   async getMyCrew(@CurrentUserId() viewerUserId: string) {
     const crew = await this.crew.getMyCrewOrNull(viewerUserId);
     return { data: { crew } };
@@ -119,10 +66,16 @@ export class CrewController {
 
   @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
-    default: { limit: rateLimitLimit('interact', 30), ttl: rateLimitTtl('interact', 60) },
+    default: {
+      limit: rateLimitLimit("interact", 30),
+      ttl: rateLimitTtl("interact", 60),
+    },
   })
-  @Patch('me')
-  async updateMyCrew(@CurrentUserId() viewerUserId: string, @Body() body: unknown) {
+  @Patch("me")
+  async updateMyCrew(
+    @CurrentUserId() viewerUserId: string,
+    @Body() body: unknown,
+  ) {
     const parsed = updateCrewSchema.parse(body);
     // NOTE: avatar/coverImageUrl preserve `null` explicitly to signal removal.
     // Collapsing `null` to `undefined` here would silently drop a "remove
@@ -141,9 +94,12 @@ export class CrewController {
 
   @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
-    default: { limit: rateLimitLimit('interact', 10), ttl: rateLimitTtl('interact', 60) },
+    default: {
+      limit: rateLimitLimit("interact", 10),
+      ttl: rateLimitTtl("interact", 60),
+    },
   })
-  @Post('me/leave')
+  @Post("me/leave")
   async leave(@CurrentUserId() viewerUserId: string) {
     await this.crew.leaveCrew({ viewerUserId });
     return { data: {} };
@@ -151,19 +107,22 @@ export class CrewController {
 
   @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
-    default: { limit: rateLimitLimit('interact', 5), ttl: rateLimitTtl('interact', 60) },
+    default: {
+      limit: rateLimitLimit("interact", 5),
+      ttl: rateLimitTtl("interact", 60),
+    },
   })
-  @Delete('me')
+  @Delete("me")
   async disband(@CurrentUserId() viewerUserId: string) {
     await this.crew.disbandCrew({ viewerUserId });
     return { data: {} };
   }
 
   @UseGuards(AuthGuard, PersonAccountGuard)
-  @Delete('me/members/:userId')
+  @Delete("me/members/:userId")
   async kick(
     @CurrentUserId() viewerUserId: string,
-    @Param('userId') userId: string,
+    @Param("userId") userId: string,
   ) {
     // Owner is always part of the viewer's crew; service loads the crewId.
     const mine = await this.crew.getMyCrewOrNull(viewerUserId);
@@ -183,12 +142,15 @@ export class CrewController {
    */
   @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
-    default: { limit: rateLimitLimit('interact', 30), ttl: rateLimitTtl('interact', 60) },
+    default: {
+      limit: rateLimitLimit("interact", 30),
+      ttl: rateLimitTtl("interact", 60),
+    },
   })
-  @Patch(':crewId')
+  @Patch(":crewId")
   async updateCrewById(
     @CurrentUserId() viewerUserId: string,
-    @Param('crewId') crewId: string,
+    @Param("crewId") crewId: string,
     @Body() body: unknown,
   ) {
     const parsed = updateCrewSchema.parse(body);
@@ -209,7 +171,7 @@ export class CrewController {
   }
 
   @UseGuards(AuthGuard, PersonAccountGuard)
-  @Patch('me/members/order')
+  @Patch("me/members/order")
   async reorderMembers(
     @CurrentUserId() viewerUserId: string,
     @Body() body: unknown,
@@ -222,14 +184,14 @@ export class CrewController {
   // ---------- invites ----------
 
   @UseGuards(AuthGuard, PersonAccountGuard)
-  @Get('invites/inbox')
+  @Get("invites/inbox")
   async inbox(@CurrentUserId() viewerUserId: string) {
     const data = await this.invites.listInbox({ viewerUserId });
     return { data };
   }
 
   @UseGuards(AuthGuard, PersonAccountGuard)
-  @Get('invites/outbox')
+  @Get("invites/outbox")
   async outbox(@CurrentUserId() viewerUserId: string) {
     const data = await this.invites.listOutbox({ viewerUserId });
     return { data };
@@ -237,9 +199,12 @@ export class CrewController {
 
   @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
-    default: { limit: rateLimitLimit('interact', 30), ttl: rateLimitTtl('interact', 60) },
+    default: {
+      limit: rateLimitLimit("interact", 30),
+      ttl: rateLimitTtl("interact", 60),
+    },
   })
-  @Post('invites')
+  @Post("invites")
   async invite(@CurrentUserId() viewerUserId: string, @Body() body: unknown) {
     const parsed = inviteSchema.parse(body);
     const invite = await this.invites.sendInvite({
@@ -252,22 +217,34 @@ export class CrewController {
   }
 
   @UseGuards(AuthGuard, PersonAccountGuard)
-  @Post('invites/:id/accept')
-  async acceptInvite(@CurrentUserId() viewerUserId: string, @Param('id') id: string) {
-    const result = await this.invites.acceptInvite({ viewerUserId, inviteId: id });
+  @Post("invites/:id/accept")
+  async acceptInvite(
+    @CurrentUserId() viewerUserId: string,
+    @Param("id") id: string,
+  ) {
+    const result = await this.invites.acceptInvite({
+      viewerUserId,
+      inviteId: id,
+    });
     return { data: result };
   }
 
   @UseGuards(AuthGuard, PersonAccountGuard)
-  @Post('invites/:id/decline')
-  async declineInvite(@CurrentUserId() viewerUserId: string, @Param('id') id: string) {
+  @Post("invites/:id/decline")
+  async declineInvite(
+    @CurrentUserId() viewerUserId: string,
+    @Param("id") id: string,
+  ) {
     await this.invites.declineInvite({ viewerUserId, inviteId: id });
     return { data: {} };
   }
 
   @UseGuards(AuthGuard, PersonAccountGuard)
-  @Delete('invites/:id')
-  async cancelInvite(@CurrentUserId() viewerUserId: string, @Param('id') id: string) {
+  @Delete("invites/:id")
+  async cancelInvite(
+    @CurrentUserId() viewerUserId: string,
+    @Param("id") id: string,
+  ) {
     await this.invites.cancelInvite({ viewerUserId, inviteId: id });
     return { data: {} };
   }
@@ -276,10 +253,16 @@ export class CrewController {
 
   @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
-    default: { limit: rateLimitLimit('publicRead', 240), ttl: rateLimitTtl('publicRead', 60) },
+    default: {
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
+    },
   })
-  @Get('me/wall')
-  async listWall(@CurrentUserId() viewerUserId: string, @Query() query: unknown) {
+  @Get("me/wall")
+  async listWall(
+    @CurrentUserId() viewerUserId: string,
+    @Query() query: unknown,
+  ) {
     const parsed = listWallSchema.parse(query);
     const result = await this.wall.getMyWall({
       viewerUserId,
@@ -298,14 +281,17 @@ export class CrewController {
 
   @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
-    default: { limit: rateLimitLimit('interact', 120), ttl: rateLimitTtl('interact', 60) },
+    default: {
+      limit: rateLimitLimit("interact", 120),
+      ttl: rateLimitTtl("interact", 60),
+    },
   })
-  @Post('me/wall')
+  @Post("me/wall")
   async postWall(@CurrentUserId() viewerUserId: string, @Body() body: unknown) {
     const parsed = sendWallMessageSchema.parse(body);
     const result = await this.wall.sendWallMessage({
       viewerUserId,
-      body: parsed.body ?? '',
+      body: parsed.body ?? "",
       replyToId: null,
       media: (parsed.media ?? []) as MessageMediaInput[],
     });
@@ -315,7 +301,7 @@ export class CrewController {
   // ---------- ownership ----------
 
   @UseGuards(AuthGuard, PersonAccountGuard)
-  @Post('me/transfer')
+  @Post("me/transfer")
   async transferOwnership(
     @CurrentUserId() viewerUserId: string,
     @Body() body: unknown,
@@ -329,7 +315,7 @@ export class CrewController {
   }
 
   @UseGuards(AuthGuard, PersonAccountGuard)
-  @Post('me/transfer-votes')
+  @Post("me/transfer-votes")
   async openTransferVote(
     @CurrentUserId() viewerUserId: string,
     @Body() body: unknown,
@@ -343,10 +329,10 @@ export class CrewController {
   }
 
   @UseGuards(AuthGuard, PersonAccountGuard)
-  @Post('me/transfer-votes/:id/ballot')
+  @Post("me/transfer-votes/:id/ballot")
   async castBallot(
     @CurrentUserId() viewerUserId: string,
-    @Param('id') id: string,
+    @Param("id") id: string,
     @Body() body: unknown,
   ) {
     const parsed = ballotSchema.parse(body);
@@ -359,10 +345,10 @@ export class CrewController {
   }
 
   @UseGuards(AuthGuard, PersonAccountGuard)
-  @Delete('me/transfer-votes/:id')
+  @Delete("me/transfer-votes/:id")
   async cancelTransferVote(
     @CurrentUserId() viewerUserId: string,
-    @Param('id') id: string,
+    @Param("id") id: string,
   ) {
     await this.transfer.cancelTransferVote({ viewerUserId, voteId: id });
     return { data: {} };
@@ -372,10 +358,16 @@ export class CrewController {
 
   @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
-    default: { limit: rateLimitLimit('interact', 30), ttl: rateLimitTtl('interact', 60) },
+    default: {
+      limit: rateLimitLimit("interact", 30),
+      ttl: rateLimitTtl("interact", 60),
+    },
   })
-  @Put('availability')
-  async setAvailability(@CurrentUserId() viewerUserId: string, @Body() body: unknown) {
+  @Put("availability")
+  async setAvailability(
+    @CurrentUserId() viewerUserId: string,
+    @Body() body: unknown,
+  ) {
     const { open } = z.object({ open: z.boolean() }).parse(body);
     const result = await this.crew.setAvailability({ viewerUserId, open });
     return { data: result };
@@ -383,9 +375,12 @@ export class CrewController {
 
   @UseGuards(AuthGuard, PersonAccountGuard)
   @Throttle({
-    default: { limit: rateLimitLimit('publicRead', 60), ttl: rateLimitTtl('publicRead', 60) },
+    default: {
+      limit: rateLimitLimit("publicRead", 60),
+      ttl: rateLimitTtl("publicRead", 60),
+    },
   })
-  @Get('open-members')
+  @Get("open-members")
   async listOpenMembers(@CurrentUserId() viewerUserId: string) {
     const members = await this.crew.listOpenMembers({ viewerUserId });
     return { data: { members } };
@@ -395,27 +390,34 @@ export class CrewController {
 
   @UseGuards(OptionalAuthGuard)
   @Throttle({
-    default: { limit: rateLimitLimit('publicRead', 240), ttl: rateLimitTtl('publicRead', 60) },
+    default: {
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
+    },
   })
-  @Get('by-slug/:slug')
+  @Get("by-slug/:slug")
   async getBySlug(
     @OptionalCurrentUserId() viewerUserId: string | undefined,
-    @Param('slug') slug: string,
+    @Param("slug") slug: string,
   ) {
-    const { crew, redirectedFromSlug, viewerMembership } = await this.crew.getCrewBySlug({
-      slug,
-      viewerUserId: viewerUserId ?? null,
-    });
+    const { crew, redirectedFromSlug, viewerMembership } =
+      await this.crew.getCrewBySlug({
+        slug,
+        viewerUserId: viewerUserId ?? null,
+      });
     return { data: { crew, redirectedFromSlug, viewerMembership } };
   }
 
   /** Compact crew summary for profile pills (null when the user is not in a crew). */
   @UseGuards(OptionalAuthGuard)
   @Throttle({
-    default: { limit: rateLimitLimit('publicRead', 240), ttl: rateLimitTtl('publicRead', 60) },
+    default: {
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
+    },
   })
-  @Get('for-user/:userId')
-  async forUser(@Param('userId') userId: string) {
+  @Get("for-user/:userId")
+  async forUser(@Param("userId") userId: string) {
     const crew = await this.crew.getPublicCrewForUser(userId);
     return { data: { crew } };
   }

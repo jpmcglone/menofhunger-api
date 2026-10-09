@@ -1,129 +1,115 @@
-import { preferencesPatchSchema } from './notification-preferences.schema';
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
-import { z } from 'zod';
-import { AuthGuard } from '../auth/auth.guard';
-import { CurrentOperatorUserId, CurrentUserId, IsImpersonating } from '../users/users.decorator';
-import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import { NotificationsService } from './notifications.service';
-import type { NotificationPreferencesDto } from '../../common/dto';
-import { queryBoolean } from '../../common/validation/query-boolean';
-import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
+import { NotificationQueryService } from "./notification-query.service";
+import { NotificationReadStateService } from "./notification-read-state.service";
+import { NotificationPushService } from "./notification-push.service";
+import { ApnsPushService } from "./apns-push.service";
+import { NotificationPreferencesService } from "./notification-preferences.service";
+import { NotificationReadSubjectsService } from "./notification-read-subjects.service";
+import { NotificationNudgesService } from "./notification-nudges.service";
+import { preferencesPatchSchema } from "./notification-preferences.schema";
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+  Inject,
+} from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
+import { z } from "zod";
+import { AuthGuard } from "../auth/auth-public-api";
+import {
+  CurrentOperatorUserId,
+  CurrentUserId,
+  IsImpersonating,
+} from "../users/users.decorator";
+import {
+  rateLimitLimit,
+  rateLimitTtl,
+} from "../../common/throttling/rate-limit.resolver";
+import type { NotificationPreferencesDto } from "../../common/dto";
+import {
+  listQuerySchema,
+  lockScreenClearBodySchema,
+  markReadBodySchema,
+  pushSubscribeBodySchema,
+  pushUnsubscribeBodySchema,
+  apnsRegisterBodySchema,
+  apnsUnregisterBodySchema,
+} from "./notifications.schemas";
 
-const listQuerySchema = cursorPageQuerySchema().extend({
-  
-  unreadOnly: queryBoolean().optional(),
-  boardCommentsOnly: queryBoolean().optional(),
-  collapseByRoot: queryBoolean().optional(),
-  collapseMode: z.enum(['root', 'parent']).optional(),
-  prefer: z.enum(['reply', 'root']).optional(),
-  kind: z.enum([
-    'comment', 'boost', 'repost', 'follow', 'followed_post',
-    'followed_article', 'mention', 'nudge', 'coin_transfer',
-    'poll_results_ready', 'generic', 'message',
-    'community_group_post',
-    'group_join_request',
-    'community_group_member_joined',
-    'community_group_join_approved',
-    'community_group_join_rejected',
-    'community_group_member_removed',
-    'community_group_disbanded',
-    'community_group_invite_received',
-    'community_group_invite_accepted',
-    'community_group_invite_declined',
-    'community_group_invite_cancelled',
-    'crew_invite_received',
-    'crew_invite_accepted',
-    'crew_invite_declined',
-    'crew_invite_cancelled',
-    'crew_member_joined',
-    'crew_member_left',
-    'crew_member_kicked',
-    'crew_disbanded',
-    'crew_owner_transferred',
-    'crew_owner_transfer_vote',
-    'crew_wall_mention',
-    'word_of_the_day',
-    'quote_of_the_day',
-    'account_verified',
-    'premium_started',
-    'premium_ended',
-    'status_update',
-    'checkin_post',
-    'board',
-    'articles',
-    'other',
-  ]).optional(),
-});
-
-const lockScreenClearBodySchema = z.object({
-  section: z.enum(['inbox', 'groups']),
-});
-
-const markReadBodySchema = z.object({
-  post_id: z.string().trim().min(1).optional(),
-  user_id: z.string().trim().min(1).optional(),
-  article_id: z.string().trim().min(1).optional(),
-  crew_id: z.string().trim().min(1).optional(),
-  group_id: z.string().trim().min(1).optional(),
-  board_thread_id: z.string().trim().min(1).optional(),
-  filter: z.enum(['board', 'articles']).optional(),
-}).refine(
-  (d) => d.post_id ?? d.user_id ?? d.article_id ?? d.crew_id ?? d.group_id ?? d.board_thread_id ?? d.filter,
-  { message: 'At least one of post_id, user_id, article_id, crew_id, group_id, board_thread_id, or filter is required' },
-);
-
-const pushSubscribeBodySchema = z.object({
-  endpoint: z.string().trim().min(1),
-  keys: z.object({
-    p256dh: z.string().trim().min(1),
-    auth: z.string().trim().min(1),
-  }),
-  user_agent: z.string().trim().optional(),
-});
-
-const pushUnsubscribeBodySchema = z.object({
-  endpoint: z.string().trim().min(1),
-});
-
-const apnsRegisterBodySchema = z.object({
-  token: z.string().trim().min(1),
-  environment: z.enum(['production', 'sandbox']).optional(),
-  /** `voip` = PushKit token for incoming-call rings; defaults to a regular alert token. */
-  kind: z.enum(['alert', 'voip']).optional(),
-});
-
-const apnsUnregisterBodySchema = z.object({
-  token: z.string().trim().min(1),
-});
-
-
-@Controller('notifications')
+@Controller("notifications")
 export class NotificationsController {
-  constructor(private readonly notifications: NotificationsService) {}
+  constructor(
+    @Inject(NotificationQueryService)
+    private readonly notificationQueryService: Pick<
+      NotificationQueryService,
+      "listNewPostsFeed" | "list"
+    >,
+    @Inject(NotificationReadStateService)
+    private readonly notificationReadStateService: Pick<
+      NotificationReadStateService,
+      | "getUndeliveredCount"
+      | "getUnreadCommentCount"
+      | "getNavUnread"
+      | "markDelivered"
+      | "dispatchLockScreenClear"
+      | "markNewPostsRead"
+      | "markReadByFilter"
+      | "markAllRead"
+      | "getGroupsUnread"
+      | "markGroupPostsDelivered"
+      | "markReadById"
+      | "ignoreById"
+      | "markReadByKind"
+    >,
+    @Inject(NotificationPushService)
+    private readonly notificationPushService: Pick<
+      NotificationPushService,
+      "pushSubscribe" | "sendTestPush" | "pushUnsubscribe"
+    >,
+    private readonly apnsPushService: ApnsPushService,
+    @Inject(NotificationPreferencesService)
+    private readonly notificationPreferencesService: Pick<
+      NotificationPreferencesService,
+      "getPreferences" | "updatePreferences"
+    >,
+    @Inject(NotificationReadSubjectsService)
+    private readonly notificationReadSubjectsService: Pick<
+      NotificationReadSubjectsService,
+      "markReadBySubject"
+    >,
+    @Inject(NotificationNudgesService)
+    private readonly notificationNudgesService: Pick<
+      NotificationNudgesService,
+      | "markNudgesReadByActor"
+      | "markNudgesNudgedBackByActor"
+      | "markNudgeNudgedBackById"
+      | "ignoreNudgesByActor"
+    >,
+  ) {}
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 240),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Get('new-posts')
-  async listNewPosts(
-    @CurrentUserId() userId: string,
-    @Query() query: unknown,
-  ) {
+  @Get("new-posts")
+  async listNewPosts(@CurrentUserId() userId: string, @Query() query: unknown) {
     const parsed = listQuerySchema.parse(query);
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
-    const res = await this.notifications.listNewPostsFeed({
+    const res = await this.notificationQueryService.listNewPostsFeed({
       recipientUserId: userId,
       limit,
       cursor,
       collapseByRoot: parsed.collapseByRoot ?? false,
-      collapseMode: parsed.collapseMode ?? 'root',
-      prefer: parsed.prefer ?? 'reply',
+      collapseMode: parsed.collapseMode ?? "root",
+      prefer: parsed.prefer ?? "reply",
     });
     return {
       data: res.posts,
@@ -136,16 +122,16 @@ export class NotificationsController {
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 240),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Get('unread-count')
+  @Get("unread-count")
   async unreadCount(@CurrentUserId() userId: string) {
     const [count, unreadCommentCount, navUnread] = await Promise.all([
-      this.notifications.getUndeliveredCount(userId),
-      this.notifications.getUnreadCommentCount(userId),
-      this.notifications.getNavUnread(userId),
+      this.notificationReadStateService.getUndeliveredCount(userId),
+      this.notificationReadStateService.getUnreadCommentCount(userId),
+      this.notificationReadStateService.getNavUnread(userId),
     ]);
     return { data: { count, unreadCommentCount, ...navUnread } };
   }
@@ -153,19 +139,16 @@ export class NotificationsController {
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 240),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
   @Get()
-  async list(
-    @CurrentUserId() userId: string,
-    @Query() query: unknown,
-  ) {
+  async list(@CurrentUserId() userId: string, @Query() query: unknown) {
     const parsed = listQuerySchema.parse(query);
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
-    const res = await this.notifications.list({
+    const res = await this.notificationQueryService.list({
       recipientUserId: userId,
       limit,
       cursor,
@@ -187,18 +170,18 @@ export class NotificationsController {
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('push-subscribe')
+  @Post("push-subscribe")
   async pushSubscribe(
     @CurrentOperatorUserId() operatorUserId: string | null,
     @Body() body: unknown,
   ) {
     if (!operatorUserId) return { data: {} };
     const parsed = pushSubscribeBodySchema.parse(body);
-    await this.notifications.pushSubscribe(operatorUserId, {
+    await this.notificationPushService.pushSubscribe(operatorUserId, {
       endpoint: parsed.endpoint,
       keys: parsed.keys,
       userAgent: parsed.user_agent ?? null,
@@ -209,42 +192,45 @@ export class NotificationsController {
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 30),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 30),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('push-test')
+  @Post("push-test")
   async pushTest(@CurrentUserId() userId: string) {
-    const result = await this.notifications.sendTestPush(userId);
+    const result = await this.notificationPushService.sendTestPush(userId);
     return { data: result };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('push-unsubscribe')
+  @Post("push-unsubscribe")
   async pushUnsubscribe(
     @CurrentOperatorUserId() operatorUserId: string | null,
     @CurrentUserId() userId: string,
     @Body() body: unknown,
   ) {
     const parsed = pushUnsubscribeBodySchema.parse(body);
-    await this.notifications.pushUnsubscribe(operatorUserId ?? userId, parsed.endpoint);
+    await this.notificationPushService.pushUnsubscribe(
+      operatorUserId ?? userId,
+      parsed.endpoint,
+    );
     return { data: {} };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('apns/register')
+  @Post("apns/register")
   async apnsRegister(
     @CurrentOperatorUserId() operatorUserId: string | null,
     @IsImpersonating() isImpersonating: boolean,
@@ -256,10 +242,10 @@ export class NotificationsController {
     // impersonation: it would hand the admin's phone to the target, sending the target's
     // pushes to the admin and silencing the admin's own — and it would outlive the session.
     if (isImpersonating || !operatorUserId) return { data: {} };
-    await this.notifications.apnsRegister(operatorUserId, {
+    await this.apnsPushService.registerToken(operatorUserId, {
       token: parsed.token,
-      environment: parsed.environment ?? 'production',
-      kind: parsed.kind ?? 'alert',
+      environment: parsed.environment ?? "production",
+      kind: parsed.kind ?? "alert",
     });
     return { data: {} };
   }
@@ -267,111 +253,135 @@ export class NotificationsController {
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('apns/unregister')
+  @Post("apns/unregister")
   async apnsUnregister(
     @CurrentOperatorUserId() operatorUserId: string | null,
     @CurrentUserId() userId: string,
     @Body() body: unknown,
   ) {
     const parsed = apnsUnregisterBodySchema.parse(body);
-    await this.notifications.apnsUnregister(operatorUserId ?? userId, parsed.token);
+    await this.apnsPushService.unregisterToken(
+      operatorUserId ?? userId,
+      parsed.token,
+    );
     return { data: {} };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Get('preferences')
-  async preferences(@CurrentUserId() userId: string): Promise<{ data: NotificationPreferencesDto }> {
-    return { data: await this.notifications.getPreferences(userId) };
+  @Get("preferences")
+  async preferences(
+    @CurrentUserId() userId: string,
+  ): Promise<{ data: NotificationPreferencesDto }> {
+    return {
+      data: await this.notificationPreferencesService.getPreferences(userId),
+    };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Patch('preferences')
+  @Patch("preferences")
   async updatePreferences(
     @CurrentUserId() userId: string,
     @Body() body: unknown,
   ): Promise<{ data: NotificationPreferencesDto }> {
     const parsed = preferencesPatchSchema.parse(body);
-    return { data: await this.notifications.updatePreferences(userId, parsed) };
+    return {
+      data: await this.notificationPreferencesService.updatePreferences(
+        userId,
+        parsed,
+      ),
+    };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('mark-delivered')
+  @Post("mark-delivered")
   async markDelivered(@CurrentUserId() userId: string, @Body() body: unknown) {
-    const parsed = z.object({ filter: z.literal('board').optional() }).parse(body ?? {});
-    await this.notifications.markDelivered(userId, parsed.filter);
+    const parsed = z
+      .object({ filter: z.literal("board").optional() })
+      .parse(body ?? {});
+    await this.notificationReadStateService.markDelivered(
+      userId,
+      parsed.filter,
+    );
     return { data: {} };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('lock-screen/clear')
+  @Post("lock-screen/clear")
   async clearLockScreen(
     @CurrentUserId() userId: string,
     @Body() body: unknown,
   ) {
     const parsed = lockScreenClearBodySchema.parse(body);
-    this.notifications.clearLockScreen(userId, parsed.section);
+    this.notificationReadStateService.dispatchLockScreenClear(
+      userId,
+      parsed.section,
+    );
     return { data: {} };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('new-posts/mark-read')
+  @Post("new-posts/mark-read")
   async markNewPostsRead(@CurrentUserId() userId: string) {
-    const data = await this.notifications.markNewPostsRead(userId);
+    const data =
+      await this.notificationReadStateService.markNewPostsRead(userId);
     return { data };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('mark-read')
+  @Post("mark-read")
   async markReadBySubject(
     @CurrentUserId() userId: string,
     @Body() body: unknown,
   ) {
     const parsed = markReadBodySchema.parse(body);
     if (parsed.filter) {
-      await this.notifications.markReadByFilter(userId, parsed.filter);
+      await this.notificationReadStateService.markReadByFilter(
+        userId,
+        parsed.filter,
+      );
       return { data: {} };
     }
-    await this.notifications.markReadBySubject(userId, {
+    await this.notificationReadSubjectsService.markReadBySubject(userId, {
       postId: parsed.post_id ?? null,
       userId: parsed.user_id ?? null,
       articleId: parsed.article_id ?? null,
@@ -385,162 +395,188 @@ export class NotificationsController {
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('mark-all-read')
+  @Post("mark-all-read")
   async markAllRead(@CurrentUserId() userId: string) {
-    await this.notifications.markAllRead(userId);
+    await this.notificationReadStateService.markAllRead(userId);
     return { data: {} };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 240),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Get('groups-unread')
+  @Get("groups-unread")
   async groupsUnread(@CurrentUserId() userId: string) {
-    const data = await this.notifications.getGroupsUnread(userId);
+    const data =
+      await this.notificationReadStateService.getGroupsUnread(userId);
     return { data };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('groups/:groupId/mark-delivered')
+  @Post("groups/:groupId/mark-delivered")
   async markGroupPostsDelivered(
     @CurrentUserId() userId: string,
-    @Param('groupId') groupId: string,
+    @Param("groupId") groupId: string,
     @Body() body: unknown,
   ) {
-    const gid = (groupId ?? '').trim();
+    const gid = (groupId ?? "").trim();
     if (!gid) return { data: {} };
-    const parsed = z.object({ through: z.string().datetime().optional() }).parse(body ?? {});
-    const through = parsed.through ? new Date(Math.min(Date.parse(parsed.through), Date.now())) : undefined;
-    await this.notifications.markGroupPostsDelivered(userId, gid, through);
+    const parsed = z
+      .object({ through: z.string().datetime().optional() })
+      .parse(body ?? {});
+    const through = parsed.through
+      ? new Date(Math.min(Date.parse(parsed.through), Date.now()))
+      : undefined;
+    await this.notificationReadStateService.markGroupPostsDelivered(
+      userId,
+      gid,
+      through,
+    );
     return { data: {} };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post(':id/mark-read')
-  async markReadById(
-    @CurrentUserId() userId: string,
-    @Param('id') id: string,
-  ) {
-    const updated = await this.notifications.markReadById(userId, id);
+  @Post(":id/mark-read")
+  async markReadById(@CurrentUserId() userId: string, @Param("id") id: string) {
+    const updated = await this.notificationReadStateService.markReadById(
+      userId,
+      id,
+    );
     return { data: { updated } };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post(':id/ignore')
-  async ignoreById(
-    @CurrentUserId() userId: string,
-    @Param('id') id: string,
-  ) {
-    const updated = await this.notifications.ignoreById(userId, id);
+  @Post(":id/ignore")
+  async ignoreById(@CurrentUserId() userId: string, @Param("id") id: string) {
+    const updated = await this.notificationReadStateService.ignoreById(
+      userId,
+      id,
+    );
     return { data: { updated } };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('mark-read-by-kind')
-  async markReadByKind(
-    @CurrentUserId() userId: string,
-    @Body() body: unknown,
-  ) {
-    const { kind } = z.object({
-      kind: z.enum(['word_of_the_day', 'quote_of_the_day', 'checkin_reminder', 'on_this_day']),
-    }).parse(body);
-    await this.notifications.markReadByKind(userId, kind);
+  @Post("mark-read-by-kind")
+  async markReadByKind(@CurrentUserId() userId: string, @Body() body: unknown) {
+    const { kind } = z
+      .object({
+        kind: z.enum([
+          "word_of_the_day",
+          "quote_of_the_day",
+          "checkin_reminder",
+          "on_this_day",
+        ]),
+      })
+      .parse(body);
+    await this.notificationReadStateService.markReadByKind(userId, kind);
     return { data: {} };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('nudges/:actorUserId/mark-read')
+  @Post("nudges/:actorUserId/mark-read")
   async markNudgesReadByActor(
     @CurrentUserId() userId: string,
-    @Param('actorUserId') actorUserId: string,
+    @Param("actorUserId") actorUserId: string,
   ) {
-    const updatedCount = await this.notifications.markNudgesReadByActor(userId, actorUserId);
+    const updatedCount =
+      await this.notificationNudgesService.markNudgesReadByActor(
+        userId,
+        actorUserId,
+      );
     return { data: { updatedCount } };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('nudges/:actorUserId/nudged-back')
+  @Post("nudges/:actorUserId/nudged-back")
   async markNudgesNudgedBackByActor(
     @CurrentUserId() userId: string,
-    @Param('actorUserId') actorUserId: string,
+    @Param("actorUserId") actorUserId: string,
   ) {
-    const updatedCount = await this.notifications.markNudgesNudgedBackByActor(userId, actorUserId);
+    const updatedCount =
+      await this.notificationNudgesService.markNudgesNudgedBackByActor(
+        userId,
+        actorUserId,
+      );
     return { data: { updatedCount } };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post(':id/nudged-back')
+  @Post(":id/nudged-back")
   async markNudgeNudgedBackById(
     @CurrentUserId() userId: string,
-    @Param('id') id: string,
+    @Param("id") id: string,
   ) {
-    const updated = await this.notifications.markNudgeNudgedBackById(userId, id);
+    const updated =
+      await this.notificationNudgesService.markNudgeNudgedBackById(userId, id);
     return { data: { updated } };
   }
 
   @UseGuards(AuthGuard)
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('nudges/:actorUserId/ignore')
+  @Post("nudges/:actorUserId/ignore")
   async ignoreNudgesByActor(
     @CurrentUserId() userId: string,
-    @Param('actorUserId') actorUserId: string,
+    @Param("actorUserId") actorUserId: string,
   ) {
-    const updatedCount = await this.notifications.ignoreNudgesByActor(userId, actorUserId);
+    const updatedCount =
+      await this.notificationNudgesService.ignoreNudgesByActor(
+        userId,
+        actorUserId,
+      );
     return { data: { updatedCount } };
   }
 }

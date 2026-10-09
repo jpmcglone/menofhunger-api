@@ -1,11 +1,17 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
+import { NotificationQueryService } from "../../notifications/notification-query.service";
+
+import { PostsFeedComposeService } from "../../posts/posts-feed-compose.service";
+import { PostsDraftsService } from "../../posts/posts-drafts.service";
+import { NOT_BANNED_USER_WHERE } from "../../../common/prisma-selects/user.where";
+import { USER_BRIEF_SELECT } from "../../../common/prisma-selects/user.select";
+
 import { PrismaService } from "../../prisma/prisma.service";
 import { AdminEngagementService } from "../admin-engagement.service";
 import { readAdminAnalytics } from "../admin-analytics.read";
 import { LandingService } from "../../landing/landing.service";
-import { NotificationsService } from "../../notifications/notifications.service";
 import { BookmarksService } from "../../bookmarks/bookmarks.service";
-import { PostsService } from "../../posts/posts.service";
+
 import { sharedTools } from "../../mcp/mcp-tools";
 
 @Injectable()
@@ -14,9 +20,13 @@ export class DelegationEvidenceService {
     private readonly prisma: PrismaService,
     private readonly engagement: AdminEngagementService,
     private readonly landing: LandingService,
-    private readonly notifications: NotificationsService,
+    @Inject(NotificationQueryService)
+    private readonly notifications: Pick<NotificationQueryService, "list">,
     private readonly bookmarks: BookmarksService,
-    private readonly posts: PostsService,
+    @Inject(PostsFeedComposeService)
+    private readonly postsCompose: Pick<PostsFeedComposeService, "getByIds">,
+    @Inject(PostsDraftsService)
+    private readonly postsDrafts: Pick<PostsDraftsService, "listDrafts">,
   ) {}
   async read(workflow: string, ownerId: string, actorId: string) {
     const now = new Date();
@@ -34,14 +44,12 @@ export class DelegationEvidenceService {
         where: {
           createdAt: { gte: new Date(now.getTime() - 7 * 86400000) },
           accountKind: "person",
-          bannedAt: null,
+          ...NOT_BANNED_USER_WHERE,
           isBot: false,
           usernameIsSet: true,
         },
         select: {
-          id: true,
-          username: true,
-          name: true,
+          ...USER_BRIEF_SELECT,
           bio: true,
           interests: true,
           createdAt: true,
@@ -140,16 +148,14 @@ export class DelegationEvidenceService {
         orderBy: { createdAt: "desc" },
         take: 20,
       });
-      evidence.savedPosts = await this.posts.getByIds({
+      evidence.savedPosts = await this.postsCompose.getByIds({
         viewerUserId: actorId,
         ids: saved.map((p) => p.postId),
       });
       evidence.profile = await this.prisma.user.findUnique({
         where: { id: actorId },
         select: {
-          id: true,
-          username: true,
-          name: true,
+          ...USER_BRIEF_SELECT,
           bio: true,
           website: true,
         },
@@ -162,7 +168,7 @@ export class DelegationEvidenceService {
     }
     if (workflow === "news" || workflow === "personal")
       evidence.drafts = (
-        await this.posts.listDrafts({
+        await this.postsDrafts.listDrafts({
           userId: actorId,
           limit: 10,
           cursor: null,

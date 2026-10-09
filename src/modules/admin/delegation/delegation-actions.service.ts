@@ -1,11 +1,12 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from "@nestjs/common";
+import { Inject } from '@nestjs/common';
+import { PostsDraftsService } from '../../posts/posts-drafts.service';
+import { PostsFeedLookupService } from '../../posts/posts-feed-lookup.service';
+import { PostsMutationEditsService } from '../../posts/posts-mutation-edits.service';
+import { PostsMutationWriteService } from '../../posts/posts-mutation-write.service';
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../prisma/prisma.service";
 import { BoardService } from "../../board/board.service";
-import { PostsService } from "../../posts/posts.service";
+
 import { ScheduledPostsService } from "../../posts/scheduled-posts.service";
 import { BookmarksService } from "../../bookmarks/bookmarks.service";
 import { SpacesService } from "../../spaces/spaces.service";
@@ -20,6 +21,7 @@ import { actionSchema, type DelegatedActionInput } from "./delegation.schemas";
 
 import { createHash } from "node:crypto";
 import { PostsReadService } from '../../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../../common/prisma/where';
 export function actionSubjectKey(
   ownerId: string,
   actorId: string,
@@ -46,7 +48,10 @@ export function publicationBody(
 export class DelegationActionsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly posts: PostsService,
+    @Inject(PostsDraftsService) private readonly postsDrafts: Pick<PostsDraftsService, 'listDrafts' | 'createDraft' | 'updateDraft'>,
+    @Inject(PostsFeedLookupService) private readonly postsLookup: Pick<PostsFeedLookupService, 'getById'>,
+    @Inject(PostsMutationEditsService) private readonly postsMutationEdits: Pick<PostsMutationEditsService, 'publishFromOnlyMe' | 'updatePost'>,
+    @Inject(PostsMutationWriteService) private readonly postsMutationWrite: Pick<PostsMutationWriteService, 'createPost'>,
     private readonly scheduled: ScheduledPostsService,
     private readonly bookmarks: BookmarksService,
     private readonly spaces: SpacesService,
@@ -67,12 +72,9 @@ export class DelegationActionsService {
     input: DelegatedActionInput,
     excludeId?: string,
   ) {
-    const field =
-      input.operation === "post_publish" && input.parentId ? "parentId" : null;
-    if (!field) return;
-    const value = (input as unknown as Record<string, unknown>)[
-      field
-    ] as string;
+    if (input.operation !== "post_publish" || !input.parentId) return;
+    const field = "parentId";
+    const value = input.parentId;
     const existing = await this.prisma.delegationAction.findFirst({
       where: {
         ...(excludeId ? { id: { not: excludeId } } : {}),
@@ -89,7 +91,7 @@ export class DelegationActionsService {
       );
   }
   async drafts(actorId: string) {
-    return this.posts.listDrafts({ userId: actorId, limit: 30, cursor: null });
+    return this.postsDrafts.listDrafts({ userId: actorId, limit: 30, cursor: null });
   }
   async snapshot(
     actorId: string,
@@ -108,11 +110,11 @@ export class DelegationActionsService {
     let row: unknown = { state: "new" };
     switch (input.operation) {
       case "post_update":
-        row = await this.postsRead.read.findFirst({
+        row = await this.postsRead.findFirst({
           where: {
             id: input.postId,
             userId: actorId,
-            deletedAt: null,
+            ...NOT_DELETED,
             isDraft: false,
           },
           select: { id: true, body: true, editedAt: true },
@@ -120,13 +122,13 @@ export class DelegationActionsService {
         break;
       case "post_publish":
         if (input.parentId)
-          row = await this.posts.getById({
+          row = await this.postsLookup.getById({
             viewerUserId: actorId,
             id: input.parentId,
           });
         break;
       case "bookmark_save":
-        row = await this.posts.getById({
+        row = await this.postsLookup.getById({
           viewerUserId: actorId,
           id: input.postId,
         });
@@ -199,16 +201,16 @@ export class DelegationActionsService {
       );
   }
   private async draft(actorId: string, id: string) {
-    const draft = await this.postsRead.read.findFirst({
+    const draft = await this.postsRead.findFirst({
       where: {
         id,
         userId: actorId,
         isDraft: true,
-        deletedAt: null,
+        ...NOT_DELETED,
         scheduledAt: null,
       },
       include: {
-        media: { where: { deletedAt: null }, orderBy: { position: "asc" } },
+        media: { where: NOT_DELETED, orderBy: { position: "asc" } },
       },
     });
     if (!draft)
@@ -258,7 +260,7 @@ export class DelegationActionsService {
           );
         }
         const result = input.draftId
-          ? await this.posts.publishFromOnlyMe({
+          ? await this.postsMutationEdits.publishFromOnlyMe({
               userId: actorId,
               sourcePostId: input.draftId,
               body,
@@ -267,7 +269,7 @@ export class DelegationActionsService {
                 | "verifiedOnly"
                 | "premiumOnly",
             })
-          : await this.posts.createPost({
+          : await this.postsMutationWrite.createPost({
               userId: actorId,
               body,
               visibility: input.visibility,
@@ -287,7 +289,7 @@ export class DelegationActionsService {
         );
       }
       case "post_draft": {
-        await this.posts.createDraft({
+        await this.postsDrafts.createDraft({
           userId: actorId,
           body: input.body,
           media: null,
@@ -298,7 +300,7 @@ export class DelegationActionsService {
         );
       }
       case "post_draft_update":
-        await this.posts.updateDraft({
+        await this.postsDrafts.updateDraft({
           userId: actorId,
           draftId: input.draftId,
           body: input.body,
@@ -309,7 +311,7 @@ export class DelegationActionsService {
           actorId === ownerId ? "/only-me" : null,
         );
       case "post_update":
-        await this.posts.updatePost({
+        await this.postsMutationEdits.updatePost({
           userId: actorId,
           postId: input.postId,
           body: input.body,

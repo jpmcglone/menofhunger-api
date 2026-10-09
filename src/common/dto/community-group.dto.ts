@@ -1,12 +1,5 @@
 import type { AvatarVideoDto } from './avatar-video.dto';
-import type {
-  CommunityGroup,
-  CommunityGroupInvite,
-  CommunityGroupInviteStatus,
-  CommunityGroupJoinPolicy,
-  CommunityGroupMemberRole,
-  CommunityGroupMemberStatus,
-} from '@prisma/client';
+import type { CommunityGroup, CommunityGroupInvite, CommunityGroupInviteStatus, CommunityGroupJoinPolicy, CommunityGroupMemberRole, CommunityGroupMemberStatus } from '@prisma/client';
 import { toUserListDto, type UserListDto, type UserListRow } from './user.dto';
 
 const PREVIEW_DESC_LEN = 220;
@@ -86,14 +79,17 @@ export type CommunityGroupMemberListItemDto = {
   joinedAt: string;
 };
 
+function groupDescriptionPreview(description: string | null): string {
+  const raw = (description ?? '').replace(/\s+/g, ' ').trim();
+  return raw.length <= PREVIEW_DESC_LEN ? raw : `${raw.slice(0, PREVIEW_DESC_LEN - 1)}…`;
+}
+
 export function toCommunityGroupPreviewDto(
   g: CommunityGroup,
   viewerMembership: { status: CommunityGroupMemberStatus; role: CommunityGroupMemberRole } | null,
 ): CommunityGroupPreviewDto {
   const shell = toCommunityGroupShellDto(g, viewerMembership);
-  const raw = (g.description ?? '').replace(/\s+/g, ' ').trim();
-  const descriptionPreview =
-    raw.length <= PREVIEW_DESC_LEN ? raw : `${raw.slice(0, PREVIEW_DESC_LEN - 1)}…`;
+  const descriptionPreview = groupDescriptionPreview(g.description);
   return {
     id: shell.id,
     slug: shell.slug,
@@ -158,9 +154,7 @@ export type CommunityGroupInviteDto = {
 };
 
 export function toCommunityGroupInviteGroupRefDto(g: CommunityGroup): CommunityGroupInviteGroupRefDto {
-  const raw = (g.description ?? '').replace(/\s+/g, ' ').trim();
-  const descriptionPreview =
-    raw.length <= PREVIEW_DESC_LEN ? raw : `${raw.slice(0, PREVIEW_DESC_LEN - 1)}…`;
+  const descriptionPreview = groupDescriptionPreview(g.description);
   return {
     id: g.id,
     slug: g.slug,

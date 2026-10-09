@@ -1,12 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { MarvinMode } from '@prisma/client';
 import { toAvatarVideoDto, type AvatarVideoDto } from '../../../common/dto/avatar-video.dto';
-import type {
-  MarvinContextCardDto,
-  MarvinCreditSummaryDto,
-  MarvinMeDto,
-  MarvinModeDto,
-} from '../../../common/dto/marvin';
+import type { MarvinContextCardDto, MarvinCreditSummaryDto, MarvinMeDto, MarvinModeDto } from '../../../common/dto/marvin';
 import { publicAssetUrl } from '../../../common/assets/public-asset-url';
 import { AppConfigService } from '../../app/app-config.service';
 import { PrismaService } from '../../prisma/prisma.service';

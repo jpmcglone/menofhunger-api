@@ -1,33 +1,15 @@
+import { isUniqueViolation } from '../../common/prisma/errors';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { toUserListDto } from '../../common/dto/user.dto';
-import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
-import type {
-  AffiliateSummaryDto,
-  AffiliateEarningDto,
-  AdminAffiliateUserDto,
-  AdminAffiliateSettleDto,
-} from '../../common/dto/affiliate.dto';
+import { USER_BRIEF_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
+import type { AffiliateSummaryDto, AffiliateEarningDto, AdminAffiliateUserDto, AdminAffiliateSettleDto } from '../../common/dto/affiliate.dto';
 import type { RecruitDto } from '../../common/dto/referral.dto';
 
-/** Cash rates in cents per recruit milestone. */
-export const AFFILIATE_RATES_CENTS = {
-  signup: 100,
-  verified: 300,
-  premium: 1000,
-  premium60d: 1000,
-} as const;
 
-/** Minimum pending balance required for admin to settle a payout. */
-export const AFFILIATE_MIN_PAYOUT_CENTS = 5_000; // $50
-
-/** Per-member lifetime earnings cap. Stops new accrual once reached. */
-export const AFFILIATE_CAP_CENTS = 100_000; // $1,000
-
-/** Days after first premium payment before the retention milestone fires. */
-export const AFFILIATE_PREMIUM_RETENTION_DAYS = 60;
+import { AFFILIATE_CAP_CENTS, AFFILIATE_MIN_PAYOUT_CENTS, AFFILIATE_RATES_CENTS } from './affiliate.constants';
 
 type EarningType = keyof typeof AFFILIATE_RATES_CENTS;
 
@@ -139,7 +121,7 @@ export class AffiliateService {
       }
     } catch (err: unknown) {
       // P2002 = unique constraint violation → already recorded, ignore.
-      if ((err as any)?.code === 'P2002') {
+      if (isUniqueViolation(err)) {
         this.logger.debug(`[affiliate] Earning already recorded: recruit=${recruitId} type=${type}`);
       } else {
         throw err;
@@ -195,9 +177,7 @@ export class AffiliateService {
     const affiliates = await this.prisma.user.findMany({
       where: { affiliateAt: { not: null } },
       select: {
-        id: true,
-        username: true,
-        name: true,
+        ...USER_BRIEF_SELECT,
         affiliateAt: true,
         _count: { select: { recruits: true } },
         affiliateEarningsAsAffiliate: {

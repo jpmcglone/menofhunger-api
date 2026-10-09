@@ -1,3 +1,4 @@
+import { NOT_BANNED_USER_WHERE } from '../prisma-selects/user.where';
 import { ChannelAccessService } from '../../modules/group-channels/channel-access.service';
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -5,6 +6,7 @@ import { PrismaService } from '../../modules/prisma/prisma.service';
 import { bellExcludedKindsForAccount } from '../../modules/notifications/notification-kinds';
 
 import { boardActivityWhere, withoutBoardActivity } from '../../modules/notifications/notification-category';
+import { NOT_DELETED } from '../prisma/where';
 
 export type IdentityBadgeSummary = { unreadBadgeCount: number; hasUnreadNotifications: boolean; hasUnreadBoard: boolean };
 
@@ -42,7 +44,7 @@ export class BadgeSummaryService {
       this.prisma.notification.count({ where: { ...board, kind: 'mention', deliveredAt: null } }),
       this.prisma.notification.findFirst({ where: { ...board, readAt: null }, select: { id: true } }),
       this.prisma.user.findUnique({ where: { id: userId }, select: { undeliveredGroupPostCount: true } }),
-      this.prisma.communityGroupInvite.count({ where: { inviteeUserId: userId, status: 'pending', expiresAt: { gt: new Date() }, group: { deletedAt: null } } }),
+      this.prisma.communityGroupInvite.count({ where: { inviteeUserId: userId, status: 'pending', expiresAt: { gt: new Date() }, group: NOT_DELETED } }),
       this.prisma.$queryRaw<Array<{ count: number | bigint }>>(Prisma.sql`
         SELECT COUNT(m.id)::int AS count FROM "MessageParticipant" mp
         JOIN "Message" m ON m."conversationId" = mp."conversationId"
@@ -73,7 +75,7 @@ export class BadgeSummaryService {
     const owner = await this.prisma.user.findUnique({ where: { id: ownerId }, select: { accountKind: true, bannedAt: true } });
     if (!owner || owner.bannedAt) return 0;
     const pages = owner.accountKind === 'page' ? [] : await this.prisma.userPageOperator.findMany({
-      where: { operatorUserId: ownerId, page: { bannedAt: null } }, select: { pageUserId: true },
+      where: { operatorUserId: ownerId, page: NOT_BANNED_USER_WHERE }, select: { pageUserId: true },
     });
     const summaries = await this.forIdentities([ownerId, ...pages.map(p => p.pageUserId)]);
     return [...summaries.values()].reduce((sum, s) => sum + s.unreadBadgeCount, 0);

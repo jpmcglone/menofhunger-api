@@ -1,5 +1,6 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 /** Single home for crew membership lookups used outside the crew module. */
 @Injectable()
@@ -15,7 +16,7 @@ export class CrewAccessService {
   /** Crew id of the user's non-deleted crew, or null. */
   async getActiveCrewIdForUser(userId: string): Promise<string | null> {
     const m = await this.prisma.crewMember.findFirst({
-      where: { userId, crew: { deletedAt: null } },
+      where: { userId, crew: NOT_DELETED },
       select: { crewId: true },
     });
     return m?.crewId ?? null;

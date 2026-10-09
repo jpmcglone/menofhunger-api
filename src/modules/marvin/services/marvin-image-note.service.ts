@@ -3,6 +3,7 @@ import { AppConfigService } from '../../app/app-config.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SideEffectsService } from '../../side-effects/side-effects.service';
 import { resolveMarvVisionUrl } from './marvin-vision-media';
+import { NOT_DELETED } from '../../../common/prisma/where';
 
 /** A caption this long is already searchable text; the note only helps photos with little or no writing. */
 export const IMAGE_NOTE_MAX_BODY_CHARS = 24;
@@ -42,10 +43,10 @@ export class MarvinImageNoteService {
     const rows = await this.prisma.postMedia.findMany({
       where: {
         postId: id,
-        deletedAt: null,
+        ...NOT_DELETED,
         source: 'upload',
         kind: { in: ['image', 'video'] },
-        post: { deletedAt: null, isDraft: false, kind: { not: 'repost' }, visibility: { not: 'onlyMe' } },
+        post: { ...NOT_DELETED, isDraft: false, kind: { not: 'repost' }, visibility: { not: 'onlyMe' } },
       },
       select: {
         kind: true,

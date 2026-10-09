@@ -10,6 +10,7 @@ import { integrationMonth } from "./integration-budget.policy";
 import { spendTotals } from "./integration-spend-totals";
 import { controlledPolicy } from "./integration-spend-controls";
 import { XPublicSnapshotService } from "./x-public-snapshot.service";
+import { NOT_DELETED } from '../../common/prisma/where';
 
 export type IntegrationAlertCondition = {
   key: string;
@@ -210,7 +211,7 @@ export class IntegrationOperationsService implements OnModuleInit {
     const localIds = refunded.map((row) => row.localId);
     if (!localIds.length) return;
     const withMedia = await this.prisma.postMedia.findMany({
-      where: { postId: { in: localIds }, deletedAt: null },
+      where: { postId: { in: localIds }, ...NOT_DELETED },
       select: { postId: true },
     });
     const mediaPosts = new Set(withMedia.map((row) => row.postId));

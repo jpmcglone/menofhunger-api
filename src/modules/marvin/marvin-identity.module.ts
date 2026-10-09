@@ -15,7 +15,7 @@ import { MarvinBotIdentityService } from './services/marvin-bot-identity.service
  *
  * `MarvinBotIdentityService` only depends on global providers (`PrismaService`,
  * `AppConfigService`, `PostsWriteService`), so we expose it as its own `@Global()` provider.
- * `MessagesService` / `PostsService` can inject it directly without creating a
+ * message and post mutation services can inject it directly without creating a
  * dependency cycle.
  */
 @Global()

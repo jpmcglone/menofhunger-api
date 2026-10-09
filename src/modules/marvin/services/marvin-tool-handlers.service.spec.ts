@@ -1,3 +1,5 @@
+import { MarvinMemberToolsService } from './marvin-member-tools.service';
+import { MarvinChatContextToolsService } from './marvin-tool-chat-context.service';
 import { MarvinToolHandlersService } from './marvin-tool-handlers.service';
 import type { MarvAIToolCallContext } from './marvin-ai.service';
 
@@ -120,7 +122,9 @@ function makeService() {
     appConfig,
     {} as any,
     {} as any, new PostsReadService(prisma as never),
-    platform);
+    platform,
+    new MarvinMemberToolsService(prisma, fake.cache, new PostsReadService(prisma as never)),
+    new MarvinChatContextToolsService(fake.cache, identity, new PostsReadService(prisma as never), prisma));
   return { svc, prisma, identity, cache: fake, contextCard, scripture, jobs, appConfig, platform };
 }
 

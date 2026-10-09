@@ -1,16 +1,10 @@
+import type { ProfileLinkDto } from './profile-links.dto';
 import type { AvatarVideoDto } from "./avatar-video.dto";
 import type { VerifiedStatus } from "@prisma/client";
 import type { MessageDto } from "../../modules/messages/message.dto";
 import type { NotificationDto } from "../../modules/notifications/notification.dto";
-import type {
-  UserDto,
-  UserListDto,
-  UserNotificationPreference,
-} from "./user.dto";
-import type {
-  ArticleCommentDto,
-  ArticleReactionSummaryDto,
-} from "./article.dto";
+import type { UserDto, UserListDto, UserNotificationPreference } from "./user.dto";
+import type { ArticleCommentDto, ArticleReactionSummaryDto } from "./article.dto";
 import type { PostDto, PostPollDto } from "./post.dto";
 import type { UserStatusDto } from "./presence.dto";
 import type { ScheduledPostDto } from "./scheduled-post.dto";
@@ -121,11 +115,16 @@ export type PublicProfileDto = {
   username: string | null;
   name: string | null;
   bio: string | null;
+  /** @deprecated Use `links` (legacyField 'website'); mirror written only by the links service. */
   website: string | null;
+  links: ProfileLinkDto[];
   xUsername: string | null;
   pickaxUsername: string | null;
+  /** @deprecated Use `links` (legacyField 'rumble'); mirror written only by the links service. */
   rumbleUrl: string | null;
+  /** @deprecated Use `links` (legacyField 'linkedin'); mirror written only by the links service. */
   linkedinUrl: string | null;
+  /** @deprecated Use `links` (legacyField 'youtube'); mirror written only by the links service. */
   youtubeUrl: string | null;
   locationDisplay: string | null;
   locationZip: string | null;

@@ -1,19 +1,11 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
-import { AuthGuard } from '../auth/auth.guard';
+import { AuthGuard } from '../auth/auth-public-api';
 import { CurrentUserId } from '../users/users.decorator';
 import { PersonAccountGuard } from '../pages/person-account.guard';
 import { toVerificationRequestPublicDto } from '../../common/dto';
 import { VerificationService } from './verification.service';
-
-const createRequestSchema = z
-  .object({
-    // Provider-agnostic for now; this is here so we can extend later without breaking clients.
-    videoCallConsent: z.literal(true).optional(),
-    providerHint: z.string().trim().min(1).max(50).optional(),
-  })
-  .partial();
+import { createRequestSchema } from './verification.schemas';
 
 @ApiTags('Verification')
 @UseGuards(AuthGuard)

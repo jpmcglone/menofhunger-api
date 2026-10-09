@@ -12,6 +12,7 @@ import {
   jobEditSchema,
 } from "./delegation.schemas";
 import { DelegationSideEffectsHandler } from "./delegation-side-effects.handler";
+import { actionDto } from "./delegation.mapper";
 
 describe("extended schedules", () => {
   const next = (s: object, after: string) =>
@@ -456,10 +457,7 @@ describe("removed GitHub integration", () => {
       expect(operations).not.toContain("github_issue");
   });
   it("preserves historical receipts without offering pending issues for approval", () => {
-    const service = Object.create(
-      DelegationService.prototype,
-    ) as DelegationService;
-    const result = service.actionDto({
+    const result = actionDto({
       id: "old",
       operation: "github_issue",
       title: "Old issue",

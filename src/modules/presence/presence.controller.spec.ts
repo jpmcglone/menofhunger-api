@@ -103,7 +103,7 @@ function makeController(opts?: {
     redis,
     appConfig,
     marvIdentity,
-    posts,
+    posts, posts,
     accountSwitch,
     callSessions,
     new OnlineMembersService(

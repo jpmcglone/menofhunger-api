@@ -29,6 +29,52 @@ if (!existsSync(entry)) {
   process.exit(1);
 }
 
+/**
+ * Walks every module reachable from the root and reports provider/controller constructor params whose
+ * emitted type is `undefined` or `Object` with no explicit `@Inject()` token. SWC emits
+ * `typeof X === "undefined" ? Object : X`, so a class still unloaded inside an import cycle silently
+ * becomes `Object` and only fails when Nest resolves it at boot.
+ */
+function findUnresolvedConstructorTypes(root) {
+  const seenModules = new Set();
+  const seenClasses = new Set();
+  const problems = [];
+  const unwrap = (x) => (x && typeof x === 'object' && typeof x.forwardRef === 'function' ? x.forwardRef() : x);
+  const checkClass = (cls, owner) => {
+    if (typeof cls !== 'function' || seenClasses.has(cls)) return;
+    seenClasses.add(cls);
+    const types = Reflect.getMetadata('design:paramtypes', cls) ?? [];
+    const explicit = new Set((Reflect.getMetadata('self:paramtypes', cls) ?? []).map((d) => d.index));
+    types.forEach((t, i) => {
+      if (explicit.has(i) || (t !== undefined && t !== Object)) return;
+      problems.push(`${owner} > ${cls.name} constructor param[${i}]`);
+    });
+  };
+  const visitDefinition = (owner, def) => {
+    for (const p of def.providers ?? []) checkClass(typeof p === 'function' ? p : p?.useClass, owner);
+    for (const c of def.controllers ?? []) checkClass(c, owner);
+    for (const i of def.imports ?? []) visit(i);
+  };
+  const visit = (entry) => {
+    const resolved = unwrap(entry);
+    if (!resolved || seenModules.has(resolved)) return;
+    seenModules.add(resolved);
+    if (typeof resolved === 'object') {
+      if (typeof resolved.module !== 'function') return;
+      visitDefinition(resolved.module.name, resolved);
+      visit(resolved.module);
+      return;
+    }
+    visitDefinition(resolved.name, {
+      providers: Reflect.getMetadata('providers', resolved),
+      controllers: Reflect.getMetadata('controllers', resolved),
+      imports: Reflect.getMetadata('imports', resolved),
+    });
+  };
+  visit(root);
+  return problems;
+}
+
 // Loading AppModule runs env validation, but this check never connects to anything. Docker builds
 // have no `.env` (see .dockerignore), so supply a placeholder rather than fail the build.
 process.env.DATABASE_URL ||= 'postgresql://module-graph-check@localhost:5432/unused';
@@ -38,6 +84,17 @@ try {
   const mod = require(entry);
   if (!mod?.AppModule) {
     console.error('check-module-graph: dist/modules/app/app.module.js did not export AppModule.');
+    process.exit(1);
+  }
+  const unresolved = findUnresolvedConstructorTypes(mod.AppModule);
+  if (unresolved.length) {
+    console.error('check-module-graph: constructor parameter types are missing at load time:\n');
+    for (const line of unresolved) console.error(`  ${line}`);
+    console.error(
+      '\nNest would fail to resolve these at startup. The injected class was `undefined` when the' +
+        '\nconsumer loaded, usually because it came through a barrel (`../x`) that sits in an import' +
+        '\ncycle. Import the class from its own file (`../x/x.service`) instead.',
+    );
     process.exit(1);
   }
   console.log('check-module-graph: module graph loads cleanly.');

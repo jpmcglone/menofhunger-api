@@ -32,7 +32,7 @@ export class PublicProfileCacheService<T extends { id: string; username: string 
       if (!userId) return null;
       const payload = await this.readByUserId(userId);
       // Safety: if username mapping is stale (username changed), don't return wrong profile.
-      const payloadUsername = String((payload as any)?.username ?? '').trim().toLowerCase();
+      const payloadUsername = String(payload?.username ?? '').trim().toLowerCase();
       if (payload && payloadUsername && payloadUsername !== username) {
         // Best-effort cleanup so future reads heal quickly.
         void this.redis.del(RedisKeys.publicProfileUsernameToId(username)).catch(() => undefined);
@@ -50,7 +50,7 @@ export class PublicProfileCacheService<T extends { id: string; username: string 
     const ttl = Math.max(0, Math.floor(ttlMs ?? 0));
     if (ttl <= 0) return;
 
-    const userId = String((value as any)?.id ?? '').trim();
+    const userId = String(value?.id ?? '').trim();
     if (!userId) return;
 
     const ver = await this.cacheInvalidation.profileVersion(userId);
@@ -58,7 +58,7 @@ export class PublicProfileCacheService<T extends { id: string; username: string 
     await this.redis.setJson(dataKey, value, { ttlMs: ttl });
 
     // Best-effort: maintain a short-lived username -> id resolver for versioned reads.
-    const username = String((value as any)?.username ?? '').trim().toLowerCase();
+    const username = String(value?.username ?? '').trim().toLowerCase();
     if (username) {
       void this.redis.setString(RedisKeys.publicProfileUsernameToId(username), userId, { ttlMs: ttl }).catch(() => undefined);
     }

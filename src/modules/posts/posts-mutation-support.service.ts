@@ -13,15 +13,14 @@ import { easternDayKey, yesterdayEasternDayKey } from "../../common/time/eastern
 import { computeCheckinStreakStats } from "../checkins/checkin-streaks";
 import { PostViewsService } from "../post-views/post-views.service";
 import { PosthogService } from "../../common/posthog/posthog.service";
-import {
-  resolveMentionUsernames as resolveMentionUsernamesQuery,
-  resolveMentionUsernamesMap as resolveMentionUsernamesMapQuery,
-} from "./posts-mentions.helpers";
+import { resolveMentionUsernames as resolveMentionUsernamesQuery, resolveMentionUsernamesMap as resolveMentionUsernamesMapQuery } from "./posts-mentions.helpers";
 import { PostsRankingService } from "./posts-ranking.service";
 import { PostsViewerEnrichmentService } from "./posts-viewer-enrichment.service";
 import { SiteConfigService } from "../site-config/site-config.service";
 import { SideEffectsService } from "../side-effects/side-effects.service";
 import { PostsTopicsClassifyService } from "./posts-topics-classify.service";
+import { postLinksCreate } from './post-links';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 
 @Injectable()
@@ -51,7 +50,7 @@ export class PostsMutationSupportService {
         userId,
         kind: "checkin",
         visibility: { not: "onlyMe" },
-        deletedAt: null,
+        ...NOT_DELETED,
         isDraft: false,
       },
       select: { createdAt: true, checkinDayKey: true },
@@ -157,6 +156,11 @@ export class PostsMutationSupportService {
       default:
         return 0;
     }
+  }
+
+  /** Nested-create data storing the body's normalized links (search joins previews through them). */
+  postLinksCreate(body: string) {
+    return postLinksCreate(body);
   }
 
   /**

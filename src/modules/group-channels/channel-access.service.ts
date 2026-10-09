@@ -1,9 +1,11 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { lockChannelGroup } from './channel-lifecycle';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { personalChannelMessageWhere } from './channel-attention-policy';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 @Injectable()
 export class ChannelAccessService {
@@ -51,7 +53,7 @@ export class ChannelAccessService {
       channel: {
         ...(groupId ? { groupId } : rollout.groupIds.length ? { groupId: { in: rollout.groupIds } } : {}),
         OR: [{ privacy: 'normal' }, { access: { some: { userId } } }],
-        group: { deletedAt: null, members: { some: { userId, status: 'active', user: { bannedAt: null, isBot: false, verifiedStatus: { not: 'none' } } } } },
+        group: { ...NOT_DELETED, members: { some: { userId, status: 'active', user: { ...NOT_BANNED_USER_WHERE, isBot: false, verifiedStatus: { not: 'none' } } } } },
       },
     } });
   }
@@ -84,8 +86,8 @@ export class ChannelAccessService {
     const channel = await db.groupChannel.findUnique({ where: { id: channelId } });
     if (!channel || channel.groupId !== groupId || !this.enabled(groupId)) return [];
     return db.communityGroupMember.findMany({
-      where: { groupId, status: 'active', group: { deletedAt: null }, user: {
-        bannedAt: null, isBot: false,
+      where: { groupId, status: 'active', group: NOT_DELETED, user: {
+        ...NOT_BANNED_USER_WHERE, isBot: false,
         verifiedStatus: { not: 'none' },
         ...(channel.privacy === 'private' ? { channelAccess: { some: { channelId } } } : {}),
       } },

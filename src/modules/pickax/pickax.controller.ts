@@ -4,15 +4,10 @@ import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Post, UseGuards, R
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
-import { AuthGuard, type AuthedRequest } from '../auth/auth.guard';
+import { AuthGuard, type AuthedRequest } from '../auth/auth-public-api';
 import { CurrentUserId } from '../users/users.decorator';
 import { PickaxConnectionService } from './pickax-connection.service';
-
-const connectSchema = z.object({
-  clientId: z.string().trim().min(1).max(200),
-  clientSecret: z.string().trim().min(1).max(500),
-  username: z.string().trim().max(200).optional(),
-});
+import { connectSchema } from './pickax.schemas';
 
 @ApiTags('integrations')
 @Controller('me/integrations/pickax')

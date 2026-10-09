@@ -1,35 +1,16 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Param,
-  Post,
-  Query,
-  Req,
-  UnauthorizedException,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { z } from 'zod';
 import type { Request } from 'express';
 import { getSessionCookie } from '../../common/session-cookie';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
 import { OptionalCurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import { PostViewsService } from './post-views.service';
-
-const markViewedBatchSchema = z.object({
-  postIds: z.array(z.string().trim().min(1)).min(1).max(50),
-  require_auth: z.boolean().optional(),
-  anon_id: z.string().trim().min(12).max(128).optional(),
-  source: z.string().trim().min(1).max(80).optional(),
-});
+import { PostViewsBatchService } from './post-views-batch.service';
+import { markViewedBatchSchema } from './post-views.schemas';
 
 @Controller()
 export class PostViewsController {
-  constructor(private readonly postViews: PostViewsService) {}
+  constructor(private readonly postViews: PostViewsBatchService) {}
 
   /**
    * Batch-mark posts as viewed. Returns whether each id counted as unique and/or total.

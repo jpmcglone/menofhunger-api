@@ -1,3 +1,4 @@
+import { makePostsSideEffectsHandler } from './posts-side-effects.testing';
 import { PostsSideEffectsHandler } from './posts-side-effects.handler';
 import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
 
@@ -52,7 +53,7 @@ function makeHandler(overrides: { prisma?: Record<string, any> } = {}) {
   const registry = new SideEffectsRegistry();
   const sideEffects: any = { dispatch: jest.fn() };
 
-  const handler = new PostsSideEffectsHandler(
+  const handler = makePostsSideEffectsHandler(
     prisma,
     notifications,
     presenceRealtime,
@@ -116,21 +117,21 @@ describe('PostsSideEffectsHandler media.searchNote.recorded', () => {
     (deps.prisma as any).mediaSearchNote = { findUnique: jest.fn(async () => note) };
     const topicsClassify = { classifyFromImageNote: jest.fn(async () => true) };
     const embeddings = { indexPostIfMissing: jest.fn(async () => true) };
-    (handler as any).topicsClassify = topicsClassify;
-    (handler as any).embeddings = embeddings;
+    (handler as any).engagementEffects.topicsClassify = topicsClassify;
+    (handler as any).engagementEffects.embeddings = embeddings;
     return { handler, topicsClassify, embeddings };
   }
 
   it('classifies with Jev from the note and embeds only a post without a vector', async () => {
     const { handler, topicsClassify, embeddings } = withNote({ note: 'A barbell on a squat rack' });
-    await (handler as any).onSearchNoteRecorded({ postId: 'p1', r2Key: 'posts/a.jpg' });
+    await (handler as any).engagementEffects.onSearchNoteRecorded({ postId: 'p1', r2Key: 'posts/a.jpg' });
     expect(topicsClassify.classifyFromImageNote).toHaveBeenCalledWith('p1', 'A barbell on a squat rack');
     expect(embeddings.indexPostIfMissing).toHaveBeenCalledWith('p1');
   });
 
   it('does nothing when the note is gone or the ids are blank', async () => {
     const gone = withNote(null);
-    await (gone.handler as any).onSearchNoteRecorded({ postId: 'p1', r2Key: 'posts/a.jpg' });
+    await (gone.handler as any).engagementEffects.onSearchNoteRecorded({ postId: 'p1', r2Key: 'posts/a.jpg' });
     expect(gone.topicsClassify.classifyFromImageNote).not.toHaveBeenCalled();
     expect(gone.embeddings.indexPostIfMissing).not.toHaveBeenCalled();
     const blank = withNote({ note: 'x note' });
@@ -963,5 +964,28 @@ describe('explicit Board Marv requests', () => {
       actorUserId: 'alice', addedMentionIds: ['bob'], visibility: 'public', requestedMarvMode: null,
     });
     expect(deps.jobs.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe('shared-post queued feed delivery', () => {
+  it.each(['articleShare', 'fitnessShare'] as const)('retains %s previews and filters follower visibility when rehydrating the committed row', async kind => {
+    const { handler, deps } = makeHandler();
+    const preview = kind === 'articleShare'
+      ? { article: { id: 'article', title: 'Article', excerpt: 'Preview', visibility: 'verifiedOnly', author: { id: 'writer', username: 'writer' } } }
+      : { fitnessShare: { id: 'fitness', shareType: 'activity', snapshot: { type: 'activity', data: { distanceM: 1000 } } } };
+    deps.prisma.post.findFirst.mockResolvedValue({
+      id: 'share', userId: 'author', body: '', kind, visibility: 'verifiedOnly', parentId: null, rootId: null,
+      quotedPostId: null, communityGroupId: null, checkinDayKey: null, createdAt: new Date(),
+      user: { id: 'author', name: 'Author', username: 'author', orgMemberships: [] }, mentions: [], media: [], poll: null, ...preview,
+    });
+    deps.prisma.follow.findMany.mockResolvedValue([
+      { followerId: 'eligible', notificationPreference: 'posts', follower: { verifiedStatus: 'identity' } },
+      { followerId: 'unverified', notificationPreference: 'posts', follower: { verifiedStatus: 'none' } },
+    ]);
+    await (handler as any).onPostCreated({ postId: 'share', actorUserId: 'author', didAwardStreak: false, requestedMarvMode: null });
+    expect(deps.presenceRealtime.emitFeedNewPost).toHaveBeenCalledWith(['eligible'], {
+      post: expect.objectContaining({ id: 'share', kind, ...(kind === 'articleShare' ? { article: expect.objectContaining({ id: 'article', title: 'Article', excerpt: 'Preview', visibility: 'verifiedOnly' }) } : preview) }),
+    });
+    expect(deps.notifications.create.mock.calls.map((args: any[]) => args[0].recipientUserId)).toEqual(['eligible']);
   });
 });

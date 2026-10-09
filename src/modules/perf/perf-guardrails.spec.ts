@@ -8,7 +8,11 @@ function readFromRepo(relativePath: string): string {
 describe('perf guardrails (structural)', () => {
   it('API code avoids include: { user: true } on service queries (explicit selects)', () => {
     const files = [
-      'src/modules/posts/posts.service.ts',
+      'src/modules/posts/posts-mutation-write.service.ts',
+      'src/modules/posts/posts-write-authorization.service.ts',
+      'src/modules/posts/posts-write-persistence.service.ts',
+      'src/modules/posts/posts-feed-compose.service.ts',
+      'src/modules/posts/posts-shared-write.service.ts',
       'src/modules/search/search.service.ts',
       'src/modules/topics/topics.service.ts',
       'src/modules/auth/auth.service.ts',
@@ -21,4 +25,3 @@ describe('perf guardrails (structural)', () => {
     }
   });
 });
-

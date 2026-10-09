@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
-import { AuthGuard, type AuthedRequest } from '../auth/auth.guard';
+import { AuthGuard, type AuthedRequest } from '../auth/auth-public-api';
 import { AvatarVideoService } from './avatar-video.service';
 import { AVATAR_VIDEO_MAX_DURATION_SECONDS, AVATAR_VIDEO_MAX_INPUT_BYTES, avatarVideoSelectionSchema } from './avatar-video-policy';
 

@@ -1,5 +1,7 @@
+import { isUniqueViolation } from '../../common/prisma/errors';
+import { findGroupMemberStatus, listTierEligibleGroupMemberIds } from '../viewer/group-membership.queries';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
@@ -10,12 +12,13 @@ import { PosthogService } from '../../common/posthog/posthog.service';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { toPostDto } from '../../common/dto/post.dto';
 import { PostsRankingService } from './posts-ranking.service';
-import { PostsFeedQueryService } from './posts-feed-query.service';
+import { PostsFeedLookupService } from './posts-feed-lookup.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 /**
  * Post engagement mutations: boosts and flat reposts (poll voting lives in
  * PollsService). Owns the notification + realtime + score-refresh fan-out for
- * each engagement action. Uses PostsFeedQueryService for access-checked
+ * each engagement action. Uses PostsFeedLookupService for access-checked
  * single-post reads.
  */
 @Injectable()
@@ -31,7 +34,7 @@ export class PostsEngagementService {
     private readonly postViews: PostViewsService,
     private readonly posthog: PosthogService,
     private readonly ranking: PostsRankingService,
-    private readonly feedQuery: PostsFeedQueryService,
+    private readonly lookup: PostsFeedLookupService,
   ) {}
 
   private async ensureUserCanBoost(userId: string) {
@@ -76,7 +79,7 @@ export class PostsEngagementService {
 
     const booster = await this.ensureUserCanBoost(userId);
 
-    const post = await this.feedQuery.getById({ viewerUserId: userId, id });
+    const post = await this.lookup.getById({ viewerUserId: userId, id });
     if (post.deletedAt) throw new BadRequestException('Deleted posts cannot be boosted.');
     if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be boosted.');
 
@@ -172,7 +175,7 @@ export class PostsEngagementService {
 
     await this.ensureUserCanBoost(userId);
 
-    const post = await this.feedQuery.getById({ viewerUserId: userId, id });
+    const post = await this.lookup.getById({ viewerUserId: userId, id });
     if (post.deletedAt) throw new BadRequestException('Deleted posts cannot be boosted.');
     if (post.visibility === 'onlyMe') throw new BadRequestException('Only-me posts cannot be boosted.');
 
@@ -248,7 +251,7 @@ export class PostsEngagementService {
 
     // Resolve the canonical original post (flatten repost-of-repost).
     const targetPost = await this.prisma.post.findFirst({
-      where: { id, deletedAt: null },
+      where: { id, ...NOT_DELETED },
       select: { id: true, userId: true, visibility: true, kind: true, repostedPostId: true, communityGroupId: true },
     });
     if (!targetPost) throw new NotFoundException('Post not found.');
@@ -258,7 +261,7 @@ export class PostsEngagementService {
     let canonicalId: string = id;
     if (targetPost.kind === 'repost' && targetPost.repostedPostId) {
       const canonical = await this.prisma.post.findFirst({
-        where: { id: targetPost.repostedPostId, deletedAt: null },
+        where: { id: targetPost.repostedPostId, ...NOT_DELETED },
         select: { id: true, userId: true, visibility: true, communityGroupId: true },
       });
       if (!canonical) throw new NotFoundException('Post not found.');
@@ -275,10 +278,7 @@ export class PostsEngagementService {
     // can only repost into a group you're allowed to post in.
     const canonicalGroupId = (canonicalPost as { communityGroupId?: string | null }).communityGroupId ?? null;
     if (canonicalGroupId) {
-      const membership = await this.prisma.communityGroupMember.findUnique({
-        where: { groupId_userId: { groupId: canonicalGroupId, userId } },
-        select: { status: true },
-      });
+      const membership = await findGroupMemberStatus(this.prisma, canonicalGroupId, userId);
       if (!membership || membership.status !== 'active') {
         throw new ForbiddenException('Join this group to repost here.');
       }
@@ -329,14 +329,13 @@ export class PostsEngagementService {
       repostCount = txResult.repostCount;
     } catch (e: unknown) {
       if (
-        e instanceof Prisma.PrismaClientKnownRequestError &&
-        e.code === 'P2002'
+        isUniqueViolation(e)
       ) {
         // Unique constraint violation: another concurrent request already created the repost.
         // Return the existing repost row idempotently.
         this.logger.debug(`repostPost: P2002 race on (userId=${userId}, canonicalId=${canonicalId}), returning existing repost`);
         const existing = await this.prisma.post.findFirst({
-          where: { userId, kind: 'repost', repostedPostId: canonicalId, deletedAt: null },
+          where: { userId, kind: 'repost', repostedPostId: canonicalId, ...NOT_DELETED },
           select: { id: true },
         });
         const countRow = await this.prisma.post.findUnique({ where: { id: canonicalId }, select: { repostCount: true } });
@@ -417,35 +416,30 @@ export class PostsEngagementService {
         poll: { include: { options: { orderBy: { position: 'asc' as const } } } },
       };
       const [repostRow, canonicalRow] = await Promise.all([
-        this.prisma.post.findFirst({ where: { id: repostId, deletedAt: null }, include }),
-        this.prisma.post.findFirst({ where: { id: canonicalId, deletedAt: null }, include }),
+        this.prisma.post.findFirst({ where: { id: repostId, ...NOT_DELETED }, include }),
+        this.prisma.post.findFirst({ where: { id: canonicalId, ...NOT_DELETED }, include }),
       ]);
       if (!repostRow || !canonicalRow) return;
 
       const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-      const repostedPostDto = toPostDto(canonicalRow as any, baseUrl, {
+      const repostedPostDto = toPostDto(canonicalRow, baseUrl, {
         viewerHasBoosted: false,
         includeInternal: false,
       });
-      const repostDto = toPostDto(repostRow as any, baseUrl, {
+      const repostDto = toPostDto(repostRow, baseUrl, {
         viewerHasBoosted: false,
         includeInternal: false,
         repostedPost: repostedPostDto,
       });
-      const repostVisibility = (repostRow as any).visibility ?? 'public';
+      const repostVisibility = repostRow.visibility ?? 'public';
       if (repostVisibility === 'public' || repostVisibility === 'verifiedOnly') {
         this.presenceRealtime.emitGroupNewPost(groupId, { groupId, post: repostDto });
       } else {
-        const eligibleMembers = await this.prisma.communityGroupMember.findMany({
-          where: { groupId, status: 'active' },
-          select: { userId: true, user: { select: { premium: true, premiumPlus: true, verifiedStatus: true } } },
-        });
-        const eligible = eligibleMembers
-          .filter((m) => {
-            if (repostVisibility === 'premiumOnly') return m.user.premium || m.user.premiumPlus;
-            return (m.user.verifiedStatus && m.user.verifiedStatus !== 'none') || m.user.premium || m.user.premiumPlus;
-          })
-          .map((m) => m.userId);
+        const eligible = await listTierEligibleGroupMemberIds(
+          this.prisma,
+          groupId,
+          repostVisibility === 'premiumOnly' ? 'premiumOnly' : 'verifiedOnly',
+        );
         if (eligible.length > 0) {
           this.presenceRealtime.emitGroupNewPost(groupId, { groupId, post: repostDto }, { eligibleMemberUserIds: eligible });
         }
@@ -462,7 +456,7 @@ export class PostsEngagementService {
 
     // Resolve canonical post (works whether caller passes repostId or original postId).
     const targetPost = await this.prisma.post.findFirst({
-      where: { id, deletedAt: null },
+      where: { id, ...NOT_DELETED },
       select: { id: true, userId: true, kind: true, repostedPostId: true },
     });
     if (!targetPost) throw new NotFoundException('Post not found.');
@@ -474,7 +468,7 @@ export class PostsEngagementService {
 
     // Find the viewer's flat repost of the canonical post.
     const existingRepost = await this.prisma.post.findFirst({
-      where: { userId, kind: 'repost', repostedPostId: canonicalId, deletedAt: null },
+      where: { userId, kind: 'repost', repostedPostId: canonicalId, ...NOT_DELETED },
       select: { id: true },
     });
     if (!existingRepost) {
@@ -552,7 +546,7 @@ export class PostsEngagementService {
       };
       const [repostRow, followRows] = await Promise.all([
         this.prisma.post.findFirst({
-          where: { id: repostId, deletedAt: null },
+          where: { id: repostId, ...NOT_DELETED },
           include: {
             ...include,
             // Also load the original post so we can embed it in the DTO.
@@ -568,11 +562,11 @@ export class PostsEngagementService {
       if (!repostRow || followRows.length === 0) return;
 
       const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-      const repostedOriginal = (repostRow as any).repostedPost;
+      const repostedOriginal = repostRow.repostedPost;
       const repostedPostDto = repostedOriginal
         ? toPostDto(repostedOriginal, baseUrl, { viewerHasBoosted: false, includeInternal: false })
         : undefined;
-      const repostDto = toPostDto(repostRow as any, baseUrl, {
+      const repostDto = toPostDto(repostRow, baseUrl, {
         viewerHasBoosted: false,
         includeInternal: false,
         repostedPost: repostedPostDto,

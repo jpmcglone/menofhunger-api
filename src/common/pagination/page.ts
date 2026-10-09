@@ -11,11 +11,11 @@ export function clampLimit(
  * Turn `limit + 1` fetched rows into a page. When more than `limit` rows came back the extra
  * row is dropped and `nextCursor` is derived from the last returned row.
  */
-export function toPage<T>(
+export function toPage<T, C = string>(
   rows: T[],
   limit: number,
-  cursorOf: (row: T) => string,
-): { items: T[]; nextCursor: string | null } {
+  cursorOf: (row: T) => C,
+): { items: T[]; nextCursor: C | null } {
   const hasMore = rows.length > limit;
   const items = hasMore ? rows.slice(0, limit) : rows;
   const last = items[items.length - 1];

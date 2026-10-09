@@ -9,3 +9,7 @@ coverage
 # Cursor IDE runtime / debug output
 .cursor/debug.log
 
+
+# Generated Python bytecode
+__pycache__/
+*.pyc

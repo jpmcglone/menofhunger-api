@@ -1,12 +1,8 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Newsletter, NewsletterStatus, Prisma } from '@prisma/client';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
-import type {
-  NewsletterAdminDto,
-  NewsletterAudienceCountDto,
-  NewsletterAudienceFilter,
-  NewsletterPreviewDto,
-} from '../../common/dto/newsletter.dto';
+import type { NewsletterAdminDto, NewsletterAudienceCountDto, NewsletterAudienceFilter, NewsletterPreviewDto } from '../../common/dto/newsletter.dto';
 import { audienceFiltersWhere, parseAudienceFilters } from './newsletter-audience';
 import { AppConfigService } from '../app/app-config.service';
 import { EmailService } from '../email/email.service';
@@ -14,10 +10,7 @@ import { JOBS } from '../jobs/jobs.constants';
 import { JobsService } from '../jobs/jobs.service';
 import { NotificationPreferencesService } from '../notifications/notification-preferences.service';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  newsletterListId,
-  oneClickUnsubscribeUrl,
-} from './email-unsubscribe.helpers';
+import { newsletterListId, oneClickUnsubscribeUrl } from './email-unsubscribe.helpers';
 import { renderNewsletterEmail } from './newsletter-render';
 import { issueNewsletterUnsubscribeToken, verifyNewsletterUnsubscribeToken } from './newsletter-unsubscribe-token';
 import { varsForUser, type NewsletterVars } from './newsletter-vars';
@@ -352,7 +345,7 @@ export class NewslettersService {
     return {
       email: { not: null },
       emailVerifiedAt: { not: null },
-      bannedAt: null,
+      ...NOT_BANNED_USER_WHERE,
       isBot: false,
       AND: [{ OR: prefsOr }, ...audienceFiltersWhere(filters, now)],
     };

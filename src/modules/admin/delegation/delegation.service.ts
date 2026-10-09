@@ -1,20 +1,10 @@
+import { USER_BRIEF_SELECT } from '../../../common/prisma-selects/user.select';
 import { delegationTemplates } from "./delegation-templates";
 import { SideEffectsService } from "../../side-effects/side-effects.service";
 import { sharedTools } from "../../mcp/mcp-tools";
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  HttpException,
-  NotFoundException,
-} from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, HttpException, NotFoundException } from "@nestjs/common";
 import { isDeepStrictEqual } from "node:util";
-import type {
-  DelegationAction,
-  DelegationJob,
-  DelegationRun,
-  Prisma,
-} from "@prisma/client";
+import type { DelegationAction, DelegationJob, DelegationRun, Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AppConfigService } from "../../app/app-config.service";
 import { PresenceRealtimeService } from "../../presence/presence-realtime.service";
@@ -22,32 +12,21 @@ import { JobsService } from "../../jobs/jobs.service";
 import { JOBS } from "../../jobs/jobs.constants";
 import { MarvinAIService } from "../../marvin/services/marvin-ai.service";
 import { MarvinAdminService } from "../../marvin/services/marvin-admin.service";
-import type {
-  DelegationActionDto,
-  DelegationJobDto,
-  DelegationWorkspaceDto,
-} from "../../../common/dto/delegation.dto";
+import type { DelegationJobDto, DelegationWorkspaceDto } from "../../../common/dto/delegation.dto";
 import { DelegationPolicyService } from "./delegation-policy.service";
-import {
-  DelegationActionsService,
-  actionSubjectKey,
-} from "./delegation-actions.service";
-import {
-  actionSchema,
-  jobInputSchema,
-  scheduleSchema,
-  jobEditSchema,
-  workflows,
-  workflowOperations,
-  type JobInput,
-} from "./delegation.schemas";
+import { DelegationActionsService, actionSubjectKey } from "./delegation-actions.service";
+import { actionSchema, jobInputSchema, scheduleSchema, jobEditSchema, workflows, workflowOperations, type JobInput } from "./delegation.schemas";
 import { nextDelegationRun } from "./delegation.schedule";
+import { snapshot, actionDto } from './delegation.mapper';
+export type { RunSnapshot } from './delegation.schemas';
+import type { RunSnapshot } from './delegation.schemas';
+import { fromJsonValue } from '../../../common/prisma/json';
 
 export const delegationJson = (value: unknown): Prisma.InputJsonValue =>
   JSON.parse(JSON.stringify(value));
 export const jobInclude = {
   actor: {
-    select: { id: true, username: true, name: true, accountKind: true },
+    select: { ...USER_BRIEF_SELECT, accountKind: true },
   },
   runs: {
     orderBy: [{ createdAt: "desc" as const }, { id: "desc" as const }],
@@ -56,17 +35,6 @@ export const jobInclude = {
   },
 };
 type FullJob = Prisma.DelegationJobGetPayload<{ include: typeof jobInclude }>;
-export type RunSnapshot = Pick<
-  DelegationJob,
-  | "ownerId"
-  | "actorId"
-  | "title"
-  | "workflow"
-  | "instruction"
-  | "permission"
-  | "revision"
-  | "schedule"
->;
 @Injectable()
 export class DelegationService {
   constructor(
@@ -424,7 +392,7 @@ export class DelegationService {
       data: {
         jobId: job.id,
         requestKey,
-        jobSnapshot: delegationJson(this.snapshot(job)),
+        jobSnapshot: delegationJson(snapshot(job)),
       },
     });
     await this.enqueue(run.id);
@@ -472,7 +440,7 @@ export class DelegationService {
         data: {
           jobId: job.id,
           requestKey: `scheduled-${job.id}-${due.toISOString()}`,
-          jobSnapshot: delegationJson(this.snapshot(job)),
+          jobSnapshot: delegationJson(snapshot(job)),
         },
       });
     });
@@ -497,28 +465,6 @@ export class DelegationService {
     } catch {
       /* Recovered by the scheduler sweep. */
     }
-  }
-  snapshot(job: DelegationJob): RunSnapshot {
-    const {
-      ownerId,
-      actorId,
-      title,
-      workflow,
-      schedule,
-      instruction,
-      permission,
-      revision,
-    } = job;
-    return {
-      ownerId,
-      actorId,
-      title,
-      workflow,
-      schedule,
-      instruction,
-      permission,
-      revision,
-    };
   }
   async drafts(ownerId: string, jobId: string) {
     const job = await this.prisma.delegationJob.findFirst({
@@ -575,7 +521,7 @@ export class DelegationService {
       data: {
         jobId,
         requestKey: requestId,
-        jobSnapshot: delegationJson(this.snapshot(job)),
+        jobSnapshot: delegationJson(snapshot(job)),
         status: "review",
         summary: "A connected assistant prepared this action for your review.",
         completedAt: new Date(),
@@ -606,7 +552,7 @@ export class DelegationService {
     if (!action) throw new NotFoundException();
     const job = action.run.job;
     await this.policy.assertActor(ownerId, job.actorId);
-    if (action.status !== "pending") return this.actionDto(action);
+    if (action.status !== "pending") return actionDto(action);
     if (decision === "confirm" && action.operation === "github_issue")
       throw new BadRequestException(
         "GitHub issue creation has been removed. Issue tracking uses Linear.",
@@ -621,7 +567,7 @@ export class DelegationService {
         },
       });
     } else {
-      const snapshot = action.run.jobSnapshot as unknown as RunSnapshot;
+      const snapshot = fromJsonValue<RunSnapshot>(action.run.jobSnapshot);
       if (
         job.status === "cancelled" ||
         snapshot.revision !== job.revision ||
@@ -697,7 +643,7 @@ export class DelegationService {
     await this.settleRun(action.runId);
     this.deliver(action.runId);
     this.notify(ownerId, job.id);
-    return this.actionDto(
+    return actionDto(
       await this.prisma.delegationAction.findUniqueOrThrow({ where: { id } }),
     );
   }
@@ -746,52 +692,6 @@ export class DelegationService {
       id,
     });
   }
-  actionDto(a: DelegationAction): DelegationActionDto {
-    // Read-only history survives removal; this operation cannot be executed.
-    if (a.operation === "github_issue")
-      return {
-        id: a.id,
-        operation: a.operation,
-        title: a.title,
-        preview:
-          "GitHub issue creation has been removed. Issue tracking uses Linear.",
-        body: null,
-        status: a.status === "pending" ? "cancelled" : a.status,
-        receipt: a.receipt,
-        path: a.path,
-        sources: [],
-        createdAt: a.createdAt.toISOString(),
-      };
-    const input = actionSchema.parse(a.input);
-    let preview = Object.entries(input)
-      .filter(([k]) => k !== "operation" && k !== "sources")
-      .map(
-        ([k, v]) =>
-          `${k.replace(/([A-Z])/g, " $1")}: ${typeof v === "string" ? v : JSON.stringify(v)}`,
-      )
-      .join("\n\n");
-    const before = a.before as Record<string, unknown>;
-    const context = ["subject", "name", "title", "body"]
-      .filter((key) => typeof before[key] === "string")
-      .map((key) => `${key}: ${before[key]}`)
-      .join("\n");
-    if (context) preview += `\n\nCurrent item:\n${context}`;
-    if (Array.isArray(before.media) && before.media.length)
-      preview += `\n\nAttached media: ${before.media.length} item(s), preserved from the selected draft.`;
-    return {
-      id: a.id,
-      exportFormat: input.operation === "export" ? input.format : undefined,
-      operation: a.operation,
-      title: a.title,
-      preview,
-      body: "body" in input ? input.body : null,
-      status: a.status,
-      receipt: a.receipt,
-      path: a.path,
-      sources: "sources" in input ? input.sources : [],
-      createdAt: a.createdAt.toISOString(),
-    };
-  }
   dto(j: FullJob): DelegationJobDto {
     return {
       baseline: j.baseline ? JSON.stringify(j.baseline) : null,
@@ -814,7 +714,7 @@ export class DelegationService {
           summary: r.summary,
           createdAt: r.createdAt.toISOString(),
           completedAt: r.completedAt?.toISOString() ?? null,
-          actions: r.actions.map((a) => this.actionDto(a)),
+          actions: r.actions.map((a) => actionDto(a)),
         }),
       ),
     };

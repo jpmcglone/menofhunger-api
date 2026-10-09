@@ -1,106 +1,28 @@
 import type { CrosspostMode } from "@prisma/client";
 import { PickaxCrosspostService } from "../pickax/pickax-crosspost.service";
 import { XCrosspostService } from "../x/x-crosspost.service";
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Query,
-  UseGuards,
-} from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import { z } from "zod";
 import { ApiTags } from "@nestjs/swagger";
-import { AuthGuard } from "../auth/auth.guard";
-import { OptionalAuthGuard } from "../auth/optional-auth.guard";
+import { AuthGuard } from "../auth/auth-public-api";
+import { OptionalAuthGuard } from "../auth/auth-public-api";
 import { CurrentUserId, OptionalCurrentUserId } from "../users/users.decorator";
-import {
-  rateLimitLimit,
-  rateLimitTtl,
-} from "../../common/throttling/rate-limit.resolver";
+import { rateLimitLimit, rateLimitTtl } from "../../common/throttling/rate-limit.resolver";
 import { ArticlesService } from "./articles.service";
 import { queryBoolean } from "../../common/validation/query-boolean";
-import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
-
-const visibilitySchema = z.enum(["public", "verifiedOnly", "premiumOnly"]);
-
-const createSchema = z.object({
-  title: z.string().trim().max(200).optional(),
-  visibility: visibilitySchema.optional(),
-});
-
-const tagSchema = z
-  .array(z.string().trim().min(1).max(50))
-  .max(10)
-  .optional()
-  .transform((tags) => tags?.map((t) => t.trim()).filter(Boolean));
-
-const saveSchema = z.object({
-  title: z.string().trim().max(200).optional(),
-  body: z.string().max(500_000).optional(),
-  thumbnailR2Key: z.string().nullable().optional(),
-  visibility: visibilitySchema.optional(),
-  tags: tagSchema,
-});
-
-const listSchema = cursorPageQuerySchema().extend({
-  
-  authorUsername: z.string().optional(),
-  sort: z.enum(["new", "trending"]).optional(),
-  visibility: z
-    .enum(["all", "public", "verifiedOnly", "premiumOnly"])
-    .optional(),
-  mine: queryBoolean().optional(),
-  followingOnly: queryBoolean().optional(),
-  includeRestricted: queryBoolean().optional(),
-  tag: z.string().trim().max(60).optional(),
-  includeBody: queryBoolean().optional(),
-});
-
-const publishSchema = z.object({
-  postToBoard: z.boolean().optional(),
-  shareToFeed: z.boolean().optional(),
-  /** Also publish to the author's connected Pickax account when the article is public. */
-  crossPostToPickax: z.boolean().optional(),
-  /** Explicit link or native choice; the worker revalidates account capabilities. */
-  crosspost: z
-    .object({
-      pickax: z.enum(["link", "native"]).optional(),
-      x: z.enum(["link", "native"]).optional(),
-    })
-    .optional(),
-});
-
-const draftsListSchema = cursorPageQuerySchema().extend({
-  
-  visibility: z
-    .enum(["all", "public", "verifiedOnly", "premiumOnly"])
-    .optional(),
-});
-
-const commentListSchema = cursorPageQuerySchema();
-
-const commentCreateSchema = z.object({
-  body: z.string().trim().min(1).max(1000),
-  parentId: z.string().optional(),
-});
-
-const commentUpdateSchema = z.object({
-  body: z.string().trim().min(1).max(1000),
-});
-
-const reactionSchema = z.object({
-  reactionId: z.string().trim().min(1),
-});
-
-const shareSchema = z.object({
-  body: z.string().trim().max(1000).optional(),
-  visibility: visibilitySchema.optional(),
-});
+import {
+  createSchema,
+  saveSchema,
+  listSchema,
+  publishSchema,
+  draftsListSchema,
+  commentListSchema,
+  commentCreateSchema,
+  commentUpdateSchema,
+  reactionSchema,
+  shareSchema,
+} from './articles.schemas';
 
 const interactThrottle = {
   default: {

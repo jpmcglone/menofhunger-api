@@ -3,89 +3,35 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } f
 import { z } from 'zod';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { AuthGuard } from '../auth/auth.guard';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { AuthGuard } from '../auth/auth-public-api';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { GroupsService } from './groups.service';
+import { GroupFeedService } from './group-feed.service';
+import { GroupMembersService } from './group-members.service';
 import { GroupInvitesService } from './group-invites.service';
 import { UserLookupService } from '../user-lookup/user-lookup.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import { queryBoolean } from '../../common/validation/query-boolean';
-import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
-
-const feedQuerySchema = cursorPageQuerySchema().extend({
-  
-  sort: z.enum(['new', 'trending']).optional(),
-  topLevelOnly: queryBoolean().optional(),
-});
-
-const mediaQuerySchema = cursorPageQuerySchema().extend({
-  
-  sort: z.enum(['new', 'trending']).optional(),
-});
-
-const myHubFeedQuerySchema = feedQuerySchema.extend({
-  groupId: z.string().trim().min(1).max(40).optional(),
-});
-
-const membersQuerySchema = cursorPageQuerySchema().extend({
-  
-  q: z.string().trim().max(80).optional(),
-});
-
-const createGroupSchema = z.object({
-  name: z.string().trim().min(1).max(120),
-  description: z.string().trim().min(1).max(160),
-  rules: z.string().trim().max(8000).nullish(),
-  coverImageUrl: z.string().trim().max(2000).nullish(),
-  avatarImageUrl: z.string().trim().max(2000).nullish(),
-  joinPolicy: z.enum(['open', 'approval']),
-});
-
-const updateGroupSchema = z.object({
-  name: z.string().trim().min(1).max(120).optional(),
-  description: z.string().trim().min(1).max(160).optional(),
-  rules: z.string().trim().max(8000).nullish(),
-  coverImageUrl: z.string().trim().max(2000).nullish(),
-  avatarImageUrl: z.string().trim().max(2000).nullish(),
-  joinPolicy: z.enum(['open', 'approval']).optional(),
-  isFeatured: z.boolean().optional(),
-  featuredOrder: z.coerce.number().int().min(0).max(9999).optional(),
-});
-
-const sendInviteSchema = z.object({
-  inviteeUserId: z.string().trim().min(1),
-  message: z.string().trim().max(500).nullish(),
-});
-
-const invitableUsersSchema = z.object({
-  q: z.string().trim().max(80).optional(),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-});
-
-const boolFlag = z
-  .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
-  .optional()
-  .transform((v) => v === true || v === 'true' || v === '1');
-
-const groupSearchSchema = z.object({
-  q: z.string().trim().min(1).max(80),
-  limit: z.coerce.number().int().min(1).max(30).optional(),
-  cursor: z.string().trim().min(1).max(200).optional(),
-  excludeMine: boolFlag,
-});
-
-const exploreQuerySchema = z.object({
-  excludeMine: boolFlag,
-  limit: z.coerce.number().int().min(1).max(60).optional(),
-  cursor: z.string().trim().min(1).max(200).optional(),
-});
+import {
+  feedQuerySchema,
+  mediaQuerySchema,
+  myHubFeedQuerySchema,
+  membersQuerySchema,
+  createGroupSchema,
+  updateGroupSchema,
+  sendInviteSchema,
+  invitableUsersSchema,
+  groupSearchSchema,
+  exploreQuerySchema,
+} from './groups.schemas';
 
 @ApiTags('Crews & Groups')
 @Controller('groups')
 export class GroupsController {
   constructor(
     private readonly groups: GroupsService,
+    private readonly groupFeed: GroupFeedService,
+    private readonly groupMembers: GroupMembersService,
     private readonly invites: GroupInvitesService,
     private readonly users: UserLookupService,
   ) {}
@@ -115,7 +61,7 @@ export class GroupsController {
   @Get('me/feed')
   async myHubFeed(@CurrentUserId() viewerUserId: string, @Query() query: unknown) {
     const parsed = myHubFeedQuerySchema.parse(query);
-    return await this.groups.myGroupsHubFeed({
+    return await this.groupFeed.myGroupsHubFeed({
       viewerUserId,
       groupId: parsed.groupId ?? null,
       limit: parsed.limit ?? 30,
@@ -131,7 +77,7 @@ export class GroupsController {
   @Get('me/media')
   async myHubMedia(@CurrentUserId() viewerUserId: string, @Query() query: unknown) {
     const parsed = mediaQuerySchema.parse(query);
-    return await this.groups.groupsHubMedia({
+    return await this.groupFeed.groupsHubMedia({
       viewerUserId,
       limit: parsed.limit ?? 30,
       cursor: parsed.cursor ?? null,
@@ -195,7 +141,7 @@ export class GroupsController {
     @Query() query: unknown,
   ) {
     const parsed = feedQuerySchema.parse(query);
-    return await this.groups.groupFeed({
+    return await this.groupFeed.groupFeed({
       viewerUserId,
       slug,
       limit: parsed.limit ?? 30,
@@ -216,7 +162,7 @@ export class GroupsController {
     @Query() query: unknown,
   ) {
     const parsed = mediaQuerySchema.parse(query);
-    return await this.groups.groupMedia({
+    return await this.groupFeed.groupMedia({
       viewerUserId,
       slug,
       limit: parsed.limit ?? 30,
@@ -315,7 +261,7 @@ export class GroupsController {
   @UseGuards(AuthGuard)
   @Get(':groupId/pending-members')
   async pending(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string) {
-    return await this.groups.listPending({ viewerUserId, groupId });
+    return await this.groupMembers.listPending({ viewerUserId, groupId });
   }
 
   @UseGuards(AuthGuard)
@@ -329,7 +275,7 @@ export class GroupsController {
     @Query() query: unknown,
   ) {
     const parsed = membersQuerySchema.parse(query);
-    return await this.groups.listMembers({
+    return await this.groupMembers.listMembers({
       viewerUserId,
       groupId,
       limit: parsed.limit ?? 30,
@@ -374,32 +320,32 @@ export class GroupsController {
   @UseGuards(AuthGuard)
   @Post(':groupId/members/:userId/approve')
   async approve(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
-    return await this.groups.approveMember({ viewerUserId, groupId, userId });
+    return await this.groupMembers.approveMember({ viewerUserId, groupId, userId });
   }
 
   @UseGuards(AuthGuard)
   @Post(':groupId/members/:userId/reject')
   async reject(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
-    return await this.groups.rejectMember({ viewerUserId, groupId, userId });
+    return await this.groupMembers.rejectMember({ viewerUserId, groupId, userId });
   }
 
   @UseGuards(AuthGuard)
   @Delete(':groupId/members/:userId')
   async remove(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
-    return await this.groups.removeMember({ viewerUserId, groupId, userId });
+    return await this.groupMembers.removeMember({ viewerUserId, groupId, userId });
   }
 
   @UseGuards(AuthGuard)
   @Post(':groupId/marv')
   async addMarv(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string) {
-    return await this.groups.addMarvToGroup({ viewerUserId, groupId });
+    return await this.groupMembers.addMarvToGroup({ viewerUserId, groupId });
   }
 
   @UseGuards(AuthGuard)
   @Post(':groupId/members/:userId/promote-moderator')
   async promote(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
     const isSiteAdmin = await isSiteAdminUser(this.users, viewerUserId);
-    return await this.groups.promoteModerator({
+    return await this.groupMembers.promoteModerator({
       viewerUserId,
       isSiteAdmin,
       groupId,
@@ -410,14 +356,14 @@ export class GroupsController {
   @UseGuards(AuthGuard)
   @Post(':groupId/members/:userId/transfer-ownership')
   async transferOwnership(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
-    return await this.groups.transferOwnership({ viewerUserId, groupId, userId });
+    return await this.groupMembers.transferOwnership({ viewerUserId, groupId, userId });
   }
 
   @UseGuards(AuthGuard)
   @Post(':groupId/members/:userId/demote-moderator')
   async demote(@CurrentUserId() viewerUserId: string, @Param('groupId') groupId: string, @Param('userId') userId: string) {
     const isSiteAdmin = await isSiteAdminUser(this.users, viewerUserId);
-    return await this.groups.demoteModerator({
+    return await this.groupMembers.demoteModerator({
       viewerUserId,
       isSiteAdmin,
       groupId,

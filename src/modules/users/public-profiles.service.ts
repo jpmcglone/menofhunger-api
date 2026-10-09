@@ -1,19 +1,19 @@
+import { ORG_AFFILIATION_SELECT } from '../../common/prisma-selects/user.select';
 import { toAvatarVideoDto } from "../../common/dto/avatar-video.dto";
 import type { AvatarVideoDto } from "../../common/dto/avatar-video.dto";
 import { Injectable, NotFoundException } from "@nestjs/common";
-import type { OrgAffiliationDto } from "../../common/dto";
+import { groupOrgAffiliations, type OrgAffiliationDto } from "../../common/dto";
 import { publicAssetUrl } from "../../common/assets/public-asset-url";
-import {
-  totalUserArticlesWhere,
-  totalUserBoardPoints,
-  totalUserPostsWhere,
-} from "../../common/content-counts";
+import { totalUserArticlesWhere, totalUserBoardPoints, totalUserPostsWhere } from "../../common/content-counts";
 import { AppConfigService } from "../app/app-config.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { PublicProfileCacheService } from "./public-profile-cache.service";
 
+import { ProfileLinksService } from "./profile-links.service";
+import type { ProfileLinkDto } from "../../common/dto/profile-links.dto";
 import { PostsReadService } from '../posts-read/posts-read.service';
 import { findActiveCrewIdForUser } from '../viewer/crew-membership.queries';
+import { NOT_DELETED } from '../../common/prisma/where';
 export type PublicProfilePayload = {
   id: string;
   createdAt: string;
@@ -21,6 +21,8 @@ export type PublicProfilePayload = {
   name: string | null;
   bio: string | null;
   website: string | null;
+  /** Publicly visible links (verified owner or grandfathered). */
+  links: ProfileLinkDto[];
   xUsername: string | null;
   pickaxUsername: string | null;
   rumbleUrl: string | null;
@@ -112,6 +114,7 @@ export class PublicProfilesService {
     private readonly appConfig: AppConfigService,
     private readonly cache: PublicProfileCacheService<PublicProfilePayload>,
     private readonly postsRead: PostsReadService,
+    private readonly profileLinks: ProfileLinksService,
   ) {}
 
   async batchOrgAffiliations(
@@ -124,36 +127,12 @@ export class PublicProfilesService {
       select: {
         userId: true,
         org: {
-          select: {
-            id: true,
-            username: true,
-            name: true,
-            avatarKey: true,
-            avatarVideoKey: true,
-            avatarVideoDurationMs: true,
-            avatarUpdatedAt: true,
-          },
+          select: ORG_AFFILIATION_SELECT,
         },
       },
       orderBy: { createdAt: "asc" },
     });
-    const map = new Map<string, OrgAffiliationDto[]>();
-    for (const membership of memberships) {
-      const list = map.get(membership.userId) ?? [];
-      list.push({
-        id: membership.org.id,
-        username: membership.org.username,
-        name: membership.org.name,
-        avatarUrl: publicAssetUrl({
-          publicBaseUrl,
-          key: membership.org.avatarKey ?? null,
-          updatedAt: membership.org.avatarUpdatedAt ?? null,
-        }),
-        avatarVideo: toAvatarVideoDto(membership.org, publicBaseUrl),
-      });
-      map.set(membership.userId, list);
-    }
-    return map;
+    return groupOrgAffiliations(memberships, publicBaseUrl);
   }
 
   async getByUsernameOrId(
@@ -194,8 +173,8 @@ export class PublicProfilesService {
         const verifiedStatus = fresh?.verifiedStatus ?? cached.verifiedStatus;
         let pinnedPostId = fresh?.pinnedPostId ?? cached.pinnedPostId;
         if (pinnedPostId) {
-          const pinned = await this.postsRead.read.findFirst({
-            where: { id: pinnedPostId, userId: cached.id, deletedAt: null },
+          const pinned = await this.postsRead.findFirst({
+            where: { id: pinnedPostId, userId: cached.id, ...NOT_DELETED },
             select: { visibility: true },
           });
           if (!pinned || pinned.visibility === "onlyMe") {
@@ -215,7 +194,14 @@ export class PublicProfilesService {
           }
         }
 
+        // Links are filtered by owner verification; older cache entries carry no links at all.
+        const links =
+          cached.links === undefined || verifiedStatus !== cached.verifiedStatus
+            ? await this.profileLinks.listPublicLinks(cached.id, verifiedStatus)
+            : cached.links;
+
         if (
+          links !== cached.links ||
           lastOnlineAt !== cached.lastOnlineAt ||
           premium !== cached.premium ||
           premiumPlus !== cached.premiumPlus ||
@@ -225,6 +211,7 @@ export class PublicProfilesService {
         ) {
           const next: PublicProfilePayload = {
             ...cached,
+            links,
             lastOnlineAt,
             premium,
             premiumPlus,
@@ -303,8 +290,8 @@ export class PublicProfilesService {
 
     let pinnedPostId = user.pinnedPostId ?? null;
     if (pinnedPostId) {
-      const pinned = await this.postsRead.read.findFirst({
-        where: { id: pinnedPostId, userId: user.id, deletedAt: null },
+      const pinned = await this.postsRead.findFirst({
+        where: { id: pinnedPostId, userId: user.id, ...NOT_DELETED },
         select: { visibility: true },
       });
       if (!pinned || pinned.visibility === "onlyMe") {
@@ -317,6 +304,7 @@ export class PublicProfilesService {
     }
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const links = await this.profileLinks.listPublicLinks(user.id, user.verifiedStatus);
     const payload: PublicProfilePayload = {
       id: user.id,
       createdAt: user.createdAt.toISOString(),
@@ -324,6 +312,7 @@ export class PublicProfilesService {
       name: user.name,
       bio: user.bio,
       website: user.website ?? null,
+      links,
       xUsername: user.xUsername ?? null,
       pickaxUsername: user.pickaxUsername ?? null,
       rumbleUrl: user.rumbleUrl ?? null,
@@ -387,7 +376,7 @@ export class PublicProfilesService {
       await Promise.all([
         this.batchOrgAffiliations([payload.id]),
         findActiveCrewIdForUser(this.prisma, payload.id),
-        this.postsRead.read.count({ where: totalUserPostsWhere(payload.id) }),
+        this.postsRead.count({ where: totalUserPostsWhere(payload.id) }),
         this.prisma.article.count({
           where: totalUserArticlesWhere(payload.id),
         }),

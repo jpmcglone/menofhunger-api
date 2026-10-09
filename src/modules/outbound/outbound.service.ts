@@ -1,13 +1,6 @@
 import { PosthogService } from "../../common/posthog/posthog.service";
 import { ConnectionIdempotencyService } from "./connection-idempotency.service";
-import {
-  Global,
-  Optional,
-  Injectable,
-  Logger,
-  Module,
-  type OnModuleInit,
-} from "@nestjs/common";
+import { Global, Optional, Injectable, Logger, Module, type OnModuleInit } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { PrismaService } from "../prisma/prisma.service";
 import { AppConfigService } from "../app/app-config.service";

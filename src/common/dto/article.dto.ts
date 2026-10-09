@@ -1,3 +1,4 @@
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 import { toAvatarVideoDto } from './avatar-video.dto';
 import type { AvatarVideoDto } from './avatar-video.dto';
 import type { Article, ArticleComment, ArticleBoost, ArticleReaction, ArticleCommentReaction, ArticleTag, PostVisibility, VerifiedStatus } from '@prisma/client';
@@ -135,10 +136,10 @@ export function estimateReadingTimeMinutes(tiptapJson: string): number {
   try {
     const doc = JSON.parse(tiptapJson);
     const texts: string[] = [];
-    function walk(node: any) {
-      if (!node) return;
-      if (node.type === 'text' && node.text) texts.push(node.text);
-      if (Array.isArray(node.content)) node.content.forEach(walk);
+    function walk(node: unknown) {
+      if (!node || typeof node !== 'object') return;
+      if ('type' in node && node.type === 'text' && 'text' in node && typeof node.text === 'string') texts.push(node.text);
+      if ('content' in node && Array.isArray(node.content)) node.content.forEach(walk);
     }
     walk(doc);
     const wordCount = texts.join(' ').split(/\s+/).filter(Boolean).length;
@@ -165,9 +166,7 @@ export const articleAuthorInclude = {
     include: {
       org: {
         select: {
-          id: true,
-          username: true,
-          name: true,
+          ...USER_BRIEF_SELECT,
           avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
           avatarUpdatedAt: true,
         },

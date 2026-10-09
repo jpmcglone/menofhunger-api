@@ -1,11 +1,12 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { toCommunityGroupShellDto } from '../../common/dto/community-group.dto';
-import type { UserListDto } from '../../common/dto/user.dto';
 import type { OnboardingMatchesDto } from '../../common/dto/onboarding-matches.dto';
 import { EmbeddingsService, userText } from '../embeddings/embeddings.service';
 import { FollowsService } from '../follows/follows.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { JevTopicsService } from '../typesafe/jev-topics.service';
+import { listActiveOrPendingGroupIdsForUser } from '../viewer/group-membership.queries';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 const GROUP_LIMIT = 6;
 const PEOPLE_LIMIT = 6;
@@ -32,11 +33,7 @@ export class OnboardingMatchesService {
     const text = userText([intent.trim(), user?.bio ?? ''].filter(Boolean).join('\n'), user?.interests ?? []);
     const vector = text ? await this.embeddings.embedQuery(text) : null;
 
-    const mine = await this.prisma.communityGroupMember.findMany({
-      where: { userId, status: { in: ['active', 'pending'] } },
-      select: { groupId: true },
-    });
-    const mineIds = mine.map((m) => m.groupId);
+    const mineIds = await listActiveOrPendingGroupIdsForUser(this.prisma, userId);
 
     const groupIds: string[] = [];
     if (vector) {
@@ -48,7 +45,7 @@ export class OnboardingMatchesService {
     const personalizedGroups = groupIds.length;
     if (groupIds.length < GROUP_LIMIT) {
       const filler = await this.prisma.communityGroup.findMany({
-        where: { deletedAt: null, joinPolicy: 'open', id: { notIn: [...mineIds, ...groupIds] } },
+        where: { ...NOT_DELETED, joinPolicy: 'open', id: { notIn: [...mineIds, ...groupIds] } },
         orderBy: [{ isFeatured: 'desc' }, { memberCount: 'desc' }, { createdAt: 'desc' }],
         take: GROUP_LIMIT - groupIds.length,
         select: { id: true },
@@ -75,7 +72,7 @@ export class OnboardingMatchesService {
       people = [...people, ...fallback.users.filter((u) => !have.has(u.id))].slice(0, PEOPLE_LIMIT);
     }
 
-    return { groups, people: people as unknown as UserListDto[], personalized: personalizedGroups + personalizedPeople > 0 };
+    return { groups, people: people, personalized: personalizedGroups + personalizedPeople > 0 };
   }
   /** Public members whose interests overlap the topics Jev finds in what the member typed. Empty when Jev is unavailable. */
   private async peopleByStatedTopics(userId: string, intent: string) {

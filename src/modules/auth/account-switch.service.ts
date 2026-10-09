@@ -1,19 +1,13 @@
 import { BadgeSummaryService } from '../../common/badges/badge-summary.service';
 import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { AccountKind } from '@prisma/client';
 import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { AuthService } from './auth.service';
 import { toUserDto } from '../../common/dto/user.dto';
-import { USER_DTO_SELECT } from '../../common/prisma-selects/user.select';
+import { USER_BRIEF_SELECT, USER_DTO_SELECT } from '../../common/prisma-selects/user.select';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import type { AccountSwitchDto, SwitchableAccountDto } from '../../common/dto/auth.dto';
 
@@ -35,7 +29,7 @@ export class AccountSwitchService {
     if (!id) return null;
     const operator = await this.prisma.user.findUnique({
       where: { id },
-      select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true },
+      select: { ...USER_BRIEF_SELECT, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true },
     });
     if (!operator) return null;
     return {
@@ -219,9 +213,7 @@ export class AccountSwitchService {
       this.prisma.user.findUnique({
         where: { id: operatorId },
         select: {
-          id: true,
-          username: true,
-          name: true,
+          ...USER_BRIEF_SELECT,
           avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
           avatarUpdatedAt: true,
           accountKind: true,
@@ -235,9 +227,7 @@ export class AccountSwitchService {
         include: {
           page: {
             select: {
-              id: true,
-              username: true,
-              name: true,
+              ...USER_BRIEF_SELECT,
               avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
               avatarUpdatedAt: true,
               accountKind: true,

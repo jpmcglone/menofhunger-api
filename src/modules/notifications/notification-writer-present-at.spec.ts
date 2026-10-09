@@ -1,18 +1,22 @@
 /**
- * Tests for presentAt stamping in NotificationWriterService.
+ * Tests for presentAt stamping in NotificationCreatorService.
  *
  * Verifies that `presentAt` is set when the recipient is actively present
  * (online + not idle) at create time, and null otherwise.
  */
-import { NotificationWriterService } from './notification-writer.service';
-import { SideEffectsService } from '../side-effects/side-effects.service';
-import { NotificationQueryService } from './notification-query.service';
-import { NotificationReadStateService } from './notification-read-state.service';
+import { makeNotificationWriter } from "./notification-writer.testing";
+import type { NotificationCreatorService } from "./notification-creator.service";
+import { SideEffectsService } from "../side-effects/side-effects.service";
+import { NotificationQueryService } from "./notification-query.service";
+import { NotificationReadStateService } from "./notification-read-state.service";
 
-import { PostsReadService } from '../posts-read/posts-read.service';
+import { PostsReadService } from "../posts-read/posts-read.service";
 type Deps = {
   presenceRedis: { isOnline: jest.Mock; isIdle: jest.Mock };
-  presenceRealtime: { emitNotificationsUpdated: jest.Mock; emitNotificationNew: jest.Mock };
+  presenceRealtime: {
+    emitNotificationsUpdated: jest.Mock;
+    emitNotificationNew: jest.Mock;
+  };
   jobs: { enqueueCron: jest.Mock };
   prisma: {
     $transaction: jest.Mock;
@@ -21,27 +25,40 @@ type Deps = {
   };
 };
 
-function buildWriter(deps: Deps): NotificationWriterService {
+function buildWriter(deps: Deps): Pick<NotificationCreatorService, "create"> {
   const sideEffects = { dispatch: jest.fn() } as unknown as SideEffectsService;
-  const query = { buildNotificationDtoForRecipient: jest.fn(async () => null) } as unknown as NotificationQueryService;
+  const query = {
+    buildNotificationDtoForRecipient: jest.fn(async () => null),
+  } as unknown as NotificationQueryService;
   const readState = {
     emitWaitingCountForUser: jest.fn(),
-    undeliveredBellWhere: (uid: string) => ({ recipientUserId: uid, deliveredAt: null, kind: { notIn: ['message', 'community_group_post'] } }),    emitNavUnreadForUser: jest.fn(async () => undefined),
+    undeliveredBellWhere: (uid: string) => ({
+      recipientUserId: uid,
+      deliveredAt: null,
+      kind: { notIn: ["message", "community_group_post"] },
+    }),
+    emitNavUnreadForUser: jest.fn(async () => undefined),
   } as unknown as NotificationReadStateService;
-  return new NotificationWriterService(deps.prisma as any, new PostsReadService(deps.prisma as any as never),
+  return makeNotificationWriter(
+    deps.prisma as any,
+    new PostsReadService(deps.prisma as any as never),
     deps.presenceRealtime as any,
     deps.presenceRedis as any,
     deps.jobs as any,
     sideEffects,
     query,
-    readState);
+    readState,
+  );
 }
 
 function makeDeps(overrides?: { online?: boolean; idle?: boolean }): Deps {
   const isOnline = jest.fn(async () => overrides?.online ?? false);
   const isIdle = jest.fn(async () => overrides?.idle ?? false);
 
-  const notifCreate = jest.fn(async (args: any) => ({ id: 'notif-1', ...args.data }));
+  const notifCreate = jest.fn(async (args: any) => ({
+    id: "notif-1",
+    ...args.data,
+  }));
   const notifCount = jest.fn(async () => 1);
   const notifFindFirst = jest.fn(async () => null);
   const userUpdate = jest.fn(async () => ({}));
@@ -49,7 +66,11 @@ function makeDeps(overrides?: { online?: boolean; idle?: boolean }): Deps {
   // Simulate prisma.$transaction by running the callback with a tx that mirrors the mocked methods.
   const $transaction = jest.fn(async (fn: (tx: any) => Promise<any>) => {
     const tx = {
-      notification: { create: notifCreate, count: notifCount, findFirst: notifFindFirst },
+      notification: {
+        create: notifCreate,
+        count: notifCount,
+        findFirst: notifFindFirst,
+      },
       user: { update: userUpdate },
     };
     return fn(tx);
@@ -57,20 +78,31 @@ function makeDeps(overrides?: { online?: boolean; idle?: boolean }): Deps {
 
   return {
     presenceRedis: { isOnline, isIdle },
-    presenceRealtime: { emitNotificationsUpdated: jest.fn(), emitNotificationNew: jest.fn() },
+    presenceRealtime: {
+      emitNotificationsUpdated: jest.fn(),
+      emitNotificationNew: jest.fn(),
+    },
     jobs: { enqueueCron: jest.fn(async () => undefined) },
-    prisma: { $transaction, notification: { create: notifCreate, count: notifCount, findFirst: notifFindFirst }, user: { update: userUpdate } },
+    prisma: {
+      $transaction,
+      notification: {
+        create: notifCreate,
+        count: notifCount,
+        findFirst: notifFindFirst,
+      },
+      user: { update: userUpdate },
+    },
   };
 }
 
-describe('NotificationWriterService – presentAt stamping', () => {
-  describe('create()', () => {
-    it('sets presentAt when recipient is online and not idle', async () => {
+describe("NotificationCreatorService – presentAt stamping", () => {
+  describe("create()", () => {
+    it("sets presentAt when recipient is online and not idle", async () => {
       const deps = makeDeps({ online: true, idle: false });
       const writer = buildWriter(deps);
 
       const before = new Date();
-      await writer.create({ recipientUserId: 'user-1', kind: 'follow' });
+      await writer.create({ recipientUserId: "user-1", kind: "follow" });
       const after = new Date();
 
       const [createCall] = deps.prisma.notification.create.mock.calls;
@@ -80,44 +112,50 @@ describe('NotificationWriterService – presentAt stamping', () => {
       expect(presentAt.getTime()).toBeLessThanOrEqual(after.getTime());
     });
 
-    it('leaves presentAt undefined when recipient is offline', async () => {
+    it("leaves presentAt undefined when recipient is offline", async () => {
       const deps = makeDeps({ online: false });
       const writer = buildWriter(deps);
 
-      await writer.create({ recipientUserId: 'user-1', kind: 'follow' });
+      await writer.create({ recipientUserId: "user-1", kind: "follow" });
 
       const [createCall] = deps.prisma.notification.create.mock.calls;
       expect(createCall[0].data.presentAt).toBeUndefined();
     });
 
-    it('leaves presentAt undefined when recipient is idle', async () => {
+    it("leaves presentAt undefined when recipient is idle", async () => {
       const deps = makeDeps({ online: true, idle: true });
       const writer = buildWriter(deps);
 
-      await writer.create({ recipientUserId: 'user-1', kind: 'follow' });
+      await writer.create({ recipientUserId: "user-1", kind: "follow" });
 
       const [createCall] = deps.prisma.notification.create.mock.calls;
       expect(createCall[0].data.presentAt).toBeUndefined();
     });
 
-    it('does not block notification creation when presence check throws', async () => {
+    it("does not block notification creation when presence check throws", async () => {
       const deps = makeDeps();
-      deps.presenceRedis.isOnline.mockRejectedValue(new Error('Redis down'));
+      deps.presenceRedis.isOnline.mockRejectedValue(new Error("Redis down"));
       const writer = buildWriter(deps);
 
-      await expect(writer.create({ recipientUserId: 'user-1', kind: 'follow' })).resolves.not.toThrow();
+      await expect(
+        writer.create({ recipientUserId: "user-1", kind: "follow" }),
+      ).resolves.not.toThrow();
 
       const [createCall] = deps.prisma.notification.create.mock.calls;
       // presentAt should be undefined (null fallback), not throw
       expect(createCall[0].data.presentAt).toBeUndefined();
     });
 
-    it('does not set presentAt when actor === recipient (self-notification guard)', async () => {
+    it("does not set presentAt when actor === recipient (self-notification guard)", async () => {
       const deps = makeDeps({ online: true, idle: false });
       const writer = buildWriter(deps);
 
       // self-notifications are dropped before any DB call
-      await writer.create({ recipientUserId: 'user-1', kind: 'follow', actorUserId: 'user-1' });
+      await writer.create({
+        recipientUserId: "user-1",
+        kind: "follow",
+        actorUserId: "user-1",
+      });
 
       expect(deps.prisma.notification.create).not.toHaveBeenCalled();
     });

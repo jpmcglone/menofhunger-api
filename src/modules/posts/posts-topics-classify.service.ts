@@ -1,3 +1,4 @@
+import { clampLimit } from '../../common/pagination/page';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import type { PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -9,6 +10,7 @@ import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { JevTopicsService } from '../typesafe/jev-topics.service';
 import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
 import { parseModelTopicList } from '../../common/topics/topic-utils';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 const ALLOWLIST_VALUES = TOPIC_OPTIONS.map((o) => o.value);
 /** Shorter than this with no hashtags is not worth an OpenAI call. */
@@ -65,7 +67,7 @@ export class PostsTopicsClassifyService {
     const id = (postId ?? '').trim();
     if (!id || !this.canClassify()) return;
     const post = await this.prisma.post.findFirst({
-      where: { id, deletedAt: null },
+      where: { id, ...NOT_DELETED },
       select: {
         id: true,
         isDraft: true,
@@ -103,7 +105,7 @@ export class PostsTopicsClassifyService {
   async classifyFromImageNote(postId: string, note: string): Promise<boolean> {
     if (!this.jev?.available()) return false;
     const where = {
-      id: postId, deletedAt: null, isDraft: false, kind: { not: 'repost' as const },
+      id: postId, ...NOT_DELETED, isDraft: false, kind: { not: 'repost' as const },
       visibility: 'public' as const, communityGroupId: null,
     };
     const post = await this.prisma.post.findFirst({ where, select: { topics: true } });
@@ -140,7 +142,7 @@ export class PostsTopicsClassifyService {
     runUntilEmpty?: boolean;
   }): Promise<{ classified: number; examined: number }> {
     if (!this.canClassify()) return { classified: 0, examined: 0 };
-    const batchSize = Math.max(1, Math.min(40, Math.floor(opts.batchSize ?? 20)));
+    const batchSize = clampLimit(opts.batchSize, { default: 20, max: 40 });
     const maxBatches = opts.runUntilEmpty ? 40 : 1;
     let classified = 0;
     let examined = 0;
@@ -246,7 +248,7 @@ export class PostsTopicsClassifyService {
         hashtags: { equals: post.hashtags },
         topics: { equals: post.topics },
         topicsClassifiedAt: null,
-        deletedAt: null,
+        ...NOT_DELETED,
         isDraft: false,
         kind: { not: 'repost' },
         visibility: post.visibility,
@@ -288,7 +290,7 @@ export class PostsTopicsClassifyService {
 
   private eligibleWhere() {
     return {
-      deletedAt: null,
+      ...NOT_DELETED,
       isDraft: false,
       kind: { not: 'repost' as const },
       OR: [{ body: { not: '' } }, { hashtags: { isEmpty: false } }],

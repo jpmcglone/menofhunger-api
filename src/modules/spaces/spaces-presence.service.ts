@@ -1,5 +1,5 @@
 import { Injectable, Optional } from '@nestjs/common';
-import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
+import { PresenceLobbyStateService } from '../presence/presence-lobby-state.service';
 
 /**
  * In-memory "who is in which space" state (membership + mute/pause).
@@ -26,7 +26,7 @@ export class SpacesPresenceService {
   /** spaceId -> Set<userId> (subset of usersBySpace: muted members) */
   private readonly mutedBySpace = new Map<string, Set<string>>();
 
-  constructor(@Optional() private readonly presenceRedis: PresenceRedisStateService | null) {}
+  constructor(@Optional() private readonly presenceRedis?: PresenceLobbyStateService) {}
 
   isValidSpaceId(spaceId: string): boolean {
     return Boolean((spaceId ?? '').trim());

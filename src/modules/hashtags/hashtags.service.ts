@@ -1,14 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import type { PostVisibility, VerifiedStatus } from '@prisma/client';
+import type { PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { ViewerContextService } from '../viewer/viewer-context.service';
+import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
+import { toPage, clampLimit } from '../../common/pagination/page';
 
 const TRENDING_CACHE_TTL_SECONDS = 30;
 
-type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean } | null;
+type Viewer = ViewerContext | null;
 
 function parseTrendingCursor(
   cursor: string | null,
@@ -46,7 +47,7 @@ export class HashtagsService {
   ) {}
 
   private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
-    return this.viewerContext.allowedPostVisibilities(viewer as any);
+    return this.viewerContext.allowedPostVisibilities(viewer);
   }
 
   async trendingHashtags(params: {
@@ -54,8 +55,8 @@ export class HashtagsService {
     limit: number;
     cursor: string | null;
   }): Promise<{ hashtags: Array<{ value: string; label: string; usageCount: number }>; nextCursor: string | null }> {
-    const limit = Math.max(1, Math.min(50, params.limit || 20));
-    const viewer = (await this.viewerContext.getViewer(params.viewerUserId ?? null)) as any;
+    const limit = clampLimit(params.limit, { default: 20, max: 50 });
+    const viewer = await this.viewerContext.getViewer(params.viewerUserId ?? null);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
     const paramsHash = stableJsonHash({
@@ -115,12 +116,9 @@ export class HashtagsService {
       LIMIT ${limit + 1}
     `);
 
-    const slice = rows.slice(0, limit);
-    const nextRow = rows.length > limit ? slice[slice.length - 1] : null;
-    const nextCursor2 =
-      rows.length > limit && nextRow?.tag
-        ? makeTrendingCursor({ asOf, tag: nextRow.tag, score: nextRow.score, usageCount: nextRow.usageCount })
-        : null;
+    const { items: slice, nextCursor: nextCursor2 } = toPage(rows, limit, (r) =>
+      r.tag ? makeTrendingCursor({ asOf, tag: r.tag, score: r.score, usageCount: r.usageCount }) : '',
+    );
 
     const tags = slice.map((r) => (r.tag ?? '').trim()).filter(Boolean);
     const labelByTag = new Map<string, string>();
@@ -146,7 +144,7 @@ export class HashtagsService {
         label: labelByTag.get(r.tag) ?? r.tag,
         usageCount: r.usageCount ?? 0,
       })),
-      nextCursor: nextCursor2,
+      nextCursor: nextCursor2 || null,
     };
 
     void this.redis.setJson(cacheKey, result, { ttlSeconds: TRENDING_CACHE_TTL_SECONDS }).catch(() => undefined);

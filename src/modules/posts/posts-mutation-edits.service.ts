@@ -18,11 +18,13 @@ import { SiteConfigService } from "../site-config/site-config.service";
 import { SideEffectsService } from "../side-effects/side-effects.service";
 import { PostsTopicsClassifyService } from "./posts-topics-classify.service";
 import { PostsMutationSupportService } from "./posts-mutation-support.service";
+import { PostsMutationWriteService } from "./posts-mutation-write.service";
+import { postLinksReplace } from "./post-links";
+import { NOT_DELETED } from '../../common/prisma/where';
 
 @Injectable()
 export class PostsMutationEditsService {
   private readonly logger = new Logger(PostsMutationEditsService.name);
-  createPost?: (params: import("./posts-mutation.types").CreatePostParams) => Promise<{ post: any; streakReward?: any }>;
   constructor(
     private readonly prisma: PrismaService,
     private readonly presenceRealtime: PresenceRealtimeService,
@@ -38,6 +40,7 @@ export class PostsMutationEditsService {
     private readonly sideEffects: SideEffectsService,
     private readonly topicsClassify: PostsTopicsClassifyService,
     private readonly support: PostsMutationSupportService,
+    private readonly write: PostsMutationWriteService,
   ) {}
   async deletePost(params: { userId: string; postId: string }) {
     const { userId, postId } = params;
@@ -354,11 +357,11 @@ export class PostsMutationEditsService {
     }
 
     // Detect whether the quoted post link changed so we can adjust repostCount.
-    const prevQuotedPostId: string | null = (post as any).quotedPostId ?? null;
+    const prevQuotedPostId: string | null = post.quotedPostId ?? null;
     const detectedQuotedId = this.support.extractQuotedPostIdFromBody(nextBody);
     const nextQuotedExists = detectedQuotedId
       ? await this.prisma.post.findFirst({
-          where: { id: detectedQuotedId, deletedAt: null },
+          where: { id: detectedQuotedId, ...NOT_DELETED },
           select: { id: true, visibility: true, communityGroupId: true },
         })
       : null;
@@ -392,7 +395,7 @@ export class PostsMutationEditsService {
           topics: post.topics ?? [],
           hashtags: post.hashtags ?? [],
           hashtagCasings: post.hashtagCasings ?? [],
-          cashtags: (post as any).cashtags ?? [],
+          cashtags: post.cashtags ?? [],
           visibility: post.visibility,
         },
       });
@@ -407,6 +410,7 @@ export class PostsMutationEditsService {
         where: { id: post.id },
         data: {
           body: nextBody,
+          links: postLinksReplace(nextBody),
           topics,
           topicsClassifiedAt: null,
           replyPrompt: null,
@@ -727,7 +731,7 @@ export class PostsMutationEditsService {
           alt: (m.alt ?? "").trim() || null,
         }));
 
-    const createdBundle = await this.createPost!({
+    const createdBundle = await this.write.createPost({
       userId: params.userId,
       body,
       visibility: params.visibility,

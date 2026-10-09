@@ -37,7 +37,7 @@ export class AdminNewMemberPostsCron {
 
   async alertWaiting(now: Date): Promise<number> {
     const { posts } = await readUnansweredNewMemberPosts(
-      this.postsRead.read,
+      this.postsRead,
       { newMemberDays: NEW_MEMBER_DAYS, minAgeMinutes: MIN_AGE_MINUTES, limit: 25 },
       now,
     );

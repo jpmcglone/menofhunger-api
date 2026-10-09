@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ViewerContextService } from './viewer-context.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 /**
  * Community-group read access, shared between the HTTP read paths and the
@@ -25,7 +26,7 @@ export class CommunityGroupReadAccessService {
     if (!gid) throw new ForbiddenException('Group not found.');
 
     const group = await this.prisma.communityGroup.findFirst({
-      where: { id: gid, deletedAt: null },
+      where: { id: gid, ...NOT_DELETED },
       select: { joinPolicy: true },
     });
     if (!group) throw new NotFoundException('Group not found.');
@@ -67,7 +68,7 @@ export class CommunityGroupReadAccessService {
     if (ids.length === 0) return new Set();
 
     const groups = await this.prisma.communityGroup.findMany({
-      where: { id: { in: ids }, deletedAt: null },
+      where: { id: { in: ids }, ...NOT_DELETED },
       select: { id: true, joinPolicy: true },
     });
     const policyById = new Map(groups.map((g) => [g.id, g.joinPolicy] as const));

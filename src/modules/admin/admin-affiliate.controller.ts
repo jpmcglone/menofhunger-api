@@ -1,13 +1,9 @@
 import { Body, Controller, Get, NotFoundException, Param, Patch, Post, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
 import { AdminGuard } from './admin.guard';
 import { AffiliateService } from '../billing/affiliate.service';
 import { UserLookupService } from '../user-lookup/user-lookup.service';
 import type { AdminAffiliateUserDto, AdminAffiliateSettleDto } from '../../common/dto';
-
-const setAffiliateSchema = z.object({
-  enabled: z.boolean(),
-});
+import { setAffiliateSchema } from './admin-affiliate.schemas';
 
 @UseGuards(AdminGuard)
 @Controller('admin')

@@ -3,28 +3,7 @@ import { spendTotals, lifetimeSpend } from "./integration-spend-totals";
 import { Injectable } from "@nestjs/common";
 import type { IntegrationUsageReservation } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
-import {
-  assertMicrodollars,
-  integrationLimits,
-  integrationMonth,
-  integrationReset,
-  type IntegrationBucket,
-  type IntegrationProvider,
-} from "./integration-budget.policy";
-
-export interface IntegrationSpendPolicy {
-  /** Zero is a kill switch. All limits must come from validated configuration. */
-  companyMonthlyMicros: number;
-  companyDailyMicros: number;
-  providerMonthlyMicros: number;
-  /** Funded reserve/acquisition amount, never a count of hypothetical members. */
-  sharedMonthlyMicros: number;
-  priceVersion: string;
-  enabled: boolean;
-  removalHeadroomMicros?: number;
-  actionLifetimeMicros?: number;
-  actionLifetimeRequests?: number;
-}
+import { assertMicrodollars, integrationLimits, integrationMonth, integrationReset, type IntegrationBucket, type IntegrationProvider, type IntegrationSpendPolicy } from "./integration-budget.policy";
 
 export interface IntegrationReservationInput {
   id: string;
@@ -332,3 +311,4 @@ export class IntegrationBudgetService {
     };
   }
 }
+export type { IntegrationSpendPolicy } from "./integration-budget.policy";

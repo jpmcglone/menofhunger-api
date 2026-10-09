@@ -1,28 +1,16 @@
-import { assertGroupRole, getGroupMemberOrThrow, GROUP_MANAGER_ROLES } from '../viewer/group-membership.queries';
+
+import { isUniqueViolation } from '../../common/prisma/errors';
+import { getGroupMemberOrThrow } from '../viewer/group-membership.queries';
 import { ChannelAccessService } from '../group-channels/channel-access.service';
 import { prepareChannelDeparture, emitChannelAccessChange } from '../group-channels/channel-lifecycle';
 import { provisionDefaultChannels } from '../group-channels/channel-provisioning';
-import { transferGroupOwnership } from './group-ownership';
-import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
-import type { CommunityGroupJoinPolicy, CommunityGroupMemberRole } from '@prisma/client';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import type { CommunityGroupJoinPolicy } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  toCommunityGroupShellDto,
-  type CommunityGroupMemberListItemDto,
-  type GroupNotificationPreferencesDto,
-  type GroupActivityDto,
-} from '../../common/dto/community-group.dto';
-import { publicAssetUrl } from '../../common/assets/public-asset-url';
-import { PostsService } from '../posts/posts.service';
+import { toCommunityGroupShellDto, type GroupNotificationPreferencesDto, type GroupActivityDto } from '../../common/dto/community-group.dto';
+
 import { AppConfigService } from '../app/app-config.service';
-import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
@@ -31,24 +19,26 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
 import { PostsWriteService } from '../posts-read/posts-write.service';
-import { searchGroupsOn } from './groups-search.query';
-import { listExploreSpotlightOn } from './groups-explore.query';
+import { GroupsSearchService } from './groups-search.service';
+import { GroupsExploreService, compareViewerGroupOrder } from './groups-explore.service';
 import { slugifyHandle } from '../../common/text/slugify';
-import { toPage } from '../../common/pagination/page';
+import { NOT_DELETED } from '../../common/prisma/where';
 const FEATURED_CACHE_TTL_SECONDS = 120;
 
 @Injectable()
 export class GroupsService {
   constructor(
-    readonly prisma: PrismaService,
-    readonly postsRead: PostsReadService,
+    private readonly prisma: PrismaService,
+    private readonly postsRead: PostsReadService,
     private readonly postsWrite: PostsWriteService,
-    private readonly posts: PostsService,
+
     private readonly appConfig: AppConfigService,
     private readonly sideEffects: SideEffectsService,
     private readonly redis: RedisService,
     private readonly marvIdentity: MarvinBotIdentityService,
     private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly search: GroupsSearchService,
+    private readonly explore: GroupsExploreService,
     private readonly channelAccess?: ChannelAccessService,
   ) {}
 
@@ -78,7 +68,7 @@ export class GroupsService {
         continue;
       }
       const exists = await this.prisma.communityGroup.findFirst({
-        where: { slug: candidate, deletedAt: null },
+        where: { slug: candidate, ...NOT_DELETED },
         select: { id: true },
       });
       if (!exists) return candidate;
@@ -92,7 +82,7 @@ export class GroupsService {
 
   async getNotificationPreferences(viewerUserId: string, groupId: string): Promise<GroupNotificationPreferencesDto> {
     const member = await this.prisma.communityGroupMember.findFirst({
-      where: { groupId, userId: viewerUserId, status: 'active', group: { deletedAt: null } },
+      where: { groupId, userId: viewerUserId, status: 'active', group: NOT_DELETED },
       select: { notificationPreference: true },
     });
     if (!member) throw new ForbiddenException('You must be a member of this group.');
@@ -102,7 +92,7 @@ export class GroupsService {
   async setNotificationPreferences(viewerUserId: string, groupId: string, preference: GroupNotificationPreferencesDto['preference']): Promise<GroupNotificationPreferencesDto> {
     // Conditional update prevents a concurrent leave/removal from writing member settings.
     const result = await this.prisma.communityGroupMember.updateMany({
-      where: { groupId, userId: viewerUserId, status: 'active', group: { deletedAt: null } },
+      where: { groupId, userId: viewerUserId, status: 'active', group: NOT_DELETED },
       data: { notificationPreference: preference },
     });
     if (!result.count) throw new ForbiddenException('You must be a member of this group.');
@@ -118,7 +108,7 @@ export class GroupsService {
       recipientUserId: viewerUserId, subjectGroupId: groupId,
       kind: 'community_group_post', deliveredAt: null,
       createdAt: { lte: through },
-      subjectPost: { deletedAt: null, isDraft: false },
+      subjectPost: { ...NOT_DELETED, isDraft: false },
     };
     const [newPostCount, rows] = await Promise.all([
       this.prisma.notification.count({ where }),
@@ -133,7 +123,7 @@ export class GroupsService {
     const slug = (params.slug ?? '').trim();
     if (!slug) throw new NotFoundException('Group not found.');
     const g = await this.prisma.communityGroup.findFirst({
-      where: { slug, deletedAt: null },
+      where: { slug, ...NOT_DELETED },
     });
     if (!g) throw new NotFoundException('Group not found.');
 
@@ -199,7 +189,7 @@ export class GroupsService {
     } catch { /* Redis unavailable */ }
 
     const rows = await this.prisma.communityGroup.findMany({
-      where: { deletedAt: null, isFeatured: true },
+      where: { ...NOT_DELETED, isFeatured: true },
       orderBy: [{ featuredOrder: 'asc' }, { createdAt: 'asc' }],
     });
     const groupIds = rows.map((r) => r.id);
@@ -234,16 +224,12 @@ export class GroupsService {
 
     const lastPostRows =
       groupIds.length > 0
-        ? await this.postsRead.read.groupBy({
-            by: ['communityGroupId'],
-            where: {
+        ? await this.postsRead.lastActivityByGroup({
               userId: params.viewerUserId,
               communityGroupId: { in: groupIds },
-              deletedAt: null,
+              ...NOT_DELETED,
               isDraft: false,
-            },
-            _max: { createdAt: true },
-          })
+            })
         : [];
 
     const lastPostByGroupId = new Map(
@@ -252,7 +238,7 @@ export class GroupsService {
 
     const data = active
       .sort((a, b) =>
-        this.compareViewerGroupOrder(
+        compareViewerGroupOrder(
           { createdAt: a.group.createdAt },
           { status: a.status, role: a.role, createdAt: a.createdAt },
           { createdAt: b.group.createdAt },
@@ -333,7 +319,7 @@ export class GroupsService {
     featuredOrder?: number;
   }) {
     const g = await this.prisma.communityGroup.findFirst({
-      where: { id: params.groupId, deletedAt: null },
+      where: { id: params.groupId, ...NOT_DELETED },
     });
     if (!g) throw new NotFoundException('Group not found.');
 
@@ -384,7 +370,7 @@ export class GroupsService {
 
     const updated = await this.prisma.communityGroup.update({
       where: { id: g.id },
-      data: data as any,
+      data,
     });
     const vm = await this.prisma.communityGroupMember.findUnique({
       where: { groupId_userId: { groupId: updated.id, userId: params.viewerUserId } },
@@ -410,7 +396,7 @@ export class GroupsService {
     confirmName: string;
   }): Promise<{ deleted: true }> {
     const g = await this.prisma.communityGroup.findFirst({
-      where: { id: params.groupId, deletedAt: null },
+      where: { id: params.groupId, ...NOT_DELETED },
       select: { id: true, name: true },
     });
     if (!g) throw new NotFoundException('Group not found.');
@@ -450,7 +436,7 @@ export class GroupsService {
     }
 
     const g = await this.prisma.communityGroup.findFirst({
-      where: { id: params.groupId, deletedAt: null },
+      where: { id: params.groupId, ...NOT_DELETED },
     });
     if (!g) throw new NotFoundException('Group not found.');
 
@@ -499,7 +485,7 @@ export class GroupsService {
           });
         } catch (e: unknown) {
           // Concurrent create hit unique constraint: treat as successful idempotent join.
-          if (!(e instanceof Prisma.PrismaClientKnownRequestError) || e.code !== 'P2002') throw e;
+          if (!isUniqueViolation(e)) throw e;
         }
       });
 
@@ -553,7 +539,7 @@ export class GroupsService {
 
   async cancelRequest(params: { viewerUserId: string; groupId: string }) {
     const g = await this.prisma.communityGroup.findFirst({
-      where: { id: params.groupId, deletedAt: null },
+      where: { id: params.groupId, ...NOT_DELETED },
     });
     if (!g) throw new NotFoundException('Group not found.');
 
@@ -568,469 +554,6 @@ export class GroupsService {
     return { data: { ok: true as const } };
   }
 
-  private async assertModOrOwner(groupId: string, userId: string): Promise<CommunityGroupMemberRole> {
-    return assertGroupRole(this.prisma, groupId, userId, GROUP_MANAGER_ROLES);
-  }
-
-  async listPending(params: { viewerUserId: string; groupId: string }) {
-    await this.assertModOrOwner(params.groupId, params.viewerUserId);
-    const rows = await this.prisma.communityGroupMember.findMany({
-      where: { groupId: params.groupId, status: 'pending' },
-      include: { user: { select: { ...USER_LIST_SELECT, username: true, name: true } } },
-      orderBy: { createdAt: 'asc' },
-    });
-    return {
-      data: rows.map((r) => ({
-        userId: r.userId,
-        username: r.user.username,
-        name: r.user.name,
-        requestedAt: r.createdAt.toISOString(),
-      })),
-    };
-  }
-
-  async approveMember(params: { viewerUserId: string; groupId: string; userId: string }) {
-    await this.assertModOrOwner(params.groupId, params.viewerUserId);
-    const target = await this.prisma.communityGroupMember.findUnique({
-      where: { groupId_userId: { groupId: params.groupId, userId: params.userId } },
-    });
-    if (!target || target.status !== 'pending') throw new NotFoundException('No pending request for this user.');
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.communityGroupMember.update({
-        where: { groupId_userId: { groupId: params.groupId, userId: params.userId } },
-        data: { status: 'active', role: 'member' },
-      });
-      await tx.communityGroup.update({
-        where: { id: params.groupId },
-        data: { memberCount: { increment: 1 } },
-      });
-    });
-
-    // Notifies the approved user, then fans member-joined out to the existing members.
-    this.sideEffects.dispatch('group.join.decided', {
-      groupId: params.groupId,
-      userId: params.userId,
-      actorUserId: params.viewerUserId,
-      decision: 'approved',
-    });
-    this.sideEffects.dispatch('channel.member.joined', {
-      groupId: params.groupId,
-      userId: params.userId,
-      at: new Date().toISOString(),
-    });
-
-    return { data: { ok: true as const } };
-  }
-
-  async rejectMember(params: { viewerUserId: string; groupId: string; userId: string }) {
-    await this.assertModOrOwner(params.groupId, params.viewerUserId);
-    const target = await this.prisma.communityGroupMember.findUnique({
-      where: { groupId_userId: { groupId: params.groupId, userId: params.userId } },
-    });
-    if (!target || target.status !== 'pending') throw new NotFoundException('No pending request for this user.');
-
-    await this.prisma.communityGroupMember.delete({
-      where: { groupId_userId: { groupId: params.groupId, userId: params.userId } },
-    });
-
-    this.sideEffects.dispatch('group.join.decided', {
-      groupId: params.groupId,
-      userId: params.userId,
-      actorUserId: params.viewerUserId,
-      decision: 'rejected',
-    });
-
-    return { data: { ok: true as const } };
-  }
-
-  async removeMember(params: { viewerUserId: string; groupId: string; userId: string }) {
-    const actorRole = await this.assertModOrOwner(params.groupId, params.viewerUserId);
-    if (params.userId === params.viewerUserId) throw new BadRequestException('Use leave to remove yourself.');
-
-    const target = await this.prisma.communityGroupMember.findUnique({
-      where: { groupId_userId: { groupId: params.groupId, userId: params.userId } },
-    });
-    if (!target || target.status !== 'active') throw new NotFoundException('Member not found.');
-
-    if (target.role === 'owner') throw new ForbiddenException('Cannot remove the owner.');
-    if (target.role === 'moderator' && actorRole !== 'owner') {
-      throw new ForbiddenException('Only the owner can remove a moderator.');
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      await prepareChannelDeparture(tx, params.groupId, params.userId, { forced: true });
-      const actor = await tx.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: params.groupId, userId: params.viewerUserId } } });
-      const current = await tx.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: params.groupId, userId: params.userId } } });
-      if (!actor || actor.status !== 'active' || !['owner', 'moderator'].includes(actor.role) || !current || current.role === 'owner' || (current.role === 'moderator' && actor.role !== 'owner')) throw new ForbiddenException('You cannot remove this member.');
-
-      await tx.communityGroupMember.delete({
-        where: { groupId_userId: { groupId: params.groupId, userId: params.userId } },
-      });
-      await tx.communityGroup.update({
-        where: { id: params.groupId },
-        data: { memberCount: { decrement: 1 } },
-      });
-    });
-
-    await emitChannelAccessChange(this.prisma, this.presenceRealtime, params.groupId, params.userId);
-
-    // Skip the notification if the removed user is the Marv bot — he's a machine; sending him
-    // a "you were removed" push is meaningless.
-    const marvId = this.marvIdentity.cachedMarvUserId();
-    if (params.userId !== marvId) {
-      this.sideEffects.dispatch('group.member.removed', {
-        groupId: params.groupId,
-        userId: params.userId,
-        actorUserId: params.viewerUserId,
-      });
-    } else {
-      // Marv was removed — broadcast so other mods' settings pages update live.
-      this.presenceRealtime.emitGroupMarvChanged(params.groupId, { groupId: params.groupId, isMember: false });
-    }
-
-    return { data: { ok: true as const } };
-  }
-
-  /**
-   * Add Marv as an active member of a group, bypassing the normal invite flow.
-   * Owner/mod gated. Idempotent — if Marv is already an active member, returns ok.
-   * Any existing invite row for Marv in this group is transitioned to `accepted`.
-   */
-  async addMarvToGroup(params: { viewerUserId: string; groupId: string }) {
-    await this.assertModOrOwner(params.groupId, params.viewerUserId);
-
-    const group = await this.prisma.communityGroup.findFirst({
-      where: { id: params.groupId, deletedAt: null },
-      select: { id: true },
-    });
-    if (!group) throw new NotFoundException('Group not found.');
-
-    const marvId = await this.marvIdentity.getMarvUserId();
-    if (!marvId) throw new NotFoundException('Marv is not configured on this server.');
-
-    // Upsert: create active member row; increment memberCount only when newly added.
-    const existing = await this.prisma.communityGroupMember.findUnique({
-      where: { groupId_userId: { groupId: group.id, userId: marvId } },
-      select: { status: true },
-    });
-
-    if (existing?.status === 'active') {
-      return { data: { ok: true as const } };
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      if (existing) {
-        await tx.communityGroupMember.update({
-          where: { groupId_userId: { groupId: group.id, userId: marvId } },
-          data: { status: 'active', role: 'member' },
-        });
-      } else {
-        await tx.communityGroupMember.create({
-          data: { groupId: group.id, userId: marvId, role: 'member', status: 'active' },
-        });
-        await tx.communityGroup.update({
-          where: { id: group.id },
-          data: { memberCount: { increment: 1 } },
-        });
-      }
-      // Resolve any outstanding invite row for Marv.
-      await tx.communityGroupInvite.updateMany({
-        where: { groupId: group.id, inviteeUserId: marvId, status: 'pending' },
-        data: { status: 'accepted', respondedAt: new Date() },
-      });
-    });
-
-    this.presenceRealtime.emitGroupMarvChanged(group.id, { groupId: group.id, isMember: true });
-
-    return { data: { ok: true as const } };
-  }
-
-  async promoteModerator(params: { viewerUserId: string; isSiteAdmin: boolean; groupId: string; userId: string }) {
-    const group = await this.prisma.communityGroup.findFirst({
-      where: { id: params.groupId, deletedAt: null },
-      select: { id: true },
-    });
-    if (!group) throw new NotFoundException('Group not found.');
-
-    const mem = await this.prisma.communityGroupMember.findUnique({
-      where: { groupId_userId: { groupId: group.id, userId: params.viewerUserId } },
-      select: { role: true, status: true },
-    });
-    const isOwner = mem?.status === 'active' && mem.role === 'owner';
-    if (!isOwner && !params.isSiteAdmin) {
-      throw new ForbiddenException('Only the owner can promote moderators.');
-    }
-
-    const target = await this.prisma.communityGroupMember.findUnique({
-      where: { groupId_userId: { groupId: group.id, userId: params.userId } },
-    });
-    if (!target || target.status !== 'active') throw new NotFoundException('Member not found.');
-    if (target.role !== 'member') throw new BadRequestException('Only members can be promoted to moderator.');
-
-    await this.prisma.communityGroupMember.update({
-      where: { groupId_userId: { groupId: group.id, userId: params.userId } },
-      data: { role: 'moderator' },
-    });
-    return { data: { ok: true as const } };
-  }
-
-  async transferOwnership(params: { viewerUserId: string; groupId: string; userId: string }) {
-    await transferGroupOwnership(this.prisma, params.groupId, params.viewerUserId, params.userId);
-    await emitChannelAccessChange(this.prisma, this.presenceRealtime, params.groupId, params.userId);
-    return { data: { ok: true as const } };
-  }
-
-  async demoteModerator(params: { viewerUserId: string; isSiteAdmin: boolean; groupId: string; userId: string }) {
-    const group = await this.prisma.communityGroup.findFirst({
-      where: { id: params.groupId, deletedAt: null },
-      select: { id: true },
-    });
-    if (!group) throw new NotFoundException('Group not found.');
-
-    const mem = await this.prisma.communityGroupMember.findUnique({
-      where: { groupId_userId: { groupId: group.id, userId: params.viewerUserId } },
-      select: { role: true, status: true },
-    });
-    const isOwner = mem?.status === 'active' && mem.role === 'owner';
-    if (!isOwner && !params.isSiteAdmin) {
-      throw new ForbiddenException('Only the owner can demote moderators.');
-    }
-
-    const target = await this.prisma.communityGroupMember.findUnique({
-      where: { groupId_userId: { groupId: group.id, userId: params.userId } },
-    });
-    if (!target || target.status !== 'active' || target.role !== 'moderator') {
-      throw new NotFoundException('Moderator not found.');
-    }
-
-    await this.prisma.$transaction(async tx => {
-      await prepareChannelDeparture(tx, group.id, params.userId, { forced: false, demotion: true });
-      const actor = await tx.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: group.id, userId: params.viewerUserId } } });
-      if (!params.isSiteAdmin && (actor?.status !== 'active' || actor.role !== 'owner')) throw new ForbiddenException('Only the owner can demote moderators.');
-      const current = await tx.communityGroupMember.findUnique({ where: { groupId_userId: { groupId: group.id, userId: params.userId } } });
-      if (current?.status !== 'active' || current.role !== 'moderator') throw new NotFoundException('Moderator not found.');
-      await tx.communityGroupMember.update({ where: { groupId_userId: { groupId: group.id, userId: params.userId } }, data: { role: 'member' } });
-    });
-    await emitChannelAccessChange(this.prisma, this.presenceRealtime, group.id, params.userId);
-    return { data: { ok: true as const } };
-  }
-
-  async groupFeed(params: {
-    viewerUserId: string;
-    slug: string;
-    limit: number;
-    cursor: string | null;
-    sort: 'new' | 'trending';
-    topLevelOnly?: boolean;
-  }) {
-    const slug = (params.slug ?? '').trim();
-    if (!slug) throw new NotFoundException('Group not found.');
-    const g = await this.prisma.communityGroup.findFirst({
-      where: { slug, deletedAt: null },
-    });
-    if (!g) throw new NotFoundException('Group not found.');
-
-    // Read access: open groups are visible to any verified user; private groups
-    // remain members-only. Composer membership is enforced separately on write.
-    await this.posts.assertCanReadCommunityGroup(params.viewerUserId, g.id);
-
-    const collapseOpts = {
-      collapseByRoot: true,
-      collapseMode: 'root' as const,
-      prefer: 'reply' as const,
-      collapseMaxPerRoot: 2,
-    };
-    return this.posts.listComposedGroupScopedFeed({
-      viewerUserId: params.viewerUserId,
-      groupIds: [g.id],
-      limit: params.limit,
-      cursor: params.cursor,
-      sort: params.sort,
-      applyPinnedHead: params.sort === 'new',
-      topLevelOnly: params.topLevelOnly,
-      ...collapseOpts,
-    });
-  }
-
-  async groupMedia(params: {
-    viewerUserId: string;
-    slug: string;
-    limit: number;
-    cursor: string | null;
-    sort: 'new' | 'trending';
-  }) {
-    const slug = (params.slug ?? '').trim();
-    if (!slug) throw new NotFoundException('Group not found.');
-    const g = await this.prisma.communityGroup.findFirst({
-      where: { slug, deletedAt: null },
-    });
-    if (!g) throw new NotFoundException('Group not found.');
-
-    const result = await this.posts.listMediaForCommunityGroup({
-      viewerUserId: params.viewerUserId,
-      groupId: g.id,
-      limit: params.limit,
-      cursor: params.cursor,
-      sort: params.sort,
-    });
-    return { data: result.items, pagination: { nextCursor: result.nextCursor } };
-  }
-
-  async groupsHubMedia(params: {
-    viewerUserId: string;
-    limit: number;
-    cursor: string | null;
-    sort: 'new' | 'trending';
-  }) {
-    const result = await this.posts.listMediaForGroupsHub({
-      viewerUserId: params.viewerUserId,
-      limit: params.limit,
-      cursor: params.cursor,
-      sort: params.sort,
-    });
-    return { data: result.items, pagination: { nextCursor: result.nextCursor } };
-  }
-
-  async myGroupsHubFeed(params: {
-    viewerUserId: string;
-    groupId: string | null;
-    limit: number;
-    cursor: string | null;
-    sort: 'new' | 'trending';
-  }) {
-    const filterId = (params.groupId ?? '').trim() || null;
-    const collapseOpts = {
-      collapseByRoot: true,
-      collapseMode: 'root' as const,
-      prefer: 'reply' as const,
-      collapseMaxPerRoot: 2,
-    };
-
-    if (filterId) {
-      await this.assertActiveMember(filterId, params.viewerUserId);
-      return this.posts.listComposedGroupScopedFeed({
-        viewerUserId: params.viewerUserId,
-        groupIds: [filterId],
-        limit: params.limit,
-        cursor: params.cursor,
-        sort: params.sort,
-        applyPinnedHead: params.sort === 'new',
-        ...collapseOpts,
-      });
-    }
-
-    const memberships = await this.prisma.communityGroupMember.findMany({
-      where: { userId: params.viewerUserId, status: 'active' },
-      select: { groupId: true },
-    });
-    const groupIds = memberships.map((m) => m.groupId);
-    if (groupIds.length === 0) {
-      return { data: [], pagination: { nextCursor: null as string | null } };
-    }
-
-    return this.posts.listComposedGroupScopedFeed({
-      viewerUserId: params.viewerUserId,
-      groupIds,
-      limit: params.limit,
-      cursor: params.cursor,
-      sort: params.sort,
-      applyPinnedHead: false,
-      ...collapseOpts,
-    });
-  }
-
-  async listMembers(params: {
-    viewerUserId: string;
-    groupId: string;
-    limit: number;
-    cursor: string | null;
-    q?: string | null;
-  }): Promise<{ data: CommunityGroupMemberListItemDto[]; pagination: { nextCursor: string | null } }> {
-    await this.assertActiveMember(params.groupId, params.viewerUserId);
-    const q = (params.q ?? '').trim();
-    const limit = Math.min(Math.max(params.limit ?? 30, 1), 50);
-
-    const searchClause: Prisma.CommunityGroupMemberWhereInput | undefined =
-      q.length > 0
-        ? {
-            OR: [
-              { user: { username: { contains: q, mode: 'insensitive' } } },
-              { user: { name: { contains: q, mode: 'insensitive' } } },
-            ],
-          }
-        : undefined;
-
-    const cursorUserId = (params.cursor ?? '').trim();
-    const cursorMember = cursorUserId
-      ? await this.prisma.communityGroupMember.findUnique({
-          where: { groupId_userId: { groupId: params.groupId, userId: cursorUserId } },
-          select: { userId: true, createdAt: true, role: true },
-        })
-      : null;
-    // Sort: owner first, then moderator, then member; within each role, earliest join first.
-    // Cursor WHERE mirrors orderBy [role desc, createdAt asc, userId asc].
-    // Prisma enum filters don't support lt/gt, so we enumerate the role values
-    // that appear after the cursor in the desc sort (i.e. lower declaration rank).
-    const ROLES_BY_RANK: CommunityGroupMemberRole[] = ['owner', 'moderator', 'member'];
-    const rolesAfterCursor = cursorMember
-      ? ROLES_BY_RANK.slice(ROLES_BY_RANK.indexOf(cursorMember.role) + 1)
-      : [];
-    const cursorWhere: Prisma.CommunityGroupMemberWhereInput | null = cursorMember
-      ? {
-          OR: [
-            ...(rolesAfterCursor.length ? [{ role: { in: rolesAfterCursor } }] : []),
-            {
-              AND: [
-                { role: cursorMember.role },
-                { createdAt: { gt: cursorMember.createdAt } },
-              ],
-            },
-            {
-              AND: [
-                { role: cursorMember.role },
-                { createdAt: cursorMember.createdAt },
-                { userId: { gt: cursorMember.userId } },
-              ],
-            },
-          ],
-        }
-      : null;
-
-    const andParts: Prisma.CommunityGroupMemberWhereInput[] = [];
-    if (searchClause) andParts.push(searchClause);
-    if (cursorWhere) andParts.push(cursorWhere);
-
-    const rows = await this.prisma.communityGroupMember.findMany({
-      where: {
-        groupId: params.groupId,
-        status: 'active',
-        ...(andParts.length ? { AND: andParts } : {}),
-      },
-      include: { user: { select: USER_LIST_SELECT } },
-      orderBy: [{ role: 'desc' }, { createdAt: 'asc' }, { userId: 'asc' }],
-      take: limit + 1,
-    });
-
-    const r2 = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const { items: slice, nextCursor: nextCursor } = toPage(rows, limit, (r) => r.userId);
-
-    const data: CommunityGroupMemberListItemDto[] = slice.map((m) => ({
-      userId: m.userId,
-      username: m.user.username,
-      name: m.user.name,
-      role: m.role,
-      avatarUrl: publicAssetUrl({
-        publicBaseUrl: r2,
-        key: m.user.avatarKey ?? null,
-        updatedAt: m.user.avatarUpdatedAt ?? null,
-      }), avatarVideo: toAvatarVideoDto(m.user, r2),
-      joinedAt: m.createdAt.toISOString(),
-    }));
-
-    return { data, pagination: { nextCursor } };
-  }
-
   async pinPost(params: { viewerUserId: string; isSiteAdmin: boolean; groupId: string; postId: string }) {
     const mem = await this.prisma.communityGroupMember.findUnique({
       where: { groupId_userId: { groupId: params.groupId, userId: params.viewerUserId } },
@@ -1042,12 +565,12 @@ export class GroupsService {
     }
     const postId = (params.postId ?? '').trim();
     if (!postId) throw new NotFoundException('Post not found.');
-    const post = await this.postsRead.read.findFirst({
+    const post = await this.postsRead.findFirst({
       where: {
         id: postId,
         communityGroupId: params.groupId,
         parentId: null,
-        deletedAt: null,
+        ...NOT_DELETED,
       },
       select: { id: true },
     });
@@ -1055,14 +578,8 @@ export class GroupsService {
 
     const now = new Date();
     await this.prisma.$transaction(async (tx) => {
-      await this.postsWrite.writeOn(tx).updateMany({
-        where: { communityGroupId: params.groupId, pinnedInGroupAt: { not: null } },
-        data: { pinnedInGroupAt: null },
-      });
-      await this.postsWrite.writeOn(tx).update({
-        where: { id: postId },
-        data: { pinnedInGroupAt: now },
-      });
+      await this.postsWrite.replaceGroupPin(tx, params.groupId, postId, now);
+      ;
     });
     return { data: { ok: true as const } };
   }
@@ -1076,10 +593,7 @@ export class GroupsService {
     if (!isOwner && !params.isSiteAdmin) {
       throw new ForbiddenException('Only the group owner can unpin posts.');
     }
-    await this.postsWrite.write.updateMany({
-      where: { communityGroupId: params.groupId, pinnedInGroupAt: { not: null } },
-      data: { pinnedInGroupAt: null },
-    });
+    await this.postsWrite.clearGroupPin(params.groupId);
     return { data: { ok: true as const } };
   }
 
@@ -1087,7 +601,7 @@ export class GroupsService {
     const s = (slug ?? '').trim();
     if (!s) return null;
     const g = await this.prisma.communityGroup.findFirst({
-      where: { slug: s, deletedAt: null },
+      where: { slug: s, ...NOT_DELETED },
       select: { id: true },
     });
     return g?.id ?? null;
@@ -1103,7 +617,7 @@ export class GroupsService {
     data: ReturnType<typeof toCommunityGroupShellDto>[];
     pagination: { nextCursor: string | null };
   }> {
-    return searchGroupsOn(this, params);
+    return this.search.searchGroups(params);
   }
 
 
@@ -1111,25 +625,6 @@ export class GroupsService {
     viewerUserId: string | null,
     opts: { excludeMine?: boolean; take?: number; cursor?: string | null } = {},
   ) {
-    return listExploreSpotlightOn(this, viewerUserId, opts);
-  }
-
-  compareViewerGroupOrder(
-    aGroup: { createdAt?: Date },
-    aMembership: { status: string; role: string; createdAt: Date } | null | undefined,
-    bGroup: { createdAt?: Date },
-    bMembership: { status: string; role: string; createdAt: Date } | null | undefined,
-  ): number {
-    const aOwner = aMembership?.status === 'active' && aMembership.role === 'owner';
-    const bOwner = bMembership?.status === 'active' && bMembership.role === 'owner';
-    if (aOwner !== bOwner) return aOwner ? -1 : 1;
-
-    const aJoined = aMembership?.status === 'active';
-    const bJoined = bMembership?.status === 'active';
-    if (aJoined !== bJoined) return aJoined ? -1 : 1;
-
-    const aDate = (aMembership?.createdAt ?? aGroup.createdAt)?.getTime() ?? 0;
-    const bDate = (bMembership?.createdAt ?? bGroup.createdAt)?.getTime() ?? 0;
-    return bDate - aDate;
+    return this.explore.listExploreSpotlight(viewerUserId, opts);
   }
 }

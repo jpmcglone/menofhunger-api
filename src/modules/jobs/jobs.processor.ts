@@ -1,3 +1,5 @@
+import { Inject } from '@nestjs/common';
+import { PostsRankingService } from '../posts/posts-ranking.service';
 import { DelegationRunnerService } from '../admin/delegation/delegation-runner.service';
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { reportJobFailure } from '../../common/sentry/report-job-failure';
@@ -12,6 +14,7 @@ import { HashtagsCleanupCron } from '../hashtags/hashtags-cleanup.cron';
 import { NotificationsCleanupCron } from '../notifications/notifications-cleanup.cron';
 import { NotificationsOrphanCleanupCron } from '../notifications/notifications-orphan-cleanup.cron';
 import { NotificationsEmailCron } from '../notifications/notifications-email.cron';
+import { NotificationsEmailWeeklyService } from '../notifications/notifications-email-weekly.service';
 import { NotificationsReplyNudgeCron } from '../notifications/notifications-reply-nudge.cron';
 import { AuthCleanupCron } from '../auth/auth-cleanup.cron';
 import { AccountDeletionFinalizeCron } from '../auth/account-deletion-finalize.cron';
@@ -23,12 +26,12 @@ import { AdminIntroBriefCron } from '../admin/admin-intro-brief.cron';
 import { CheckinsStreakResetCron } from '../checkins/checkins-streak-reset.cron';
 import { CheckinReminderCron } from '../checkins/checkin-reminder.cron';
 import { OnThisDayCron } from '../notifications/on-this-day.cron';
-import { PostsService } from '../posts/posts.service';
+
 import { ArticlesTrendingScoreCron } from '../articles/articles-trending-score.cron';
 import { CrewJobsCron } from '../crew/crew-jobs.cron';
 import { ScheduledPostsPublishCron } from '../posts/scheduled-posts-publish.cron';
 import { NewslettersCron } from '../newsletters/newsletters.cron';
-import { NotificationWriterService } from '../notifications/notification-writer.service';
+import { NotificationFanoutContentService } from '../notifications/notification-fanout-content.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { TranscriptionService } from '../transcription/transcription.service';
 import { CallsService } from '../calls/calls.service';
@@ -47,6 +50,7 @@ export class JobsProcessor extends WorkerHost {
     private readonly notificationsCleanup: NotificationsCleanupCron,
     private readonly notificationsOrphanCleanup: NotificationsOrphanCleanupCron,
     private readonly notificationsEmail: NotificationsEmailCron,
+    private readonly notificationsEmailWeekly: NotificationsEmailWeeklyService,
     private readonly notificationsReplyNudge: NotificationsReplyNudgeCron,
     private readonly dailyContent: DailyContentCron,
     private readonly authCleanup: AuthCleanupCron,
@@ -58,12 +62,12 @@ export class JobsProcessor extends WorkerHost {
     private readonly checkinsStreakReset: CheckinsStreakResetCron,
     private readonly checkinReminder: CheckinReminderCron,
     private readonly onThisDay: OnThisDayCron,
-    private readonly postsService: PostsService,
+    @Inject(PostsRankingService) private readonly postsServiceRanking: Pick<PostsRankingService, 'refreshAndStoreTrendingScore'>,
     private readonly articlesTrendingScore: ArticlesTrendingScoreCron,
     private readonly crewJobs: CrewJobsCron,
     private readonly scheduledPostsPublish: ScheduledPostsPublishCron,
     private readonly newsletters: NewslettersCron,
-    private readonly notificationWriter: NotificationWriterService,
+    private readonly notificationFanout: NotificationFanoutContentService,
     private readonly sideEffects: SideEffectsService,
     private readonly calls: CallsService,
     private readonly delegation: DelegationRunnerService,
@@ -107,13 +111,13 @@ export class JobsProcessor extends WorkerHost {
           await this.notificationsEmail.runSendNewNotificationsNudges();
           return { ok: true };
         case JOBS.notificationsWeeklyDigest:
-          await this.notificationsEmail.runSendWeeklyDigest();
+          await this.notificationsEmailWeekly.runSendWeeklyDigest();
           return { ok: true };
         case JOBS.notificationsInstantHighSignalEmail:
           await this.notificationsEmail.runSendInstantHighSignalEmail(job.data ?? undefined);
           return { ok: true };
         case JOBS.notificationsStreakReminderEmail:
-          await this.notificationsEmail.runSendStreakReminderEmail(job.data ?? undefined);
+          await this.notificationsEmailWeekly.runSendStreakReminderEmail(job.data ?? undefined);
           return { ok: true };
         case JOBS.notificationsProfileReminderEmail:
           await this.notificationsEmail.runSendProfileReminderEmail();
@@ -128,10 +132,10 @@ export class JobsProcessor extends WorkerHost {
           await this.dailyContent.runPublishQuote(job.data ?? {});
           return { ok: true };
         case JOBS.dailyContentFanoutWord:
-          await this.notificationWriter.fanOutDailyContentNotifications({ item: 'word', dayKey: String(job.data?.dayKey ?? '') });
+          await this.notificationFanout.fanOutDailyContentNotifications({ item: 'word', dayKey: String(job.data?.dayKey ?? '') });
           return { ok: true };
         case JOBS.dailyContentFanoutQuote:
-          await this.notificationWriter.fanOutDailyContentNotifications({ item: 'quote', dayKey: String(job.data?.dayKey ?? '') });
+          await this.notificationFanout.fanOutDailyContentNotifications({ item: 'quote', dayKey: String(job.data?.dayKey ?? '') });
           return { ok: true };
         case JOBS.authCleanup:
           await this.authCleanup.runCleanupExpiredAuthRecords();
@@ -158,10 +162,10 @@ export class JobsProcessor extends WorkerHost {
           await this.checkinsStreakReset.runCrewStreakBrokenPush(job.data ?? {});
           return { ok: true };
         case JOBS.checkinReminderFanout:
-          await this.notificationWriter.fanOutCheckinReminders({ dayKey: String(job.data?.dayKey ?? '') });
+          await this.notificationFanout.fanOutCheckinReminders({ dayKey: String(job.data?.dayKey ?? '') });
           return { ok: true };
         case JOBS.onThisDayFanout:
-          await this.notificationWriter.fanOutOnThisDayNotifications({ dayKey: String(job.data?.dayKey ?? '') });
+          await this.notificationFanout.fanOutOnThisDayNotifications({ dayKey: String(job.data?.dayKey ?? '') });
           return { ok: true };
         case JOBS.articlesViewMilestoneSweep:
           await this.articlesTrendingScore.runViewMilestoneSweep();
@@ -170,7 +174,7 @@ export class JobsProcessor extends WorkerHost {
           await this.notificationsEmail.runSendFollowedArticleEmail(job.data ?? undefined);
           return { ok: true };
         case JOBS.postsRefreshSinglePostScore:
-          await this.postsService.refreshAndStoreTrendingScore(job.data?.postId);
+          await this.postsServiceRanking.refreshAndStoreTrendingScore(job.data?.postId);
           return { ok: true };
         case JOBS.crewInvitesExpire:
           await this.crewJobs.runExpireInvites();

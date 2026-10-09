@@ -1,4 +1,5 @@
 import type { PrismaService } from '../prisma/prisma.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 /** Every verified person belongs to this group. Keep in sync with the membership backfill migration. */
 export const OFFICIAL_GROUP_SLUG = 'men-of-hunger';
@@ -6,7 +7,7 @@ export const OFFICIAL_GROUP_SLUG = 'men-of-hunger';
 /** Idempotent. Missing group, banned, bot, or organization accounts are skipped. */
 export async function joinOfficialGroup(prisma: Pick<PrismaService, '$transaction'>, userId: string): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
-    const group = await tx.communityGroup.findFirst({ where: { slug: OFFICIAL_GROUP_SLUG, deletedAt: null }, select: { id: true } });
+    const group = await tx.communityGroup.findFirst({ where: { slug: OFFICIAL_GROUP_SLUG, ...NOT_DELETED }, select: { id: true } });
     const user = await tx.user.findUnique({ where: { id: userId }, select: { bannedAt: true, isBot: true, isOrganization: true, verifiedStatus: true } });
     if (!group || !user || user.bannedAt || user.isBot || user.isOrganization || user.verifiedStatus === 'none') return false;
     const key = { groupId_userId: { groupId: group.id, userId } };

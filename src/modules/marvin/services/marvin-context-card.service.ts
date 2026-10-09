@@ -1,3 +1,5 @@
+import { NOT_BANNED_USER_WHERE } from '../../../common/prisma-selects/user.where';
+import { clampLimit } from '../../../common/pagination/page';
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -8,7 +10,8 @@ import { fillVisionSlots, marvMediaMarker, resolveMarvVisionUrl } from './marvin
 import { marvPublicProfilePostWhere } from './marvin-post-access';
 
 import { PostsReadService } from '../../posts-read/posts-read.service';
-import { USER_REF_SELECT } from '../../../common/prisma-selects/user.select';
+import { USER_BRIEF_SELECT, USER_REF_SELECT } from '../../../common/prisma-selects/user.select';
+import { NOT_DELETED } from '../../../common/prisma/where';
 export type GeneratedContextCard = {
   cardText: string;
   source: 'generated' | 'manual' | 'hybrid' | 'fallback';
@@ -151,7 +154,7 @@ export class MarvinContextCardService {
     const u = (username ?? '').trim();
     if (!u) return null;
     const user = await this.prisma.user.findFirst({
-      where: { username: { equals: u, mode: 'insensitive' }, isBot: false, bannedAt: null },
+      where: { username: { equals: u, mode: 'insensitive' }, isBot: false, ...NOT_BANNED_USER_WHERE },
       select: USER_REF_SELECT,
     });
     if (!user) return null;
@@ -275,7 +278,7 @@ export class MarvinContextCardService {
    * Users who need a card: none yet, or new public posts/articles since the last write.
    */
   async listUsersNeedingCardRefresh(take = 100): Promise<string[]> {
-    const limit = Math.max(1, Math.min(500, take));
+    const limit = clampLimit(take, { default: 500, max: 500 });
     const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
       SELECT u.id
       FROM "User" u
@@ -312,9 +315,7 @@ export class MarvinContextCardService {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
-        id: true,
-        username: true,
-        name: true,
+        ...USER_BRIEF_SELECT,
         bio: true,
         interests: true,
         premium: true,
@@ -341,10 +342,10 @@ export class MarvinContextCardService {
   }
 
   private async loadPublicPosts(userId: string, since: Date | null): Promise<CardPost[]> {
-    return this.postsRead.read.findMany({
+    return this.postsRead.findMany({
       where: {
         userId,
-        deletedAt: null,
+        ...NOT_DELETED,
         visibility: 'public',
         ...marvPublicProfilePostWhere(),
         ...(since ? { createdAt: { gt: since } } : {}),
@@ -355,7 +356,7 @@ export class MarvinContextCardService {
         body: true,
         createdAt: true,
         media: {
-          where: { deletedAt: null },
+          where: NOT_DELETED,
           select: { kind: true, source: true, r2Key: true, url: true, thumbnailR2Key: true, position: true },
           orderBy: { position: 'asc' },
         },
@@ -374,7 +375,7 @@ export class MarvinContextCardService {
     const rows = await this.prisma.article.findMany({
       where: {
         authorId: userId,
-        deletedAt: null,
+        ...NOT_DELETED,
         isDraft: false,
         visibility: 'public',
         publishedAt: since ? { gt: since } : { not: null },

@@ -1,14 +1,8 @@
 import { Body, Controller, Get, Post, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
-import { z } from 'zod';
 import { AdminGuard } from './admin.guard';
 import { DailyContentService } from '../daily-content/daily-content.service';
-import { queryBoolean } from '../../common/validation/query-boolean';
-
-const republishSchema = z.object({
-  quote: queryBoolean().optional(),
-  websters1828: queryBoolean().optional(),
-});
+import { republishSchema } from './admin-daily-content.schemas';
 
 @UseGuards(AdminGuard)
 @Controller('admin/daily-content')

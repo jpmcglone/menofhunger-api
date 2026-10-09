@@ -7,6 +7,8 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { BOARD_MAX_TAGS, normalizeBoardTags } from './board.utils';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { extractLinks } from '../link-metadata/link-metadata-extract';
+import { NOT_DELETED } from '../../common/prisma/where';
 /** Links read per post: the post's own link plus the first few in its text. */
 const MAX_LINKS = 4;
 /** Established tags offered to the model so the Board converges on a shared vocabulary. */
@@ -52,8 +54,8 @@ export class BoardTaggerService {
   ) {}
 
   async tagThread(threadId: string): Promise<string[] | null> {
-    const row = await this.postsRead.read.findFirst({
-      where: { id: threadId, kind: 'board', parentId: null, deletedAt: null },
+    const row = await this.postsRead.findFirst({
+      where: { id: threadId, kind: 'board', parentId: null, ...NOT_DELETED },
       select: {
         id: true,
         body: true,
@@ -63,7 +65,7 @@ export class BoardTaggerService {
     });
     if (!row?.boardThread) return null;
 
-    const links = [row.boardThread.url, ...this.linkMetadata.extractLinks(row.body ?? '')]
+    const links = [row.boardThread.url, ...extractLinks(row.body ?? '')]
       .filter((u): u is string => Boolean(u))
       .filter((u, i, all) => all.indexOf(u) === i)
       .slice(0, MAX_LINKS);

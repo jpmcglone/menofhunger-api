@@ -1,26 +1,12 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  ForbiddenException,
-  Get,
-  Post,
-  Query,
-  Req,
-  Res,
-  UnauthorizedException,
-  UseGuards,
-} from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Post, Query, Req, Res, UnauthorizedException, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { getSessionCookie } from '../../common/session-cookie';
-import { AuthService, type SessionResult } from './auth.service';
-import { AccountDeletionService } from './account-deletion.service';
-import { OTP_CODE_LENGTH } from './auth.constants';
+import { AuthService } from './auth.service';
+import { assertNotImpersonating } from './auth-session.guards';
 import { normalizePhone } from './auth.utils';
-import { signupAttributionSchema } from './signup-attribution';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import type { BrowserHandoffDto } from '../../common/dto';
@@ -28,59 +14,19 @@ import { AuthGuard, type AuthedRequest } from './auth.guard';
 import { BrowserHandoffService } from './browser-handoff.service';
 import { ImpersonationService } from './impersonation.service';
 import { AccountSwitchService } from './account-switch.service';
-import { assertPersonAccount } from '../pages/pages.constants';
-
-const startSchema = z.object({
-  phone: z.string().min(1),
-});
-
-const existsQuerySchema = z.object({
-  phone: z.string().min(1),
-});
-
-const deleteAccountSchema = z.object({
-  reason: z.string().max(100).optional().nullable(),
-  details: z.string().max(2000).optional().nullable(),
-});
-
-const browserHandoffSchema = z.object({
-  destination: z.string().max(2048).optional(),
-});
-
-const browserHandoffRedeemSchema = z.object({
-  code: z.string().min(1).max(256),
-});
-
-/**
- * Irreversible account-level actions are refused while a site admin is impersonating.
- * An admin debugging someone's account must never be able to delete it or sign them out
- * of all their devices.
- */
-function assertNotImpersonating(session: SessionResult | null, action: string): void {
-  if (!session?.impersonatedByUserId) return;
-  throw new ForbiddenException({
-    message: `You are signed in as another user. Exit impersonation before trying to ${action}.`,
-    error: 'impersonation_forbidden',
-  });
-}
-
-const verifySchema = z.object({
-  phone: z.string().min(1),
-  code: z
-    .string()
-    .min(OTP_CODE_LENGTH)
-    .max(OTP_CODE_LENGTH)
-    .regex(/^\d+$/, 'Code must be numeric'),
-  referralCode: z.string().max(50).optional().nullable(),
-  attribution: signupAttributionSchema,
-});
+import {
+  startSchema,
+  existsQuerySchema,
+  browserHandoffSchema,
+  browserHandoffRedeemSchema,
+  verifySchema,
+} from './auth.schemas';
 
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
   constructor(
     private readonly auth: AuthService,
-    private readonly accountDeletion: AccountDeletionService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly browserHandoff: BrowserHandoffService,
     private readonly impersonation: ImpersonationService,
@@ -253,39 +199,6 @@ export class AuthController {
     // the restored cookie (same contract as login).
     const result = await this.impersonation.stop(token, res);
     return { data: result };
-  }
-
-  @ApiOperation({ summary: 'Schedule account deletion with a 30-day grace period (self-service, App Store 5.1.1v)' })
-  @Throttle({
-    default: {
-      limit: rateLimitLimit('authStart', 4),
-      ttl: rateLimitTtl('authStart', 60),
-    },
-  })
-  @Post('account/delete')
-  async deleteAccount(@Req() req: Request, @Res({ passthrough: true }) res: Response, @Body() body: unknown) {
-    const token = getSessionCookie(req);
-    const sessionResult = await this.auth.meFromSessionToken(token);
-    const userId = sessionResult?.user?.id;
-    if (!userId) throw new UnauthorizedException('You must be signed in to delete your account.');
-    assertNotImpersonating(sessionResult, 'delete this account');
-    assertPersonAccount(sessionResult.user.accountKind);
-
-    const parsed = deleteAccountSchema.parse(body ?? {});
-    const result = await this.accountDeletion.requestDeletion(userId, {
-      reason: parsed.reason ?? null,
-      details: parsed.details ?? null,
-    });
-
-    // Sessions are already revoked server-side; also clear this client's cookie.
-    await this.auth.logout(token, res);
-    return { data: result };
-  }
-
-  @Post('account/deletion-status')
-  async deletionStatus(@Body() body: unknown) {
-    const { token } = z.object({ token: z.string().uuid() }).parse(body);
-    return { data: await this.accountDeletion.status(token) };
   }
 
   @ApiOperation({ summary: 'Logout current session, clear cookie, and disconnect realtime sockets' })

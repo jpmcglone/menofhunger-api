@@ -1,7 +1,9 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
+import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuthService } from '../auth/auth.service';
+import { AuthService } from '../auth/auth-public-api';
 import { BillingService } from '../billing/billing.service';
 import { AffiliateService } from '../billing/affiliate.service';
 import { CoinsService } from '../coins/coins.service';
@@ -65,8 +67,7 @@ export class UserVerificationService {
     const current = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
-        id: true,
-        username: true,
+        ...USER_REF_SELECT,
         verifiedStatus: true,
         unverifiedAt: true,
       },
@@ -192,7 +193,7 @@ export class UserVerificationService {
   async notifyAdminQueueChanged(action: 'created' | 'reviewed', requestId?: string | null): Promise<void> {
     try {
       const admins = await this.prisma.user.findMany({
-        where: { siteAdmin: true, bannedAt: null }, select: { id: true },
+        where: { siteAdmin: true, ...NOT_BANNED_USER_WHERE }, select: { id: true },
       });
       for (const admin of admins) {
         this.presenceRealtime.emitAdminUpdated(admin.id, {

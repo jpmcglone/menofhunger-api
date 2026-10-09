@@ -1,23 +1,16 @@
+import { isUniqueViolation } from '../../common/prisma/errors';
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
-import { AccountKind, Prisma } from '@prisma/client';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { AccountKind } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuthService } from '../auth/auth.service';
+import { AuthService } from '../auth/auth-public-api';
 import { EntitlementService } from '../billing/entitlement.service';
 import { validateUsername } from '../users/users.utils';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { AppConfigService } from '../app/app-config.service';
-import {
-  PAGE_BIRTHDATE,
-  PAGE_HEARD_ABOUT_US,
-  PAGE_ONBOARDING_INTERESTS,
-} from './pages.constants';
+import { PAGE_BIRTHDATE, PAGE_HEARD_ABOUT_US, PAGE_ONBOARDING_INTERESTS } from './pages.constants';
 
 export type PageOperatorDto = {
   id: string;
@@ -105,7 +98,7 @@ export class PagesService {
       });
       pageId = page.id;
     } catch (err: unknown) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      if (isUniqueViolation(err)) {
         throw new ConflictException('That username is already taken.');
       }
       throw err;
@@ -204,7 +197,7 @@ export class PagesService {
       orderBy: { createdAt: 'asc' },
       include: {
         operator: {
-          select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true },
+          select: { ...USER_BRIEF_SELECT, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true },
         },
       },
     });
@@ -218,9 +211,7 @@ export class PagesService {
       include: {
         page: {
           select: {
-            id: true,
-            username: true,
-            name: true,
+            ...USER_BRIEF_SELECT,
             avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
             avatarUpdatedAt: true,
             accountKind: true,
@@ -295,9 +286,7 @@ export class PagesService {
     const page = await this.prisma.user.findUnique({
       where: { id: pageUserId },
       select: {
-        id: true,
-        username: true,
-        name: true,
+        ...USER_BRIEF_SELECT,
         accountKind: true,
         isOrganization: true,
       },
@@ -313,9 +302,7 @@ export class PagesService {
     const operator = await this.prisma.user.findUnique({
       where: { id: operatorUserId },
       select: {
-        id: true,
-        username: true,
-        name: true,
+        ...USER_BRIEF_SELECT,
         avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
         avatarUpdatedAt: true,
         accountKind: true,
@@ -338,7 +325,7 @@ export class PagesService {
         data: { pageUserId, operatorUserId },
       });
     } catch (err: unknown) {
-      if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) {
+      if (!(isUniqueViolation(err))) {
         throw err;
       }
     }
@@ -349,7 +336,7 @@ export class PagesService {
           data: { userId: operatorUserId, orgId: pageUserId },
         });
       } catch (err: unknown) {
-        if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) {
+        if (!(isUniqueViolation(err))) {
           throw err;
         }
       }

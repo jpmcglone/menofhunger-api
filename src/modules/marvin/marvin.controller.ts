@@ -1,78 +1,22 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Query,
-  Req,
-  UseGuards,
-} from '@nestjs/common';
-import { z } from 'zod';
-import { AuthGuard } from '../auth/auth.guard';
-import { AdminGuard, type AdminRequest } from '../admin/admin.guard';
+import { adminUserPatchSchema } from './marvin-admin.schemas';
+import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { AuthGuard } from '../auth/auth-public-api';
+import { type AdminRequest } from '../admin/admin.guard';
+import { AdminGuard } from '../admin/admin.guard';
 import { CurrentUserId } from '../users/users.decorator';
-import type {
-  MarvinCatchUpDto,
-  MarvinContextCardDto,
-  MarvinCreditSummaryDto,
-  MarvinMeDto,
-  MarvinModeDto,
-  MarvinUsageEventDto,
-} from '../../common/dto/marvin';
+import type { MarvinCatchUpDto, MarvinContextCardDto, MarvinCreditSummaryDto, MarvinMeDto, MarvinModeDto, MarvinUsageEventDto } from '../../common/dto/marvin';
 import { MarvinMeService, creditSummaryToDto } from './services/marvin-me.service';
 import { MarvinAdminService } from './services/marvin-admin.service';
 import { MarvinCatchUpService } from './services/marvin-catch-up.service';
-
-const updatePreferencesSchema = z.object({
-  preferredMode: z.enum(['auto', 'fast', 'regular', 'smart']).optional(),
-  aiConsent: z.boolean().optional(),
-});
-
-const catchUpBodySchema = z.object({
-  mode: z.enum(['auto', 'fast', 'regular', 'smart']).optional(),
-  refresh: z.boolean().optional(),
-  cacheOnly: z.boolean().optional(),
-  includeImages: z.boolean().optional(),
-});
-
-const adminUsersQuerySchema = z.object({
-  q: z.string().trim().max(80).optional(),
-  cursor: z.string().trim().max(64).optional(),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-});
-
-const myUsageQuerySchema = z.object({
-  cursor: z.string().trim().max(64).optional(),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-});
-
-const adminUsageQuerySchema = z.object({
-  userId: z.string().trim().max(64).optional(),
-  source: z.enum(['public_thread', 'private_session', 'catch_up', 'admin_console']).optional(),
-  cursor: z.string().trim().max(64).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-});
-
-export const adminUserPatchSchema = z.object({
-  credits: z.number().min(0).max(1_000_000).optional(),
-  disabled: z.boolean().optional(),
-});
-
-const adminCostQuerySchema = z.object({
-  sinceDays: z.coerce.number().int().min(1).max(90).optional(),
-});
-
-const adminConfigPatchSchema = z.object({
-  enabled: z.boolean().optional(),
-  fastCost: z.union([z.number().min(0), z.null()]).optional(),
-  regularCost: z.union([z.number().min(0), z.null()]).optional(),
-  smartCost: z.union([z.number().min(0), z.null()]).optional(),
-  fastModel: z.union([z.string().trim().min(1).max(80), z.null()]).optional(),
-  regularModel: z.union([z.string().trim().min(1).max(80), z.null()]).optional(),
-  smartModel: z.union([z.string().trim().min(1).max(80), z.null()]).optional(),
-});
+import {
+  updatePreferencesSchema,
+  catchUpBodySchema,
+  adminUsersQuerySchema,
+  myUsageQuerySchema,
+  adminUsageQuerySchema,
+  adminCostQuerySchema,
+  adminConfigPatchSchema,
+} from './marvin.schemas';
 
 /**
  * User-facing + admin endpoints for Marv.
@@ -148,7 +92,7 @@ export class MarvinController {
   /**
    * "Catch me up" — summarize the conversation above AND below a post. Premium-only,
    * mode-routed, spends credits (cache hits are free). Visibility is enforced through
-   * `PostsService.getById`, so gated/private posts return the same 403/404 as the
+   * `PostsFeedLookupService.getById`, so gated/private posts return the same 403/404 as the
    * permalink endpoint.
    */
   @UseGuards(AuthGuard)

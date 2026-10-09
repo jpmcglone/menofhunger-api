@@ -1,26 +1,16 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { toAvatarVideoDto } from "../../common/dto/avatar-video.dto";
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { ViewerContextService } from "../viewer/viewer-context.service";
+import { listActiveGroupIdsForUser } from "../viewer/group-membership.queries";
 import { AppConfigService } from "../app/app-config.service";
 import { publicAssetUrl } from "../../common/assets/public-asset-url";
-import type {
-  ConversationInsightsDto,
-  ConversationPersonDto,
-  ConversationContextDto,
-} from "../../common/dto/conversation.dto";
-import {
-  conversationDays,
-  addConversationEvent,
-  DAY_MS,
-  unansweredOpportunity,
-  uniqueReachPeople,
-} from "./conversation-insights";
-import {
-  easternDayStart,
-  easternLastDayKeys,
-} from "../../common/time/eastern-day-key";
+import type { ConversationInsightsDto, ConversationPersonDto, ConversationContextDto } from "../../common/dto/conversation.dto";
+import { conversationDays, addConversationEvent, DAY_MS, unansweredOpportunity, uniqueReachPeople } from "./conversation-insights";
+import { easternDayStart, easternLastDayKeys } from "../../common/time/eastern-day-key";
+import { NOT_DELETED } from '../../common/prisma/where';
 const personSelect = {
   id: true,
   username: true,
@@ -53,16 +43,13 @@ export class ConversationsService {
     };
   }
   async readableWhere(userId: string): Promise<Prisma.PostWhereInput> {
-    const [viewer, blocks, memberships] = await Promise.all([
+    const [viewer, blocks, memberGroupIds] = await Promise.all([
       this.viewers.getViewerOrThrow(userId),
       this.prisma.userBlock.findMany({
         where: { OR: [{ blockerId: userId }, { blockedId: userId }] },
         select: { blockerId: true, blockedId: true },
       }),
-      this.prisma.communityGroupMember.findMany({
-        where: { userId, status: "active" },
-        select: { groupId: true },
-      }),
+      listActiveGroupIdsForUser(this.prisma, userId),
     ]);
     const excluded = blocks.map((b) =>
       b.blockerId === userId ? b.blockedId : b.blockerId,
@@ -70,9 +57,9 @@ export class ConversationsService {
     return {
       AND: [
         {
-          deletedAt: null,
+          ...NOT_DELETED,
           isDraft: false,
-          user: { bannedAt: null },
+          user: NOT_BANNED_USER_WHERE,
           userId: { notIn: excluded },
         },
         {
@@ -92,9 +79,9 @@ export class ConversationsService {
             { communityGroupId: null },
             {
               communityGroup: {
-                deletedAt: null,
+                ...NOT_DELETED,
                 OR: [
-                  { id: { in: memberships.map((m) => m.groupId) } },
+                  { id: { in: memberGroupIds } },
                   ...(viewer.verifiedStatus !== "none"
                     ? [{ joinPolicy: "open" as const }]
                     : []),
@@ -167,7 +154,7 @@ export class ConversationsService {
     const ids = roots.map((p) => p.id);
     const eligibleBooster: Prisma.UserWhereInput = {
       isBot: false,
-      bannedAt: null,
+      ...NOT_BANNED_USER_WHERE,
       blocksInitiated: { none: { blockedId: userId } },
       blocksReceived: { none: { blockerId: userId } },
     };
@@ -464,7 +451,7 @@ export class ConversationsService {
         this.prisma.post.findMany({
           where: {
             userId,
-            deletedAt: null,
+            ...NOT_DELETED,
             OR: [{ rootId: { in: ids } }, { parentId: { in: ids } }],
           },
           select: { rootId: true, parentId: true },
@@ -559,8 +546,8 @@ export class ConversationsService {
                 { userId: { in: [...followed] } },
                 { boosts: { some: { userId } } },
                 { bookmarks: { some: { userId } } },
-                { replies: { some: { userId, deletedAt: null } } },
-                { threadReplies: { some: { userId, deletedAt: null } } },
+                { replies: { some: { userId, ...NOT_DELETED } } },
+                { threadReplies: { some: { userId, ...NOT_DELETED } } },
               ],
             },
           ],

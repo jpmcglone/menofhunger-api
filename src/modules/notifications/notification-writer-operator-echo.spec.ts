@@ -1,4 +1,4 @@
-import { NotificationWriterService } from './notification-writer.service';
+import { makeNotificationWriter, makeNotificationWriterGraph } from './notification-writer.testing';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
 function makeService() {
@@ -9,7 +9,7 @@ function makeService() {
     },
     notification: { create: jest.fn() },
   };
-  const service = new NotificationWriterService(prisma as never, new PostsReadService(prisma as never as never),
+  const { fanout: service } = makeNotificationWriterGraph(prisma as never, new PostsReadService(prisma as never as never),
     { emitNotificationsUpdated: jest.fn() } as never,
     { isOnline: jest.fn().mockResolvedValue(false) } as never,
     { dispatch: jest.fn() } as never,
@@ -43,7 +43,7 @@ describe('NotificationWriterService — person-only kinds skip pages', () => {
       userPageOperator: { findUnique: jest.fn(), findMany: jest.fn(async () => []) },
       notification: { create: jest.fn() },
     };
-    const service = new NotificationWriterService(prisma as never, new PostsReadService(prisma as never as never),
+    const service = makeNotificationWriter(prisma as never, new PostsReadService(prisma as never as never),
       { emitNotificationsUpdated: jest.fn() } as never,
       { isOnline: jest.fn().mockResolvedValue(false) } as never,
       { dispatch: jest.fn() } as never,

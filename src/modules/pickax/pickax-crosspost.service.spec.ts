@@ -172,8 +172,8 @@ describe('Pickax cross-post worker', () => {
 
 describe('Posts controller cross-post wiring', () => {
   it('only asks for a cross-post when the client opted in', () => {
-    const src = readFileSync(resolve(process.cwd(), 'src/modules/posts/posts.controller.ts'), 'utf8');
-    expect(src).toContain('this.pickax.requestPostCrosspost(userId, created.id, pickaxMode)');
-    expect(src).toContain("parsed.crossPostToPickax ? 'native'");
+    const src = readFileSync(resolve(process.cwd(), 'src/modules/posts/posts-publication.controller.ts'), 'utf8');
+    expect(src).toMatch(/this\.pickax\.requestPostCrosspost\(\s*userId,\s*created\.id,\s*pickaxMode,?\s*\)/);
+    expect(src).toMatch(/parsed\.crossPostToPickax\s*\?\s*['"]native['"]/);
   });
 });

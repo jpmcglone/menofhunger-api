@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { PostViewsService } from './post-views.service';
+import { makePostViewsServices } from './post-views.testing';
 import { PostsTopicsBackfillCron } from '../posts/posts-topics-backfill.cron';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
@@ -13,7 +13,7 @@ const enabled = url && new URL(url).hostname === '127.0.0.1' && new URL(url).pat
   db.$on('query', event => queries.push(event.query));
   const notifications = { markReadBySubjects: jest.fn(), markReadBySubject: jest.fn() };
   const analytics = { capture: jest.fn() };
-  const service = new PostViewsService(db as any, {} as any,
+  const { batch: service } = makePostViewsServices(db as any, {} as any,
     { del: async () => undefined, setString: async () => true } as any,
     { bumpForYouUser: async () => undefined } as any,
     { emitPostsLiveUpdated: jest.fn(), emitPostsLiveUpdatedToUser: jest.fn() } as any,

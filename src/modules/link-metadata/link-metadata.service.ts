@@ -1,18 +1,7 @@
 import { fetchWebsiteMetadata } from "./website-profile-metadata";
-import {
-  fetchPickaxProfile,
-  pickaxProfileHandle,
-  type PublicProfileMetadata,
-} from "./pickax-profile-metadata";
-import { readLimitedResponse } from "../../common/http/read-limited-response";
+import { fetchPickaxProfile, pickaxProfileHandle } from "./pickax-profile-metadata";
 import { publicPreviewUrl } from "../../common/urls/public-preview-url";
-import { featurePageForPath } from "../../common/feature-pages";
-import {
-  spotifyContent,
-  isSpotifyShareUrl,
-  resolveSpotifyShareUrl,
-  fetchSpotifyMetadata,
-} from "./spotify-link-metadata";
+import { isSpotifyShareUrl, resolveSpotifyShareUrl } from "./spotify-link-metadata";
 import { Injectable, Logger } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -20,197 +9,16 @@ import { AppConfigService } from "../app/app-config.service";
 import { RedisKeys } from "../redis/redis-keys";
 import { CacheService } from "../redis/cache.service";
 import { CacheTtl } from "../redis/cache-ttl";
-import {
-  isPickaxGatedMarkdown,
-  isPickaxPostUrl,
-  isWeakPickaxImage,
-  needsPickaxEnrichment,
-  parsePickaxAuthorFromJina,
-  parsePickaxBodyFromJina,
-  pickaxAuthorFromTitle,
-} from "./pickax-link-metadata";
-import {
-  isXPostUrl,
-  parseXSyndicationResponse,
-  parseXPostUrl,
-  type SocialPostMetadataDto,
-  xSyndicationToken,
-} from "./x-link-metadata";
-import {
-  isRumbleVideoUrl,
-  enrichRumbleVideo,
-  needsRumbleDimensionRefresh,
-  type VideoEmbedDto,
-} from "./rumble-link-metadata";
-import {
-  isSubstackPostUrl,
-  enrichSubstackPost,
-} from "./substack-link-metadata";
-import {
-  fetchYoutubeMetadata,
-  needsYoutubeEnrichment,
-  youtubeVideoId,
-} from "./youtube-link-metadata";
-
-import { PostsReadService } from '../posts-read/posts-read.service';
-export type GroupLinkPreviewDto = {
-  slug: string;
-  name: string;
-  description: string;
-  avatarUrl: string | null;
-  coverUrl: string | null;
-  memberCount: number;
-  joinPolicy: string;
-};
-
-export type LinkMetadataDto = {
-  profile?: PublicProfileMetadata | null;
-  /** Rich group card; only present for verified viewers. */
-  group?: GroupLinkPreviewDto | null;
-  /** Set instead of `group` when the viewer must sign in or verify to see the card. */
-  locked?: "signIn" | "verify" | null;
-  url: string;
-  title: string | null;
-  description: string | null;
-  imageUrl: string | null;
-  siteName: string | null;
-  socialPost: SocialPostMetadataDto | null;
-  videoEmbed: VideoEmbedDto | null;
-};
-
-const FETCH_TIMEOUT_MS = 2000;
-/** Pickax post pages need a longer scrape window to recover avatar + @handle. */
-const PICKAX_ENRICH_TIMEOUT_MS = 8_000;
-const X_ENRICH_TIMEOUT_MS = 6_000;
-const SUBSTACK_ENRICH_TIMEOUT_MS = 6_000;
-/** Rumble does oEmbed then embedJS for encoded width/height. */
-const RUMBLE_ENRICH_TIMEOUT_MS = 6_000;
-const X_CONNECTOR_LAUNCHED_AT = new Date("2026-07-16T00:00:00.000Z");
-const STALE_DAYS = 7;
-/** Keyset pagination page size when scanning recent posts during backfill. */
-const BACKFILL_POST_PAGE_SIZE = 500;
-/** Hard cap on posts scanned per backfill run to bound memory/DB pressure. */
-const BACKFILL_MAX_POSTS = 20_000;
-/** Hard cap on distinct URLs fetched per backfill run. */
-const BACKFILL_MAX_URLS = 2_000;
-
-// ─── MoH internal URL handling ───────────────────────────────────────────────
-// When someone shares a menofhunger.com link, we skip external scraping entirely
-// (which would hit a login-redirect and cache "Login | Men of Hunger") and instead
-// synthesize clean, accurate metadata from the URL path.
-
-const MOH_HOSTNAME = "menofhunger.com";
-
-function getMohPageTitle(pathname: string): string {
-  const parts = pathname.split("/").filter(Boolean);
-  const s0 = parts[0] ?? "";
-  const s1 = parts[1] ?? "";
-
-  if (!s0 || s0 === "login" || s0 === "index") return "Men of Hunger";
-  if (s0 === "home") return "Home";
-  if (s0 === "u" && s1) return `@${s1}`;
-  if (s0 === "p") return "Post";
-  if (s0 === "a") return "Article";
-  if (s0 === "spaces" || s0 === "s") return "Space";
-  if (s0 === "admin") return "Admin";
-
-  if (s0 === "settings") {
-    if (!s1) return "Settings";
-    const settingsLabels: Record<string, string> = {
-      billing: "Billing",
-      account: "Account",
-      notifications: "Notifications",
-      verification: "Verification",
-      profile: "Profile",
-      privacy: "Privacy",
-    };
-    const label =
-      settingsLabels[s1] ?? s1.charAt(0).toUpperCase() + s1.slice(1);
-    return `${label} · Settings`;
-  }
-
-  const topLabels: Record<string, string> = {
-    notifications: "Notifications",
-    messages: "Messages",
-    discover: "Discover",
-    groups: "Groups",
-    search: "Search",
-    coins: "Coins",
-    earn: "Earn",
-    checkins: "Check-ins",
-    explore: "Explore",
-    leaderboard: "Leaderboard",
-  };
-  if (topLabels[s0]) return topLabels[s0]!;
-
-  // Fallback: capitalize each path segment, join with ·
-  return parts.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" · ");
-}
-
-function buildMohSyntheticMeta(url: string): LinkMetadataDto {
-  try {
-    const u = new URL(url);
-    // Keep the public homepage invitation aligned with web config/site.ts.
-    // This is repository-owned web artwork, not an uploaded R2 object.
-    const feature = u.pathname === "/"
-      ? {
-          title: "Men of Hunger — Join men who show up.",
-          description: "Join a trusted community for men who want real conversation, not more noise. Bring your friends, find your people, and show up together.",
-          image: "/images/social/home-v1.png",
-        }
-      : featurePageForPath(u.pathname + u.search);
-    return {
-      url,
-      title: feature?.title ?? getMohPageTitle(u.pathname),
-      description: feature?.description ?? null,
-      imageUrl: feature
-        ? new URL(feature.image, "https://menofhunger.com").href
-        : null,
-      siteName: "Men of Hunger",
-      socialPost: null,
-      videoEmbed: null,
-    };
-  } catch {
-    return {
-      url,
-      title: "Men of Hunger",
-      description: null,
-      imageUrl: null,
-      siteName: "Men of Hunger",
-      socialPost: null,
-      videoEmbed: null,
-    };
-  }
-}
-
-type MicrolinkResponse = {
-  status: "success" | "error";
-  data?: {
-    url?: string;
-    title?: string;
-    description?: string;
-    publisher?: string;
-    author?: string;
-    image?: { url?: string } | { url?: string }[];
-  };
-};
-
-function normalizeText(v: string | null | undefined): string | null {
-  const s = (v ?? "").trim();
-  return s ? s : null;
-}
-
-function normalizeUrl(raw: string): string | null {
-  const s = (raw ?? "").trim();
-  if (!s) return null;
-  try {
-    const u = new URL(s);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    return u.toString();
-  } catch {
-    return null;
-  }
-}
+import { isPickaxPostUrl, needsPickaxEnrichment } from "./pickax-link-metadata";
+import { isXPostUrl } from "./x-link-metadata";
+import { isRumbleVideoUrl, needsRumbleDimensionRefresh } from "./rumble-link-metadata";
+import { needsYoutubeEnrichment, youtubeVideoId } from "./youtube-link-metadata";
+import { X_CONNECTOR_LAUNCHED_AT, STALE_DAYS, MOH_HOSTNAME, normalizeText, buildMohSyntheticMeta, normalizeUrl, type LinkMetadataDto } from './link-metadata.constants';
+import { toDto } from './link-metadata-extract';
+import { fetchFromExternal } from './link-metadata-fetch';
+import { fromJsonValue, toJsonInput } from '../../common/prisma/json';
+import { NOT_DELETED } from '../../common/prisma/where';
+export type { GroupLinkPreviewDto, LinkMetadataDto } from './link-metadata.constants';
 
 @Injectable()
 export class LinkMetadataService {
@@ -220,7 +28,6 @@ export class LinkMetadataService {
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
     private readonly appConfig: AppConfigService,
-    private readonly postsRead: PostsReadService,
   ) {}
 
   /** Returns true if the hostname is a MoH-owned domain (production or dev). */
@@ -286,7 +93,7 @@ export class LinkMetadataService {
       return { ...base, description: "Verify to see this group.", locked: "verify" };
     }
     const group = await this.prisma.communityGroup.findFirst({
-      where: { slug, deletedAt: null },
+      where: { slug, ...NOT_DELETED },
       select: {
         slug: true,
         name: true,
@@ -344,7 +151,7 @@ export class LinkMetadataService {
             where: { key },
           });
           if (saved && saved.expiresAt > new Date())
-            return { meta: saved.payload as unknown as LinkMetadataDto };
+            return { meta: fromJsonValue<LinkMetadataDto>(saved.payload) };
           try {
             const meta = await fetchPickaxProfile(pickaxHandle);
             if (meta) {
@@ -352,7 +159,7 @@ export class LinkMetadataService {
                 kind: "pickax-profile",
                 identity: pickaxHandle,
                 handle: pickaxHandle,
-                payload: meta as unknown as Prisma.InputJsonValue,
+                payload: toJsonInput(meta),
                 fetchedAt: new Date(),
                 expiresAt: new Date(Date.now() + 86400000),
               };
@@ -461,7 +268,7 @@ export class LinkMetadataService {
         where: { key: cacheIdentity },
       });
       if (saved && saved.expiresAt > new Date())
-        return saved.payload as unknown as LinkMetadataDto;
+        return fromJsonValue<LinkMetadataDto>(saved.payload);
     }
 
     const existing = await this.prisma.linkMetadata.findUnique({
@@ -489,7 +296,7 @@ export class LinkMetadataService {
     const existingNeedsRumbleRefresh =
       existing != null &&
       isRumbleVideoUrl(normalized) &&
-      needsRumbleDimensionRefresh(this.toDto(existing));
+      needsRumbleDimensionRefresh(toDto(existing));
 
     if (
       !profilePreview &&
@@ -500,7 +307,7 @@ export class LinkMetadataService {
       !(youtube && needsYoutubeEnrichment(existing)) &&
       existing
     ) {
-      const dto = this.toDto(existing);
+      const dto = toDto(existing);
       // Keep a short front-cache even when DB is fresh to reduce load.
       void this.cache
         .setJson(
@@ -541,12 +348,12 @@ export class LinkMetadataService {
       lockWaitMs: pickax || xPost || rumble ? 500 : 250,
       computeAndSet: async () => {
         const fresh = await this.fetchAndUpsert(normalized, profilePreview);
-        const dto = fresh ? this.toDto(fresh) : null;
+        const dto = fresh ? toDto(fresh) : null;
         if (profilePreview && dto) {
           const data = {
             kind: "website-profile",
             identity: normalized,
-            payload: dto as unknown as Prisma.InputJsonValue,
+            payload: toJsonInput(dto),
             fetchedAt: new Date(),
             expiresAt: new Date(Date.now() + 86400000),
           };
@@ -573,7 +380,7 @@ export class LinkMetadataService {
         return {
           meta:
             existing && (!profilePreview || existingIsFresh)
-              ? this.toDto(existing)
+              ? toDto(existing)
               : null,
         };
       },
@@ -581,40 +388,6 @@ export class LinkMetadataService {
     return wrapped?.meta ?? null;
   }
 
-  private toDto(row: {
-    url: string;
-    title: string | null;
-    description: string | null;
-    imageUrl: string | null;
-    siteName: string | null;
-    socialPost: Prisma.JsonValue;
-    videoEmbed?: Prisma.JsonValue;
-  }): LinkMetadataDto {
-    return {
-      url: row.url,
-      title: normalizeText(row.title),
-      description: normalizeText(row.description),
-      imageUrl: normalizeText(row.imageUrl),
-      siteName: normalizeText(row.siteName),
-      socialPost:
-        row.socialPost &&
-        typeof row.socialPost === "object" &&
-        !Array.isArray(row.socialPost)
-          ? (row.socialPost as unknown as SocialPostMetadataDto)
-          : null,
-      videoEmbed:
-        row.videoEmbed &&
-        typeof row.videoEmbed === "object" &&
-        !Array.isArray(row.videoEmbed)
-          ? (row.videoEmbed as unknown as VideoEmbedDto)
-          : null,
-    };
-  }
-
-  /**
-   * URL preview lookup for Marv. Extracts http(s) URLs from `text` and returns every one,
-   * including a bare URL when metadata is not cached yet. Missing rows are fetched, with a cap.
-   */
   async previewLinks(text: string): Promise<
     Array<{
       url: string;
@@ -629,9 +402,7 @@ export class LinkMetadataService {
     const found = text.match(urlRegex) ?? [];
     const urls = [
       ...new Set(
-        found
-          .map((u) => normalizeUrl(u))
-          .filter((u): u is string => Boolean(u)),
+        found.map((u) => normalizeUrl(u)).filter((u): u is string => Boolean(u)),
       ),
     ].slice(0, 12);
     if (urls.length === 0) return [];
@@ -705,7 +476,7 @@ export class LinkMetadataService {
       const direct = profilePreview
         ? await fetchWebsiteMetadata(url).catch(() => null)
         : null;
-      const meta = direct ?? (await this.fetchFromExternal(url));
+      const meta = direct ?? (await fetchFromExternal(url));
       if (!meta) return null;
 
       const upserted = await this.prisma.linkMetadata.upsert({
@@ -717,10 +488,10 @@ export class LinkMetadataService {
           imageUrl: meta.imageUrl,
           siteName: meta.siteName,
           socialPost: meta.socialPost
-            ? (meta.socialPost as unknown as Prisma.InputJsonValue)
+            ? toJsonInput(meta.socialPost)
             : Prisma.JsonNull,
           videoEmbed: meta.videoEmbed
-            ? (meta.videoEmbed as unknown as Prisma.InputJsonValue)
+            ? toJsonInput(meta.videoEmbed)
             : Prisma.JsonNull,
         },
         update: {
@@ -729,10 +500,10 @@ export class LinkMetadataService {
           imageUrl: meta.imageUrl,
           siteName: meta.siteName,
           socialPost: meta.socialPost
-            ? (meta.socialPost as unknown as Prisma.InputJsonValue)
+            ? toJsonInput(meta.socialPost)
             : Prisma.JsonNull,
           videoEmbed: meta.videoEmbed
-            ? (meta.videoEmbed as unknown as Prisma.InputJsonValue)
+            ? toJsonInput(meta.videoEmbed)
             : Prisma.JsonNull,
         },
       });
@@ -743,374 +514,6 @@ export class LinkMetadataService {
       );
       return null;
     }
-  }
-
-  private async fetchFromExternal(
-    url: string,
-  ): Promise<LinkMetadataDto | null> {
-    const controller = new AbortController();
-    const timeoutMs =
-      youtubeVideoId(url) || spotifyContent(url)
-        ? 4_000
-        : isPickaxPostUrl(url)
-          ? PICKAX_ENRICH_TIMEOUT_MS
-          : isXPostUrl(url)
-            ? X_ENRICH_TIMEOUT_MS
-            : isSubstackPostUrl(url)
-              ? SUBSTACK_ENRICH_TIMEOUT_MS
-              : isRumbleVideoUrl(url)
-                ? RUMBLE_ENRICH_TIMEOUT_MS
-                : FETCH_TIMEOUT_MS;
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      const u = new URL(url);
-      if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-
-      if (spotifyContent(url)) {
-        const meta = await fetchSpotifyMetadata(url, controller.signal);
-        return meta
-          ? { url, ...meta, socialPost: null, videoEmbed: null }
-          : null;
-      }
-
-      if (youtubeVideoId(url)) {
-        const meta = await fetchYoutubeMetadata(url, controller.signal);
-        return meta
-          ? { url, ...meta, socialPost: null, videoEmbed: null }
-          : null;
-      }
-
-      let base: LinkMetadataDto | null = null;
-      const pickaxPost = isPickaxPostUrl(u.toString());
-      let pickaxPartial: LinkMetadataDto | null = null;
-
-      if (isXPostUrl(u.toString())) {
-        const xMetadata = await this.enrichXPost(
-          u.toString(),
-          controller.signal,
-        );
-        if (xMetadata) return xMetadata;
-      }
-
-      if (isRumbleVideoUrl(u.toString())) {
-        const videoEmbed = await enrichRumbleVideo(
-          u.toString(),
-          controller.signal,
-        );
-        if (videoEmbed) {
-          return {
-            url: u.toString(),
-            title: null,
-            description: null,
-            imageUrl: videoEmbed.thumbnailUrl,
-            siteName: "Rumble",
-            socialPost: null,
-            videoEmbed,
-          };
-        }
-      }
-
-      if (isSubstackPostUrl(u.toString())) {
-        const enriched = await enrichSubstackPost(
-          u.toString(),
-          controller.signal,
-        );
-        if (enriched) {
-          return {
-            url: u.toString(),
-            title: null,
-            description: null,
-            imageUrl: null,
-            siteName: null,
-            ...enriched,
-            socialPost: null,
-            videoEmbed: null,
-          };
-        }
-      }
-
-      // Jina is the only public source that provides the complete Pickax body and,
-      // when available, author avatar/handle. Give it the full timeout budget
-      // instead of spending most of that budget on weak OG metadata first.
-      if (pickaxPost) {
-        pickaxPartial = await this.enrichPickaxPost(
-          u.toString(),
-          null,
-          controller.signal,
-        );
-        if (pickaxPartial?.description) return pickaxPartial;
-      }
-
-      try {
-        const microlinkUrl = `https://api.microlink.io/?url=${encodeURIComponent(u.toString())}&screenshot=false`;
-        const r = await fetch(microlinkUrl, {
-          method: "GET",
-          redirect: "error",
-          signal: controller.signal,
-        });
-        if (r.ok) {
-          const json = JSON.parse(
-            (await readLimitedResponse(r, 1_048_576)).toString("utf8"),
-          ) as MicrolinkResponse;
-          if (json?.status === "success" && json.data) {
-            const img = Array.isArray(json.data.image)
-              ? json.data.image?.[0]?.url
-              : (json.data.image as { url?: string } | undefined)?.url;
-            base = {
-              url: normalizeText(json.data.url ?? null) ?? u.toString(),
-              title: normalizeText(json.data.title ?? null),
-              description: normalizeText(json.data.description ?? null),
-              siteName:
-                normalizeText(json.data.publisher ?? null) ??
-                normalizeText(json.data.author ?? null),
-              imageUrl: normalizeText(img ?? null),
-              socialPost: null,
-              videoEmbed: null,
-            };
-          }
-        }
-      } catch {
-        // fall through to Jina
-      }
-
-      // Pickax OG tags only expose favicon + "Name posted". Scrape the readable page for
-      // the author avatar and @handle so clients can render a post-like card.
-      if (pickaxPost) {
-        if (pickaxPartial) {
-          return {
-            ...base,
-            ...pickaxPartial,
-            description: pickaxPartial.description ?? base?.description ?? null,
-          };
-        }
-        if (base) {
-          return {
-            ...base,
-            title: pickaxAuthorFromTitle(base.title) ?? base.title,
-            siteName: "Pickax",
-            imageUrl: isWeakPickaxImage(base.imageUrl) ? null : base.imageUrl,
-          };
-        }
-      } else if (base) {
-        return base;
-      }
-
-      const proxied = `https://r.jina.ai/${u.toString()}`;
-      const res = await fetch(proxied, {
-        method: "GET",
-        redirect: "error",
-        signal: controller.signal,
-      });
-      if (!res.ok) return null;
-      const md = (await readLimitedResponse(res, 1_048_576)).toString("utf8");
-
-      const titleMatch = (md ?? "").toString().match(/^\s*Title:\s*(.+)\s*$/m);
-      const title = normalizeText(titleMatch?.[1] ?? null);
-      const imageMatch = (md ?? "")
-        .toString()
-        .match(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/i);
-      const imageUrl = normalizeText(imageMatch?.[1] ?? null);
-
-      return {
-        url: u.toString(),
-        title,
-        description: null,
-        siteName: normalizeText(u.hostname.replace(/^www\./, "")) ?? null,
-        imageUrl,
-        socialPost: null,
-        videoEmbed: null,
-      };
-    } catch (err) {
-      const name = (err as { name?: string })?.name;
-      if (name === "AbortError" || name === "TimeoutError") return null;
-      throw err;
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-
-  private async enrichXPost(
-    url: string,
-    signal: AbortSignal,
-  ): Promise<LinkMetadataDto | null> {
-    try {
-      const parsed = parseXPostUrl(url);
-      if (!parsed) return null;
-      const token = xSyndicationToken(parsed.id);
-      const response = await fetch(
-        `https://cdn.syndication.twimg.com/tweet-result?id=${encodeURIComponent(parsed.id)}&lang=en&token=${encodeURIComponent(token)}`,
-        {
-          method: "GET",
-          headers: { Accept: "application/json" },
-          signal,
-        },
-      );
-      if (!response.ok) return null;
-      const socialPost = parseXSyndicationResponse(await response.json(), url);
-      if (!socialPost) return null;
-      return {
-        url: parsed.canonicalUrl,
-        title: socialPost.author.name,
-        description: socialPost.text,
-        imageUrl: socialPost.author.avatarUrl,
-        siteName: "X",
-        socialPost,
-        videoEmbed: null,
-      };
-    } catch (error) {
-      const name = (error as { name?: string })?.name;
-      if (name === "AbortError" || name === "TimeoutError") return null;
-      this.logger.warn(
-        `[link-metadata] X enrichment failed for ${url}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return null;
-    }
-  }
-
-  private async enrichPickaxPost(
-    url: string,
-    base: LinkMetadataDto | null,
-    signal: AbortSignal,
-  ): Promise<LinkMetadataDto | null> {
-    try {
-      const proxied = `https://r.jina.ai/${url}`;
-      const res = await fetch(proxied, { method: "GET", signal });
-      if (!res.ok) return null;
-      const md = (await readLimitedResponse(res, 1_048_576)).toString("utf8");
-      if (isPickaxGatedMarkdown(md)) return null;
-      const titleMatch = (md ?? "").toString().match(/^\s*Title:\s*(.+)\s*$/m);
-      const titleFromJina = normalizeText(titleMatch?.[1] ?? null);
-      const { avatarUrl, username } = parsePickaxAuthorFromJina(md);
-      const authorName =
-        pickaxAuthorFromTitle(titleFromJina) ??
-        pickaxAuthorFromTitle(base?.title) ??
-        normalizeText(username);
-      const bodyFromJina = parsePickaxBodyFromJina(md);
-
-      return {
-        url,
-        title: authorName,
-        // Prefer the scraped body; OG/microlink descriptions are often truncated.
-        description: bodyFromJina ?? base?.description ?? null,
-        // Prefer @handle in siteName so clients can render a post-like subtitle.
-        siteName: username ? `@${username}` : "Pickax",
-        imageUrl:
-          avatarUrl ??
-          (isWeakPickaxImage(base?.imageUrl) ? null : (base?.imageUrl ?? null)),
-        socialPost: null,
-        videoEmbed: null,
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  /** Extracts links from post body text (for cron backfill). Uses same logic as www extractLinksFromText. */
-  extractLinks(text: string): string[] {
-    const input = (text ?? "").toString();
-    const urlPattern = /https?:\/\/[^\s<>"')\]]+/gi;
-    const matches = input.match(urlPattern) ?? [];
-    const out: string[] = [];
-    const seen = new Set<string>();
-    for (const m of matches) {
-      const url = (m ?? "").trim();
-      if (!url) continue;
-      try {
-        const parsed = new URL(url);
-        if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-          continue;
-        const norm = parsed.toString();
-        if (seen.has(norm)) continue;
-        seen.add(norm);
-        out.push(norm);
-      } catch {
-        // skip invalid URLs
-      }
-    }
-    return out;
-  }
-
-  /**
-   * Run backfill for recent posts: extract links from last 7 days, fetch and cache.
-   *
-   * Uses keyset pagination (BACKFILL_POST_PAGE_SIZE at a time) and hard caps on
-   * total posts scanned and URLs collected, so a large recent-post volume cannot
-   * blow up memory or the DB.
-   */
-  async runBackfill(): Promise<{
-    urlsFound: number;
-    cached: number;
-    truncated: boolean;
-  }> {
-    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const seen = new Set<string>();
-
-    let cursorCreatedAt: Date | null = null;
-    let cursorId: string | null = null;
-    let postsScanned = 0;
-    let truncated = false;
-
-    while (postsScanned < BACKFILL_MAX_POSTS && seen.size < BACKFILL_MAX_URLS) {
-      const baseWhere = {
-        deletedAt: null,
-        body: { not: "" },
-        createdAt: { gte: since },
-      } as const;
-
-      const pageWhere =
-        cursorCreatedAt && cursorId
-          ? {
-              ...baseWhere,
-              OR: [
-                { createdAt: { lt: cursorCreatedAt } },
-                {
-                  AND: [
-                    { createdAt: cursorCreatedAt },
-                    { id: { lt: cursorId } },
-                  ],
-                },
-              ],
-            }
-          : baseWhere;
-
-      const posts: Array<{ id: string; createdAt: Date; body: string }> =
-        await this.postsRead.read.findMany({
-          where: pageWhere,
-          select: { id: true, createdAt: true, body: true },
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-          take: BACKFILL_POST_PAGE_SIZE,
-        });
-
-      if (posts.length === 0) break;
-
-      for (const p of posts) {
-        for (const url of this.extractLinks(p.body ?? "")) {
-          seen.add(url);
-          if (seen.size >= BACKFILL_MAX_URLS) {
-            truncated = true;
-            break;
-          }
-        }
-        if (seen.size >= BACKFILL_MAX_URLS) break;
-      }
-
-      postsScanned += posts.length;
-      const last = posts[posts.length - 1];
-      if (!last) break;
-      cursorCreatedAt = last.createdAt;
-      cursorId = last.id;
-
-      if (posts.length < BACKFILL_POST_PAGE_SIZE) break;
-    }
-
-    if (postsScanned >= BACKFILL_MAX_POSTS) truncated = true;
-
-    const urls = Array.from(seen);
-    const cached = await this.backfillForUrls(urls);
-    return { urlsFound: urls.length, cached, truncated };
   }
 
   /** Backfill: fetch metadata for URLs not yet in DB. Returns count of newly cached URLs. */

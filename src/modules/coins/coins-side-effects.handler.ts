@@ -1,7 +1,7 @@
-import { Injectable, type OnModuleInit } from '@nestjs/common';
-import { NotificationsService } from '../notifications/notifications.service';
-import type { SideEffectPayloads } from '../side-effects/side-effects.constants';
-import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
+import { NotificationCreatorService } from "../notifications";
+import { Injectable, type OnModuleInit, Inject } from "@nestjs/common";
+import type { SideEffectPayloads } from "../side-effects/side-effects.constants";
+import { SideEffectsRegistry } from "../side-effects/side-effects.registry";
 
 /**
  * The "someone sent you coins" notification.
@@ -13,18 +13,21 @@ import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
 @Injectable()
 export class CoinsSideEffectsHandler implements OnModuleInit {
   constructor(
-    private readonly notifications: NotificationsService,
+    @Inject(NotificationCreatorService)
+    private readonly notifications: Pick<NotificationCreatorService, "create">,
     private readonly registry: SideEffectsRegistry,
   ) {}
 
   onModuleInit(): void {
-    this.registry.register('coins.transferred', (p) => this.onTransferred(p));
+    this.registry.register("coins.transferred", (p) => this.onTransferred(p));
   }
 
-  private async onTransferred(payload: SideEffectPayloads['coins.transferred']): Promise<void> {
+  private async onTransferred(
+    payload: SideEffectPayloads["coins.transferred"],
+  ): Promise<void> {
     await this.notifications.create({
       recipientUserId: payload.recipientUserId,
-      kind: 'coin_transfer',
+      kind: "coin_transfer",
       actorUserId: payload.senderUserId,
       title: `sent you ${payload.amountLabel}`,
       body: payload.note,

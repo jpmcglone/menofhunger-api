@@ -1,3 +1,5 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
+import { limitQuery } from '../../common/pagination/cursor-query.schema';
 import { Injectable } from '@nestjs/common';
 import type { AvatarVideoDto } from "../../common/dto/avatar-video.dto";
 import { z } from "zod";
@@ -57,7 +59,7 @@ type UserPreviewPayload = {
 };
 
 const affiliatesQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
+  limit: limitQuery(50),
   cursor: z.string().min(1).optional(),
 });
 
@@ -82,9 +84,9 @@ export class UsersPublicProfileService {
         where: { id: viewerUserId },
         select: { verifiedStatus: true, siteAdmin: true },
       });
-      const verifiedStatus = (viewer as any)?.verifiedStatus ?? "none";
+      const verifiedStatus = viewer?.verifiedStatus ?? "none";
       return (
-        Boolean((viewer as any)?.siteAdmin) ||
+        Boolean(viewer?.siteAdmin) ||
         (typeof verifiedStatus === "string" && verifiedStatus !== "none")
       );
     } catch {
@@ -109,7 +111,7 @@ export class UsersPublicProfileService {
     const rows = await this.prisma.user.findMany({
       where: {
         username: { in: requested, mode: "insensitive" },
-        bannedAt: null,
+        ...NOT_BANNED_USER_WHERE,
       },
       select: MENTION_USER_SELECT,
     });
@@ -234,8 +236,8 @@ export class UsersPublicProfileService {
       bio: profile.bio,
       premium: profile.premium,
       premiumPlus: profile.premiumPlus,
-      isOrganization: Boolean((profile as any).isOrganization),
-      accountKind: (profile as any).accountKind === "page" ? "page" : "person",
+      isOrganization: Boolean(profile.isOrganization),
+      accountKind: "accountKind" in profile && profile.accountKind === "page" ? "page" : "person",
       verifiedStatus: profile.verifiedStatus,
       avatarUrl: profile.avatarUrl,
       avatarVideo: profile.avatarVideo ?? null,
@@ -243,11 +245,11 @@ export class UsersPublicProfileService {
       lastOnlineAt: canSeeLastOnline ? (profile.lastOnlineAt ?? null) : null,
       checkinStreakDays: Math.max(
         0,
-        Math.floor(Number((profile as any).checkinStreakDays) || 0),
+        Math.floor(Number(profile.checkinStreakDays) || 0),
       ),
       longestStreakDays: Math.max(
         0,
-        Math.floor(Number((profile as any).longestStreakDays) || 0),
+        Math.floor(Number(profile.longestStreakDays) || 0),
       ),
       relationship,
       nudge,
@@ -256,9 +258,9 @@ export class UsersPublicProfileService {
       viewerHasBlockedUser,
       userHasBlockedViewer,
       viewerHasMutedUser,
-      isBot: Boolean((profile as any).isBot),
-      locationDisplay: (profile as any).locationDisplay ?? null,
-      locationState: (profile as any).locationState ?? null,
+      isBot: Boolean(profile.isBot),
+      locationDisplay: profile.locationDisplay ?? null,
+      locationState: profile.locationState ?? null,
     };
 
     // Preview includes viewer-specific relationship when authenticated.
@@ -327,7 +329,7 @@ export class UsersPublicProfileService {
     );
     if (viewerUserId) res.setHeader("Vary", "Cookie");
 
-    const profileId = (payload as any).id as string | undefined;
+    const profileId = payload.id as string | undefined;
     const isOrg = Boolean(
       (payload as { isOrganization?: boolean }).isOrganization,
     );
@@ -346,7 +348,7 @@ export class UsersPublicProfileService {
         ? findActiveCrewIdForUser(this.prisma, profileId)
         : Promise.resolve(null),
       profileId
-        ? this.postsRead.read.count({ where: totalUserPostsWhere(profileId) })
+        ? this.postsRead.count({ where: totalUserPostsWhere(profileId) })
         : Promise.resolve(0),
       profileId
         ? this.prisma.article.count({
@@ -361,7 +363,7 @@ export class UsersPublicProfileService {
         ? this.prisma.userOrgMembership.count({
             where: {
               orgId: profileId,
-              user: { usernameIsSet: true, bannedAt: null },
+              user: { usernameIsSet: true, ...NOT_BANNED_USER_WHERE },
             },
           })
         : Promise.resolve(null),
@@ -376,8 +378,8 @@ export class UsersPublicProfileService {
 
     return {
       data: {
-        ...(payload as any),
-        lastOnlineAt: canSeeLastOnline ? (payload as any).lastOnlineAt : null,
+        ...payload,
+        lastOnlineAt: canSeeLastOnline ? payload.lastOnlineAt : null,
         orgAffiliations: orgMap.get(profileId ?? "") ?? [],
         postCount,
         articleCount,

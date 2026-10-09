@@ -30,7 +30,8 @@ export default [
       ...(tsPlugin.configs.recommended?.rules ?? {}),
       ...(eslintConfigPrettier?.rules ?? {}),
       // Keep lint lightweight; TypeScript already provides most safety here.
-      '@typescript-eslint/no-explicit-any': 'off',
+      // Ratcheted by architecture-guardrails (asAnyCasts); new code should type its values.
+      '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-require-imports': 'off',
       // Allow leading-underscore as the conventional "intentionally unused" marker
       // for function args, destructured vars, and caught errors. Applies to
@@ -45,6 +46,10 @@ export default [
         },
       ],
     },
+  },
+  {
+    files: ['**/*.spec.ts'],
+    rules: { '@typescript-eslint/no-explicit-any': 'off' },
   },
   {
     files: ['**/*.js', '**/*.cjs', '**/*.mjs'],

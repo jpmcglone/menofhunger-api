@@ -1,5 +1,5 @@
 import type { IntegrationSpendControl } from "@prisma/client";
-import type { IntegrationSpendPolicy } from "./integration-budget.service";
+import type { IntegrationSpendPolicy } from "./integration-budget.policy";
 import type { IntegrationBucket } from "./integration-budget.policy";
 
 export function controlledPolicy(

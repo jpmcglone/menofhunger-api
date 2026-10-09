@@ -1,37 +1,63 @@
-import { ChannelMediaService } from '../group-channels/channel-media.service';
-import { ChannelAccessService } from '../group-channels/channel-access.service';
-import { MessagesService } from '../messages/messages.service';
-import { ViewerContextService } from '../viewer/viewer-context.service';
-import type { Prisma, ReportReason, ReportStatus, ReportTargetType } from '@prisma/client';
-import { Injectable, NotFoundException, Optional } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { createdAtIdCursorWhere } from '../../common/pagination/created-at-id-cursor';
-import { SlackService } from '../../common/slack/slack.service';
+import { MessagesMembershipService } from "../messages";
+import { ChannelMediaService } from "../group-channels/channel-media.service";
+import { toPage } from "../../common/pagination/page";
+import { ChannelAccessService } from "../group-channels/channel-access.service";
+import { ViewerContextService } from "../viewer/viewer-context.service";
+import type {
+  Prisma,
+  ReportReason,
+  ReportStatus,
+  ReportTargetType,
+} from "@prisma/client";
+import {
+  Injectable,
+  NotFoundException,
+  Optional,
+  Inject,
+} from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { createdAtIdCursorWhere } from "../../common/pagination/created-at-id-cursor";
+import { SlackService } from "../../common/slack/slack.service";
 
-import { PostsReadService } from '../posts-read/posts-read.service';
-import { SideEffectsService } from '../side-effects/side-effects.service';
-import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
+import { PostsReadService } from "../posts-read/posts-read.service";
+import { SideEffectsService } from "../side-effects/side-effects.service";
+import { USER_BRIEF_SELECT } from "../../common/prisma-selects/user.select";
+import { NOT_DELETED } from "../../common/prisma/where";
 @Injectable()
 export class ReportsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly slack: SlackService,
     private readonly channels: ChannelAccessService,
-    private readonly messages: MessagesService,
+    @Inject(MessagesMembershipService)
+    private readonly messages: Pick<
+      MessagesMembershipService,
+      "listConversationParticipantUserIds"
+    >,
     private readonly viewer: ViewerContextService,
     private readonly channelMedia: ChannelMediaService,
     private readonly postsRead: PostsReadService,
     @Optional() private readonly sideEffects?: SideEffectsService,
   ) {}
 
-  readReportedMedia(reportId: string, mediaId: string, thumbnail: boolean, range?: string) {
-    return this.channelMedia.readReportedMedia(reportId, mediaId, thumbnail, range);
+  readReportedMedia(
+    reportId: string,
+    mediaId: string,
+    thumbnail: boolean,
+    range?: string,
+  ) {
+    return this.channelMedia.readReportedMedia(
+      reportId,
+      mediaId,
+      thumbnail,
+      range,
+    );
   }
 
-  async create(input: Parameters<ReportsService['createRecord']>[0]) {
+  async create(input: Parameters<ReportsService["createRecord"]>[0]) {
     const report = await this.createRecord(input);
     // Jev's first opinion runs off the request path and only orders the admin queue.
-    this.sideEffects?.dispatch('report.score', { reportId: report.id });
+    this.sideEffects?.dispatch("report.score", { reportId: report.id });
     return report;
   }
 
@@ -45,33 +71,77 @@ export class ReportsService {
     reason: ReportReason;
     details: string | null;
   }) {
-    if (input.targetType === 'message') {
-      const message = input.subjectMessageId ? await this.prisma.message.findFirst({ where: { id: input.subjectMessageId, deletedForAll: false }, include: { conversation: { include: { groupChannel: true } } } }) : null;
-      if (!message) throw new NotFoundException('Message unavailable.');
+    if (input.targetType === "message") {
+      const message = input.subjectMessageId
+        ? await this.prisma.message.findFirst({
+            where: { id: input.subjectMessageId, deletedForAll: false },
+            include: { conversation: { include: { groupChannel: true } } },
+          })
+        : null;
+      if (!message) throw new NotFoundException("Message unavailable.");
       const channel = message.conversation.groupChannel;
-      if (channel) await this.channels.channel(input.reporterUserId, channel.groupId, channel.id);
-      else await this.messages.listConversationParticipantUserIds({ userId: input.reporterUserId, conversationId: message.conversationId });
-      return this.prisma.report.create({ data: { targetType: 'message', subjectMessageId: message.id, reporterUserId: input.reporterUserId, reason: input.reason, details: input.details, evidenceText: message.body } });
+      if (channel)
+        await this.channels.channel(
+          input.reporterUserId,
+          channel.groupId,
+          channel.id,
+        );
+      else
+        await this.messages.listConversationParticipantUserIds({
+          userId: input.reporterUserId,
+          conversationId: message.conversationId,
+        });
+      return this.prisma.report.create({
+        data: {
+          targetType: "message",
+          subjectMessageId: message.id,
+          reporterUserId: input.reporterUserId,
+          reason: input.reason,
+          details: input.details,
+          evidenceText: message.body,
+        },
+      });
     }
-    if (input.targetType === 'article') {
-      const article = input.subjectArticleId ? await this.prisma.article.findFirst({ where: { id: input.subjectArticleId, deletedAt: null } }) : null;
+    if (input.targetType === "article") {
+      const article = input.subjectArticleId
+        ? await this.prisma.article.findFirst({
+            where: { id: input.subjectArticleId, ...NOT_DELETED },
+          })
+        : null;
       const viewer = await this.viewer.getViewer(input.reporterUserId);
-      if (!article || (article.authorId !== input.reporterUserId && (article.isDraft || !this.viewer.allowedPostVisibilities(viewer).includes(article.visibility)))) throw new NotFoundException('Article unavailable.');
-      return this.prisma.report.create({ data: { targetType: 'article', subjectArticleId: article.id, reporterUserId: input.reporterUserId, reason: input.reason, details: input.details, evidenceText: `${article.title}\n${article.body}` } });
+      if (
+        !article ||
+        (article.authorId !== input.reporterUserId &&
+          (article.isDraft ||
+            !this.viewer
+              .allowedPostVisibilities(viewer)
+              .includes(article.visibility)))
+      )
+        throw new NotFoundException("Article unavailable.");
+      return this.prisma.report.create({
+        data: {
+          targetType: "article",
+          subjectArticleId: article.id,
+          reporterUserId: input.reporterUserId,
+          reason: input.reason,
+          details: input.details,
+          evidenceText: `${article.title}\n${article.body}`,
+        },
+      });
     }
-    if (input.targetType === 'post') {
+    if (input.targetType === "post") {
       const postId = input.subjectPostId;
       if (!postId) throw new NotFoundException();
 
-      const post = await this.postsRead.read.findFirst({
-        where: { id: postId, deletedAt: null },
+      const post = await this.postsRead.findFirst({
+        where: { id: postId, ...NOT_DELETED },
         select: { id: true },
       });
       if (!post) throw new NotFoundException();
 
       const postReport = await this.prisma.report.create({
         data: {
-          targetType: 'post',
+          targetType: "post",
           reason: input.reason,
           details: input.details,
           reporter: { connect: { id: input.reporterUserId } },
@@ -79,7 +149,7 @@ export class ReportsService {
         },
       });
       this.slack.notifyReportSubmitted({
-        targetType: 'post',
+        targetType: "post",
         reason: input.reason,
         details: input.details,
         reporterUserId: input.reporterUserId,
@@ -98,7 +168,7 @@ export class ReportsService {
 
     const userReport = await this.prisma.report.create({
       data: {
-        targetType: 'user',
+        targetType: "user",
         reason: input.reason,
         details: input.details,
         reporter: { connect: { id: input.reporterUserId } },
@@ -106,7 +176,7 @@ export class ReportsService {
       },
     });
     this.slack.notifyReportSubmitted({
-      targetType: 'user',
+      targetType: "user",
       reason: input.reason,
       details: input.details,
       reporterUserId: input.reporterUserId,
@@ -122,18 +192,22 @@ export class ReportsService {
     reason?: ReportReason;
     q?: string;
     /** `likely`: Jev's most-likely-real first (offset cursor). Default: newest first. */
-    sort?: 'newest' | 'likely';
+    sort?: "newest" | "likely";
   }) {
-    const likely = params.sort === 'likely';
-    const offset = likely ? Math.max(0, Number.parseInt(params.cursor ?? '', 10) || 0) : 0;
-    const cursorWhere = likely ? null : await createdAtIdCursorWhere({
-      cursor: params.cursor,
-      lookup: async (id) =>
-        this.prisma.report.findUnique({
-          where: { id },
-          select: { id: true, createdAt: true },
-        }),
-    });
+    const likely = params.sort === "likely";
+    const offset = likely
+      ? Math.max(0, Number.parseInt(params.cursor ?? "", 10) || 0)
+      : 0;
+    const cursorWhere = likely
+      ? null
+      : await createdAtIdCursorWhere({
+          cursor: params.cursor,
+          lookup: async (id) =>
+            this.prisma.report.findUnique({
+              where: { id },
+              select: { id: true, createdAt: true },
+            }),
+        });
 
     const whereParts: Prisma.ReportWhereInput[] = [];
     if (cursorWhere) whereParts.push(cursorWhere);
@@ -141,10 +215,13 @@ export class ReportsService {
     if (params.targetType) whereParts.push({ targetType: params.targetType });
     if (params.reason) whereParts.push({ reason: params.reason });
 
-    const q = (params.q ?? '').trim();
+    const q = (params.q ?? "").trim();
     if (q) {
       whereParts.push({
-        OR: [{ details: { contains: q, mode: 'insensitive' } }, { adminNote: { contains: q, mode: 'insensitive' } }],
+        OR: [
+          { details: { contains: q, mode: "insensitive" } },
+          { adminNote: { contains: q, mode: "insensitive" } },
+        ],
       });
     }
 
@@ -153,14 +230,28 @@ export class ReportsService {
     const rows = await this.prisma.report.findMany({
       where,
       orderBy: likely
-        ? [{ jevPriority: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }, { id: 'desc' }]
-        : [{ createdAt: 'desc' }, { id: 'desc' }],
+        ? [
+            { jevPriority: { sort: "desc", nulls: "last" } },
+            { createdAt: "desc" },
+            { id: "desc" },
+          ]
+        : [{ createdAt: "desc" }, { id: "desc" }],
       ...(likely ? { skip: offset } : {}),
       take: params.limit + 1,
       include: {
         reporter: { select: USER_BRIEF_SELECT },
-        subjectMessage: { select: { id: true, createdAt: true, deletedForAll: true, senderId: true, media: { select: { id: true, kind: true } } } },
-        subjectArticle: { select: { id: true, title: true, slug: true, deletedAt: true } },
+        subjectMessage: {
+          select: {
+            id: true,
+            createdAt: true,
+            deletedForAll: true,
+            senderId: true,
+            media: { select: { id: true, kind: true } },
+          },
+        },
+        subjectArticle: {
+          select: { id: true, title: true, slug: true, deletedAt: true },
+        },
         subjectUser: { select: USER_BRIEF_SELECT },
         subjectPost: {
           select: {
@@ -175,33 +266,53 @@ export class ReportsService {
       },
     });
 
-    const slice = rows.slice(0, params.limit);
-    const nextCursor = rows.length > params.limit
-      ? (likely ? String(offset + params.limit) : slice[slice.length - 1]?.id ?? null)
-      : null;
-
-    return { rows: slice, nextCursor };
+    const { items, nextCursor } = toPage(rows, params.limit, (last) =>
+      likely ? String(offset + params.limit) : last.id,
+    );
+    return { rows: items, nextCursor };
   }
 
-  async updateAdmin(id: string, input: { adminId: string; status?: ReportStatus; adminNote?: string | null }) {
+  async updateAdmin(
+    id: string,
+    input: {
+      adminId: string;
+      status?: ReportStatus;
+      adminNote?: string | null;
+    },
+  ) {
     const setResolution =
       input.status === undefined
         ? {}
-        : input.status === 'pending'
+        : input.status === "pending"
           ? { resolvedAt: null, resolvedByAdmin: { disconnect: true } }
-          : { resolvedAt: new Date(), resolvedByAdmin: { connect: { id: input.adminId } } };
+          : {
+              resolvedAt: new Date(),
+              resolvedByAdmin: { connect: { id: input.adminId } },
+            };
 
     return await this.prisma.report.update({
       where: { id },
       data: {
         ...(input.status ? { status: input.status } : {}),
-        ...(input.adminNote !== undefined ? { adminNote: input.adminNote } : {}),
+        ...(input.adminNote !== undefined
+          ? { adminNote: input.adminNote }
+          : {}),
         ...setResolution,
       },
       include: {
         reporter: { select: USER_BRIEF_SELECT },
-        subjectMessage: { select: { id: true, createdAt: true, deletedForAll: true, senderId: true, media: { select: { id: true, kind: true } } } },
-        subjectArticle: { select: { id: true, title: true, slug: true, deletedAt: true } },
+        subjectMessage: {
+          select: {
+            id: true,
+            createdAt: true,
+            deletedForAll: true,
+            senderId: true,
+            media: { select: { id: true, kind: true } },
+          },
+        },
+        subjectArticle: {
+          select: { id: true, title: true, slug: true, deletedAt: true },
+        },
         subjectUser: { select: USER_BRIEF_SELECT },
         subjectPost: {
           select: {
@@ -217,4 +328,3 @@ export class ReportsService {
     });
   }
 }
-

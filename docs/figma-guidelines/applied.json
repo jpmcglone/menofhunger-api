@@ -1,0 +1,36 @@
+{
+  "evidence": {
+    "apply_confirmation": "Changes applied. The agent will use your updated files.",
+    "observed_displayed_sizes": [
+      "2KB",
+      "2KB",
+      "3KB",
+      "3KB"
+    ],
+    "observed_filenames": [
+      "01-product-and-components.md",
+      "02-materials-and-tokens.md",
+      "03-platforms-and-handoff.md",
+      "04-motion-and-exploration.md"
+    ],
+    "observed_total_bytes": 8187,
+    "remote_content_readback_available": false,
+    "uploaded_files": {
+      "01-product-and-components.md": "/Users/jpmcglone/Developer/Men of Hunger/menofhunger-api/docs/figma-guidelines/export/01-product-and-components.md",
+      "02-materials-and-tokens.md": "/Users/jpmcglone/Developer/Men of Hunger/menofhunger-api/docs/figma-guidelines/export/02-materials-and-tokens.md",
+      "03-platforms-and-handoff.md": "/Users/jpmcglone/Developer/Men of Hunger/menofhunger-api/docs/figma-guidelines/export/03-platforms-and-handoff.md",
+      "04-motion-and-exploration.md": "/Users/jpmcglone/Developer/Men of Hunger/menofhunger-api/docs/figma-guidelines/export/04-motion-and-exploration.md"
+    },
+    "uploaded_sha256": {
+      "01-product-and-components.md": "d9f2e25ff86a562d1869314f1c572518b7002fc0cc55815983f5524b6ceea94f",
+      "02-materials-and-tokens.md": "2cef1341a7d71d250f878e61f6e6a3024f53fd5c0d05d17e15e8814253a40e17",
+      "03-platforms-and-handoff.md": "1a87ca731aed4b3c76043be534f0300d68b878f17a29762b0ec84b7f8d1cdf1e",
+      "04-motion-and-exploration.md": "c4c29ff7d49212f0c62ffa9e318edc37416edbb3c16d17f6439fc6b58347da3f"
+    }
+  },
+  "figma_url": "https://www.figma.com/design/YnuRSJB7p90n9jEY4mb4RN",
+  "manifest_sha256": "b573f52dd83e726ea1fa81bf91308e1cce1d19bca95eb3d58353644ce1ec0fb0",
+  "schema_version": 1,
+  "verification": "upload-files-and-apply-confirmation",
+  "verified_at": "2026-10-09T14:29:55.334812+00:00"
+}

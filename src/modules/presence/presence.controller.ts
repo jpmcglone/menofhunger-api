@@ -1,61 +1,43 @@
+import { Inject } from '@nestjs/common';
+import { PostsMutationWriteService } from '../posts/posts-mutation-write.service';
+import { PostsMutationEditsService } from '../posts/posts-mutation-edits.service';
 import { BadRequestException, Body, Controller, Delete, Get, Patch, Put, Query, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { Throttle } from '@nestjs/throttler';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
-import { AuthGuard } from '../auth/auth.guard';
-import { VerifiedGuard } from '../auth/verified.guard';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
+import {  } from '../auth/auth-public-api';
+import {  } from '../auth/auth-public-api';
+import {  } from '../auth/auth-public-api';
+import { AuthGuard } from '../auth/auth-public-api';
+import { VerifiedGuard } from '../auth/auth-public-api';
 import { AppConfigService } from '../app/app-config.service';
 import { FollowsService } from '../follows/follows.service';
 import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
 import { PresenceService } from './presence.service';
 import { PresenceRealtimeService } from './presence-realtime.service';
-import { PresenceRedisStateService } from './presence-redis-state.service';
+import { PresenceRedisReadService } from './presence-redis-read.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import type {
-  OnlinePaginationDto,
-  OnlineUserDto,
-  PresenceOnlinePageDto,
-  PresenceOnlinePagePaginationDto,
-  RecentlyOnlineUserDto,
-  UserStatusDto,
-} from '../../common/dto';
+import type { OnlinePaginationDto, OnlineUserDto, PresenceOnlinePageDto, PresenceOnlinePagePaginationDto, RecentlyOnlineUserDto, UserStatusDto } from '../../common/dto';
 import { OnlineMembersService } from './online-members.service';
 import { RecentlyOnlineService, decodeRecentlyOnlineCursor } from './recently-online.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
-import { PostsService } from '../posts/posts.service';
-import { AccountSwitchService } from '../auth/account-switch.service';
+
+import { AccountSwitchService } from '../auth/auth-public-api';
 import { CallSessionStore } from '../calls/call-session.store';
-import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
+import {
+  recentSchema,
+  onlinePageSchema,
+  STATUS_DURATION_HOURS,
+  statusBodySchema,
+  editStatusBodySchema,
+} from './presence.schemas';
 
 const ONLINE_LIST_CACHE_TTL_MS = 10_000;
-
-const recentSchema = cursorPageQuerySchema();
-
-const onlinePageSchema = z.object({
-  includeSelf: z.string().optional(),
-  recentLimit: z.coerce.number().int().min(1).max(50).optional(),
-  recentCursor: z.string().optional(),
-});
-
-const STATUS_DURATION_HOURS = [1, 3, 6, 12, 24] as const;
 type StatusDurationHours = (typeof STATUS_DURATION_HOURS)[number];
 
-const statusBodySchema = z.object({
-  text: z.string().trim().min(1).max(120),
-  durationHours: z
-    .union(STATUS_DURATION_HOURS.map((h) => z.literal(h)) as [z.ZodLiteral<1>, z.ZodLiteral<3>, z.ZodLiteral<6>, z.ZodLiteral<12>, z.ZodLiteral<24>])
-    .default(24),
-  createsPost: z.boolean().default(true),
-});
-
-const editStatusBodySchema = z.object({
-  text: z.string().trim().min(1).max(120),
-});
-
 function parseStatusUserIds(query: unknown): string[] {
-  const raw = (query as any)?.userIds;
+  const raw = (query as { userIds?: unknown } | null | undefined)?.userIds;
   const parts = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(',') : [];
   return Array.from(new Set(parts.map((id) => String(id ?? '').trim()).filter(Boolean))).slice(0, 100);
 }
@@ -89,7 +71,7 @@ function isSummaryQuery(raw?: string): boolean {
 @Controller('presence')
 export class PresenceController {
   constructor(
-    private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presenceRedis: PresenceRedisReadService,
     private readonly presence: PresenceService,
     private readonly realtime: PresenceRealtimeService,
     private readonly follows: FollowsService,
@@ -97,7 +79,8 @@ export class PresenceController {
     private readonly redis: RedisService,
     private readonly appConfig: AppConfigService,
     private readonly marvIdentity: MarvinBotIdentityService,
-    private readonly posts: PostsService,
+    @Inject(PostsMutationWriteService) private readonly postsMutationWrite: Pick<PostsMutationWriteService, 'createPost'>,
+    @Inject(PostsMutationEditsService) private readonly postsMutationEdits: Pick<PostsMutationEditsService, 'updatePost'>,
     private readonly accountSwitch: AccountSwitchService,
     private readonly callSessions: CallSessionStore,
     private readonly onlineMembers: OnlineMembersService,
@@ -184,7 +167,7 @@ export class PresenceController {
     // When createsPost=true, create the feed post first then link it to the status.
     let statusPostId: string | null = null;
     if (parsed.createsPost) {
-      const postResult = await this.posts.createPost({
+      const postResult = await this.postsMutationWrite.createPost({
         userId,
         body: parsed.text,
         visibility: 'public',
@@ -219,7 +202,7 @@ export class PresenceController {
     // isSiteAdmin bypasses the 30-min edit window and 3-edit limit — status posts
     // are system-managed and may be edited at any time while the status is active.
     if (statusPostId) {
-      await this.posts.updatePost({ postId: statusPostId, userId, body: parsed.text, isSiteAdmin: true });
+      await this.postsMutationEdits.updatePost({ postId: statusPostId, userId, body: parsed.text, isSiteAdmin: true });
     }
 
     const status = statusDto;
@@ -403,7 +386,7 @@ export class PresenceController {
     const lastOnlineAtById = new Map<string, string | null>(pageItems.map((r) => [r.id, r.lastOnlineAt]));
     const statusesById = statusMap(await this.presence.getActiveStatuses(userIds));
     const data: RecentlyOnlineUserDto[] = followListUsers.map((u) => ({
-      ...(u as any),
+      ...u,
       lastOnlineAt: lastOnlineAtById.get(u.id) ?? null,
       status: statusesById.get(u.id) ?? null,
     }));
@@ -537,7 +520,7 @@ export class PresenceController {
         const lastOnlineAtById = new Map<string, string | null>(pageItems.map((r) => [r.id, r.lastOnlineAt]));
         const recentStatusesById = statusMap(await this.presence.getActiveStatuses(recentUserIds));
         recentData = followListUsers.map((u) => ({
-          ...(u as any),
+          ...u,
           lastOnlineAt: lastOnlineAtById.get(u.id) ?? null,
           status: recentStatusesById.get(u.id) ?? null,
         }));

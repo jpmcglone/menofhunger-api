@@ -5,6 +5,7 @@ import { UsersMeRealtimeService } from './users-me-realtime.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 @Injectable()
 export class ActivationService {
   constructor(
@@ -55,20 +56,20 @@ export class ActivationService {
     // Legacy approved accounts without a timestamp count their existing activity.
     if (!approved) return result;
     const where: Prisma.PostWhereInput = {
-      userId, deletedAt: null, isDraft: false, scheduledAt: null,
+      userId, ...NOT_DELETED, isDraft: false, scheduledAt: null,
       visibility: { not: 'onlyMe' }, kind: { in: ['regular', 'checkin'] },
       ...(user.verifiedAt ? { createdAt: { gte: user.verifiedAt } } : {}),
     };
     const [first, reply] = await Promise.all([
-      this.postsRead.read.findFirst({ where, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { createdAt: true } }),
-      this.postsRead.read.findFirst({ where: { ...where, parent: { userId: { not: userId }, deletedAt: null, user: { isBot: false } } }, select: { id: true } }),
+      this.postsRead.findFirst({ where, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { createdAt: true } }),
+      this.postsRead.findFirst({ where: { ...where, parent: { userId: { not: userId }, ...NOT_DELETED, user: { isBot: false } } }, select: { id: true } }),
     ]);
     result.contributed = Boolean(first);
     result.replied = Boolean(reply);
     if (first) {
       const nextDay = new Date(first.createdAt);
       nextDay.setUTCHours(24, 0, 0, 0);
-      result.returned = Boolean(await this.postsRead.read.findFirst({
+      result.returned = Boolean(await this.postsRead.findFirst({
         where: { ...where, createdAt: { gte: nextDay } }, select: { id: true },
       }));
     }

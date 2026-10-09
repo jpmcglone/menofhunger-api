@@ -1,10 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import {
-  TypeSafeClient,
-  type Questions,
-  type SystemOneRequest,
-  type SystemOneResult,
-} from '@typesafe-ai/sdk';
+import { TypeSafeClient, type Questions, type SystemOneRequest, type SystemOneResult } from '@typesafe-ai/sdk';
 import { AppConfigService } from '../app/app-config.service';
 
 export type TypeSafeDecideInput<Q extends Questions> = Pick<SystemOneRequest<Q>, 'state' | 'questions'> & {

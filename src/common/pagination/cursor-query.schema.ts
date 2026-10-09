@@ -12,3 +12,11 @@ export function cursorPageQuerySchema(maxLimit = 50) {
     cursor: z.string().optional(),
   });
 }
+
+/** Like `cursorPageQuerySchema`, but `limit` always resolves (to `defaultLimit`) and the cursor length is bounded. */
+export function defaultedCursorPageQuerySchema(opts: { maxLimit: number; defaultLimit: number; maxCursorLength: number }) {
+  return z.object({
+    limit: z.coerce.number().int().min(1).max(opts.maxLimit).default(opts.defaultLimit),
+    cursor: z.string().max(opts.maxCursorLength).optional(),
+  });
+}

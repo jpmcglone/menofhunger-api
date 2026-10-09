@@ -1,3 +1,5 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
+import { toPage } from '../../common/pagination/page';
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -24,7 +26,7 @@ export function membersMapMemberWhere(marvId: string | null): Prisma.UserWhereIn
   };
   return {
     usernameIsSet: true,
-    bannedAt: null,
+    ...NOT_BANNED_USER_WHERE,
     ...(marvId ? { OR: [man, { id: marvId }] } : man),
   };
 }
@@ -197,9 +199,8 @@ export class MembersMapService {
       take: limit + 1,
     });
 
-    const hasMore = rest.length > limit;
-    const page = hasMore ? rest.slice(0, limit) : rest;
+    const { items: page, nextCursor } = toPage(rest, limit, () => String(offset + limit));
     const users = [...onlineUsers, ...page].map((u) => toUserListDto(u, this.publicBaseUrl));
-    return { users, nextCursor: hasMore ? String(offset + limit) : null };
+    return { users, nextCursor };
   }
 }

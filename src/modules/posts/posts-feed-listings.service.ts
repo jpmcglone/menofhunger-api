@@ -1,54 +1,26 @@
-import {ConversationsService} from "./conversations.service";
-import {
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from "@nestjs/common";
-import {Prisma} from "@prisma/client";
-import type {
-  PostVisibility,
-} from "@prisma/client";
-import {PrismaService} from "../prisma/prisma.service";
-import {RequestCacheService} from "../../common/cache/request-cache.service";
-import {
-  ViewerContextService,
-} from "../viewer/viewer-context.service";
-import {AppConfigService} from "../app/app-config.service";
-import {buildPostVisibilityWhere} from "../../common/posts/post-visibility";
-import {createdAtIdCursorWhere} from "../../common/pagination/created-at-id-cursor";
-import {toCommunityGroupPreviewDto} from "../../common/dto/community-group.dto";
-import type {CommunityGroupPreviewDto} from "../../common/dto/community-group.dto";
-import {collectAncestorPostIds} from "../../common/posts/collect-ancestor-post-ids";
-import {loadPostVideoEmbeds} from "../../common/posts/post-video-embeds";
-import {
-  collapseFeedByRoot,
-  type FeedCollapsedItem,
-} from "../../common/feed-collapse/collapse-by-root";
-import {applyCollapsedThreadSummary} from "../../common/feed-collapse/collapsed-thread-summary";
-import {collapseRepostsByCanonical} from "../../common/feed-collapse/collapse-reposts-by-canonical";
-import {
-  toPostDto,
-  toPostAuthorDtoFromFeedRow,
-  type PostAuthorDto,
-  type PostDto,
-} from "../../common/dto/post.dto";
-import {buildAttachParentChain, postChainInvolvesAuthor} from "./posts.utils";
-import {
-  excludeCommunityGroupPostsWhere,
-  mediaOnlyWhere,
-  notDeletedWhere,
-  userNotBannedWhere,
-} from "./posts-query-builders";
-import {
-  feedPostInclude,
-  mediaFeedPostInclude,
-  type FeedPost,
-  type FeedResult,
-} from "./posts-feed.types";
-import {PostsViewerEnrichmentService} from "./posts-viewer-enrichment.service";
-import {PostsRankingService} from "./posts-ranking.service";
-import {CommunityGroupReadAccessService} from "../viewer/community-group-read-access.service";
-import {PostsFeedAccessService} from "./posts-feed-access.service";
+import { PostsFeedComposeService } from "./posts-feed-compose.service";
+import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
+import type { PostVisibility } from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { RequestCacheService } from "../../common/cache/request-cache.service";
+import { ViewerContextService } from "../viewer/viewer-context.service";
+import { AppConfigService } from "../app/app-config.service";
+import { buildPostVisibilityWhere } from "../../common/posts/post-visibility";
+import { createdAtIdCursorWhere, createdAtIdBefore } from "../../common/pagination/created-at-id-cursor";
+import { toCommunityGroupPreviewDto } from "../../common/dto/community-group.dto";
+import { collapseFeedByRoot } from "../../common/feed-collapse/collapse-by-root";
+import { collapseRepostsByCanonical } from "../../common/feed-collapse/collapse-reposts-by-canonical";
+import { toPostAuthorDtoFromFeedRow, type PostDto } from "../../common/dto/post.dto";
+import { excludeCommunityGroupPostsWhere, mediaOnlyWhere, notDeletedWhere, userNotBannedWhere } from "./posts-query-builders";
+import { feedPostInclude, mediaFeedPostInclude, type FeedPost, type FeedResult } from "./posts-feed.types";
+import { PostsViewerEnrichmentService } from "./posts-viewer-enrichment.service";
+import { PostsRankingService } from "./posts-ranking.service";
+import { CommunityGroupReadAccessService } from "../viewer/community-group-read-access.service";
+import { PostsFeedAccessService } from "./posts-feed-access.service";
+import { findGroupMember, listActiveGroupIdsForUser } from '../viewer/group-membership.queries';
+import { toPage } from '../../common/pagination/page';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 @Injectable()
 export class PostsFeedListingsService {
@@ -61,7 +33,7 @@ export class PostsFeedListingsService {
     private readonly ranking: PostsRankingService,
     private readonly groupReadAccess: CommunityGroupReadAccessService,
     private readonly access: PostsFeedAccessService,
-    private readonly conversations: ConversationsService = undefined!,
+    private readonly compose: PostsFeedComposeService,
   ) {}
   async listOnlyMe(params: {
     userId: string;
@@ -97,9 +69,7 @@ export class PostsFeedListingsService {
       take: limit + 1,
     });
 
-    const slice = posts.slice(0, limit);
-    const nextCursor =
-      posts.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
+    const { items: slice, nextCursor } = toPage(posts, limit, (r) => r.id);
     return { posts: slice, nextCursor };
   }
 
@@ -260,9 +230,7 @@ export class PostsFeedListingsService {
       take: limit + 1,
     })) as FeedPost[];
 
-    const slice = posts.slice(0, limit);
-    const nextCursor =
-      posts.length > limit ? (slice[slice.length - 1]?.id ?? null) : null;
+    const { items: slice, nextCursor } = toPage(posts, limit, (r) => r.id);
 
     return { posts: slice, nextCursor };
   }
@@ -270,11 +238,7 @@ export class PostsFeedListingsService {
   async listActiveCommunityGroupIdsForUser(
     viewerUserId: string,
   ): Promise<string[]> {
-    const rows = await this.prisma.communityGroupMember.findMany({
-      where: { userId: viewerUserId, status: "active" },
-      select: { groupId: true },
-    });
-    return rows.map((r) => r.groupId);
+    return listActiveGroupIdsForUser(this.prisma, viewerUserId);
   }
 
   /**
@@ -381,17 +345,7 @@ export class PostsFeedListingsService {
       if (fallbackOnly) {
         const fAnd: Prisma.PostWhereInput[] = [...baseAnd, chronoOnlyWhere];
         if (cursorRow) {
-          fAnd.push({
-            OR: [
-              { createdAt: { lt: cursorRow.createdAt } },
-              {
-                AND: [
-                  { createdAt: cursorRow.createdAt },
-                  { id: { lt: cursorRow.id } },
-                ],
-              },
-            ],
-          });
+          fAnd.push(createdAtIdBefore({ createdAt: cursorRow.createdAt, id: cursorRow.id }));
         }
         const fPosts = await this.prisma.post.findMany({
           where: { AND: fAnd },
@@ -494,266 +448,9 @@ export class PostsFeedListingsService {
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: takeMain + 1,
     });
-    const slice = posts.slice(0, takeMain);
-    const nextCursor =
-      posts.length > takeMain ? (slice[slice.length - 1]?.id ?? null) : null;
+    const { items: slice, nextCursor } = toPage(posts, takeMain, (r) => r.id);
     const out: FeedPost[] = pinned && !cursor ? [pinned, ...slice] : slice;
     return { posts: out, nextCursor };
-  }
-
-  async collectParentMapForFeed(
-    viewerUserId: string | null,
-    seedParentIds: Array<string | null | undefined>,
-  ): Promise<Map<string, FeedPost>> {
-    const ids = await collectAncestorPostIds(this.prisma, seedParentIds);
-    if (ids.length === 0) return new Map<string, FeedPost>();
-
-    const rows = await this.getByIds({ viewerUserId, ids });
-    return new Map(rows.map((p) => [p.id, p] as const));
-  }
-
-  async collectRepostedMapForFeed(
-    viewerUserId: string | null,
-    repostedPostIds: string[],
-  ): Promise<Map<string, FeedPost>> {
-    const ids = [
-      ...new Set(
-        (repostedPostIds ?? []).map((id) => (id ?? "").trim()).filter(Boolean),
-      ),
-    ];
-    if (!ids.length) return new Map<string, FeedPost>();
-    const rows = await this.getByIds({ viewerUserId, ids });
-    return new Map(rows.map((p) => [p.id, p] as const));
-  }
-
-  async communityGroupPreviewMapForFeed(
-    viewerUserId: string | null,
-    groupIds: string[],
-  ): Promise<Map<string, CommunityGroupPreviewDto>> {
-    const uniq = [
-      ...new Set(
-        (groupIds ?? []).map((id) => (id ?? "").trim()).filter(Boolean),
-      ),
-    ];
-    if (uniq.length === 0) return new Map<string, CommunityGroupPreviewDto>();
-
-    // Single batched fetch for all groups + viewer memberships instead of
-    // N sequential communityGroupPreviewForGroup calls.
-    const [groups, memberships] = await Promise.all([
-      this.prisma.communityGroup.findMany({
-        where: { id: { in: uniq }, deletedAt: null },
-      }),
-      viewerUserId
-        ? this.prisma.communityGroupMember.findMany({
-            where: { groupId: { in: uniq }, userId: viewerUserId },
-            select: { groupId: true, status: true, role: true },
-          })
-        : Promise.resolve([]),
-    ]);
-
-    const memberByGroup = new Map(memberships.map((m) => [m.groupId, m]));
-    const map = new Map<string, CommunityGroupPreviewDto>();
-    for (const g of groups) {
-      const membership = memberByGroup.get(g.id) ?? null;
-      const dto = toCommunityGroupPreviewDto(g, membership);
-      if (dto) map.set(g.id, dto);
-    }
-    return map;
-  }
-
-  async composeFeedPostDtos(params: {
-    viewerUserId: string | null;
-    filteredPosts: FeedPost[];
-    collapsedItemsByItemId: Map<string, FeedCollapsedItem<PostAuthorDto>[]>;
-    scoreByPostId?: Map<string, number>;
-    includeRestricted?: boolean;
-    conversationContext?: boolean;
-  }): Promise<PostDto[]> {
-    const { viewerUserId, filteredPosts, collapsedItemsByItemId } = params;
-    const repostedPostIds = filteredPosts
-      .filter(
-        (p) =>
-          (p as { kind?: string }).kind === "repost" &&
-          (p as { repostedPostId?: string }).repostedPostId,
-      )
-      .map((p) => (p as { repostedPostId: string }).repostedPostId);
-
-    const quotedPostIds = filteredPosts
-      .map((p) => (p as { quotedPostId?: string | null }).quotedPostId)
-      .filter((id): id is string => Boolean(id));
-
-    const pageIdSet = new Set(filteredPosts.map((p) => p.id));
-    const ancestorAndEmbedIds = await collectAncestorPostIds(this.prisma, [
-      ...filteredPosts.map((p) => p.parentId),
-      ...repostedPostIds,
-      ...quotedPostIds,
-    ]);
-    const fetchIds = ancestorAndEmbedIds.filter((id) => !pageIdSet.has(id));
-    const allPostIds = [...pageIdSet, ...ancestorAndEmbedIds];
-
-    const [
-      viewer,
-      fetchedEmbeds,
-      boosted,
-      bookmarksByPostId,
-      votedPollOptionIdByPostId,
-      blockSets,
-      repostedByPostId,
-      lastSeenAtByPostId,
-      commentedByPostId,
-    ] = await Promise.all([
-      this.enrichment.viewerContext(viewerUserId),
-      fetchIds.length
-        ? this.getByIds({ viewerUserId, ids: fetchIds })
-        : Promise.resolve([] as FeedPost[]),
-      viewerUserId
-        ? this.enrichment.viewerBoostedPostIds({
-            viewerUserId,
-            postIds: allPostIds,
-          })
-        : Promise.resolve(new Set<string>()),
-      viewerUserId
-        ? this.enrichment.viewerBookmarksByPostId({
-            viewerUserId,
-            postIds: allPostIds,
-          })
-        : Promise.resolve(new Map<string, { collectionIds: string[] }>()),
-      viewerUserId
-        ? this.enrichment.viewerVotedPollOptionIdByPostId({
-            viewerUserId,
-            postIds: allPostIds,
-          })
-        : Promise.resolve(new Map<string, string>()),
-      viewerUserId
-        ? this.enrichment.viewerBlockSets(viewerUserId)
-        : Promise.resolve({
-            blockedByViewer: new Set<string>(),
-            viewerBlockedBy: new Set<string>(),
-          }),
-      viewerUserId
-        ? this.enrichment.viewerRepostedPostIds({
-            viewerUserId,
-            postIds: allPostIds,
-          })
-        : Promise.resolve(new Set<string>()),
-      viewerUserId
-        ? this.enrichment.viewerLastSeenAtByPostId({
-            viewerUserId,
-            postIds: allPostIds,
-          })
-        : Promise.resolve(new Map<string, Date>()),
-      viewerUserId
-        ? this.enrichment.viewerCommentedPostIds({
-            viewerUserId,
-            postIds: allPostIds,
-          })
-        : Promise.resolve(new Set<string>()),
-    ]);
-    const viewedByPostId = new Set(lastSeenAtByPostId.keys());
-
-    const byId = new Map<string, FeedPost>();
-    for (const p of filteredPosts) byId.set(p.id, p);
-    for (const p of fetchedEmbeds) byId.set(p.id, p);
-
-    const quotedIdSet = new Set(quotedPostIds);
-    const repostedIdSet = new Set(repostedPostIds);
-    const parentMap = new Map<string, FeedPost>();
-    const repostedPostMap = new Map<string, FeedPost>();
-    const quotedPostMap = new Map<string, FeedPost>();
-    for (const id of ancestorAndEmbedIds) {
-      const row = byId.get(id);
-      if (!row) continue;
-      parentMap.set(id, row);
-      if (repostedIdSet.has(id)) repostedPostMap.set(id, row);
-      if (quotedIdSet.has(id)) quotedPostMap.set(id, row);
-    }
-
-    const viewerHasAdmin = Boolean(viewer?.siteAdmin);
-    const [internalByPostId, scoreByPostIdResolved] = viewerHasAdmin
-      ? await Promise.all([
-          this.ranking.ensureBoostScoresFresh(filteredPosts.map((p) => p.id)),
-          params.scoreByPostId
-            ? Promise.resolve(params.scoreByPostId)
-            : this.ranking.computeScoresForPostIds(allPostIds),
-        ])
-      : [null, undefined];
-    const { blockedByViewer, viewerBlockedBy } = blockSets;
-
-    let viewerCanAccessByPostId: Map<string, boolean> | undefined;
-    if (params.includeRestricted && viewer) {
-      const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
-      viewerCanAccessByPostId = new Map(
-        [...byId.values()].map((post) => [
-          post.id,
-          allowed.includes(post.visibility) || post.userId === viewerUserId,
-        ]),
-      );
-    }
-
-    const communityGroupIdsForPage = new Set<string>();
-    const accCommunityGroupId = (
-      row: { communityGroupId?: string | null } | null | undefined,
-    ) => {
-      const g = String(row?.communityGroupId ?? "").trim();
-      if (g) communityGroupIdsForPage.add(g);
-    };
-    for (const p of filteredPosts)
-      accCommunityGroupId(p as { communityGroupId?: string | null });
-    for (const p of parentMap.values())
-      accCommunityGroupId(p as { communityGroupId?: string | null });
-    for (const p of repostedPostMap.values())
-      accCommunityGroupId(p as { communityGroupId?: string | null });
-    for (const p of quotedPostMap.values())
-      accCommunityGroupId(p as { communityGroupId?: string | null });
-    const [groupPreviewByGroupId, videoEmbedByPostId] = await Promise.all([
-      this.communityGroupPreviewMapForFeed(viewerUserId, [
-        ...communityGroupIdsForPage,
-      ]),
-      loadPostVideoEmbeds(this.prisma, byId.values()),
-    ]);
-
-    const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
-    const attachParentChain = buildAttachParentChain({
-      parentMap,
-      baseUrl,
-      boosted,
-      bookmarksByPostId,
-      votedPollOptionIdByPostId,
-      viewerUserId,
-      viewerHasAdmin,
-      internalByPostId,
-      scoreByPostId: scoreByPostIdResolved,
-      toPostDto,
-      blockedByViewer,
-      viewerBlockedBy,
-      repostedByPostId,
-      commentedByPostId,
-      repostedPostMap,
-      quotedPostMap,
-      groupPreviewByGroupId,
-      viewedByPostId,
-      lastSeenAtByPostId,
-      viewerCanAccessByPostId,
-      videoEmbedByPostId,
-    });
-
-    const contexts =
-      params.conversationContext && viewerUserId && this.conversations
-        ? await this.conversations.contexts(
-            viewerUserId,
-            filteredPosts.map((p) => p.id),
-          )
-        : new Map();
-    // Blocking promises "you won't see their posts": also drop rows that reply to, repost, or
-    // quote them. Being blocked by the author still allows read-only viewing.
-    return filteredPosts.flatMap((p) => {
-      const dto = attachParentChain(p);
-      if (postChainInvolvesAuthor(dto, blockedByViewer)) return [];
-      if (dto.viewerCanAccess !== false && !dto.deletedAt && contexts.has(p.id))
-        dto.conversationContext = contexts.get(p.id);
-      applyCollapsedThreadSummary(dto, collapsedItemsByItemId.get(p.id));
-      return [dto];
-    });
   }
 
   async listComposedGroupScopedFeed(params: {
@@ -805,7 +502,7 @@ export class PostsFeedListingsService {
         getAuthorPreview: (p) => toPostAuthorDtoFromFeedRow(p, groupBaseUrl),
       },
     );
-    const data = await this.composeFeedPostDtos({
+    const data = await this.compose.composeFeedPostDtos({
       viewerUserId: params.viewerUserId,
       filteredPosts,
       collapsedItemsByItemId,
@@ -827,7 +524,7 @@ export class PostsFeedListingsService {
     const gid = (groupId ?? "").trim();
     if (!gid) return null;
     const g = await this.prisma.communityGroup.findFirst({
-      where: { id: gid, deletedAt: null },
+      where: { id: gid, ...NOT_DELETED },
     });
     if (!g) return null;
     let viewerMembership: {
@@ -835,10 +532,7 @@ export class PostsFeedListingsService {
       role: "owner" | "moderator" | "member";
     } | null = null;
     if (viewerUserId) {
-      const row = await this.prisma.communityGroupMember.findUnique({
-        where: { groupId_userId: { groupId: gid, userId: viewerUserId } },
-        select: { status: true, role: true },
-      });
+      const row = await findGroupMember(this.prisma, gid, viewerUserId);
       viewerMembership = row ?? null;
     }
     return toCommunityGroupPreviewDto(g, viewerMembership);
@@ -851,7 +545,7 @@ export class PostsFeedListingsService {
   async getLatestPublic(): Promise<PostDto> {
     const post = await this.prisma.post.findFirst({
       where: {
-        deletedAt: null,
+        ...NOT_DELETED,
         isDraft: false,
         visibility: "public",
         communityGroupId: null,
@@ -861,7 +555,7 @@ export class PostsFeedListingsService {
     });
     if (!post) throw new NotFoundException("Post not found.");
 
-    const [dto] = await this.composeFeedPostDtos({
+    const [dto] = await this.compose.composeFeedPostDtos({
       viewerUserId: null,
       filteredPosts: [post],
       collapsedItemsByItemId: new Map(),
@@ -877,7 +571,7 @@ export class PostsFeedListingsService {
     const post = await this.prisma.post.findFirst({
       where: {
         id: postId,
-        deletedAt: null,
+        ...NOT_DELETED,
         isDraft: false,
         visibility: "public",
         communityGroupId: null,
@@ -886,7 +580,7 @@ export class PostsFeedListingsService {
     });
     if (!post) throw new NotFoundException("Post not found.");
 
-    const [dto] = await this.composeFeedPostDtos({
+    const [dto] = await this.compose.composeFeedPostDtos({
       viewerUserId: null,
       filteredPosts: [post],
       collapsedItemsByItemId: new Map(),
@@ -895,105 +589,4 @@ export class PostsFeedListingsService {
     return dto;
   }
 
-  collectAncestorPostIds(
-    seedIds: Array<string | null | undefined>,
-  ): Promise<string[]> {
-    return collectAncestorPostIds(this.prisma, seedIds);
-  }
-
-  /** Cached preview-link video embeds by post id; never fetches externally. */
-  videoEmbedsForPosts(posts: Iterable<{ id: string; body?: string | null }>) {
-    return loadPostVideoEmbeds(this.prisma, posts);
-  }
-
-  /**
-   * Batch variant of getById used by feed controllers to reduce per-id round trips.
-   * Applies the same visibility rules as getById and omits inaccessible/missing ids.
-   */
-  async getByIds(params: {
-    viewerUserId: string | null;
-    ids: string[];
-  }): Promise<FeedPost[]> {
-    const viewerUserId = params.viewerUserId ?? null;
-    const ids = [
-      ...new Set(
-        (params.ids ?? []).map((id) => (id ?? "").trim()).filter(Boolean),
-      ),
-    ];
-    if (!ids.length) return [];
-
-    const viewer = await this.viewerContextService.getViewer(viewerUserId);
-    const allowed = this.enrichment.allowedVisibilitiesForViewer(viewer);
-
-    const cached: FeedPost[] = [];
-    const missingIds: string[] = [];
-    for (const id of ids) {
-      const cacheKey = `posts.getById:${viewerUserId ?? "anon"}:${id}`;
-      const cachedPost = this.requestCache.get<FeedPost>(cacheKey);
-      if (cachedPost) {
-        cached.push(cachedPost);
-      } else {
-        missingIds.push(id);
-      }
-    }
-
-    const fetched = missingIds.length
-      ? await this.prisma.post.findMany({
-          where: { id: { in: missingIds } },
-          include: feedPostInclude,
-        })
-      : [];
-
-    const groupIdsForVis = [
-      ...new Set(
-        fetched
-          .map(
-            (p) => (p as { communityGroupId?: string | null }).communityGroupId,
-          )
-          .filter((x): x is string => Boolean(x)),
-      ),
-    ];
-    let memberGroupIdsForVis = new Set<string>();
-    if (viewerUserId && groupIdsForVis.length > 0) {
-      const memRows = await this.prisma.communityGroupMember.findMany({
-        where: {
-          userId: viewerUserId,
-          groupId: { in: groupIdsForVis },
-          status: "active",
-        },
-        select: { groupId: true },
-      });
-      memberGroupIdsForVis = new Set(memRows.map((r) => r.groupId));
-    }
-
-    const visibleFetched = fetched.filter((post) => {
-      const isSelf = Boolean(viewer && viewer.id === post.userId);
-      if (isSelf) return true;
-      if (post.visibility === "onlyMe") return Boolean(viewer?.siteAdmin);
-      const pg =
-        (post as { communityGroupId?: string | null }).communityGroupId ?? null;
-      if (pg && memberGroupIdsForVis.has(pg)) return true;
-      return allowed.includes(post.visibility);
-    });
-
-    const visibleFetchedGroupScoped =
-      await this.access.filterPostsByCommunityGroupAccess({
-        viewerUserId,
-        viewer,
-        posts: visibleFetched,
-      });
-
-    for (const post of visibleFetchedGroupScoped) {
-      const cacheKey = `posts.getById:${viewerUserId ?? "anon"}:${post.id}`;
-      this.requestCache.set(cacheKey, post as FeedPost);
-    }
-
-    const byId = new Map<string, FeedPost>([
-      ...cached.map((p) => [p.id, p] as const),
-      ...visibleFetchedGroupScoped.map((p) => [p.id, p as FeedPost] as const),
-    ]);
-    return ids
-      .map((id) => byId.get(id))
-      .filter((p): p is FeedPost => Boolean(p));
-  }
 }

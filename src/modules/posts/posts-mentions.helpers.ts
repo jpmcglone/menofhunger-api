@@ -1,9 +1,10 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import type { PrismaService } from '../prisma/prisma.service';
 import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 
 /**
  * Mention-username resolution shared by post create/update and draft flows.
- * Free functions (taking prisma explicitly) so both PostsService and
+ * Free functions (taking prisma explicitly) so the post mutation services and
  * PostsDraftsService can use them without a service dependency.
  */
 
@@ -21,7 +22,7 @@ export async function resolveMentionUsernamesMap(
   const users = await prisma.user.findMany({
     where: {
       usernameIsSet: true,
-      bannedAt: null,
+      ...NOT_BANNED_USER_WHERE,
       OR: normalized.map((u) => ({ username: { equals: u, mode: 'insensitive' as const } })),
     },
     select: USER_REF_SELECT,

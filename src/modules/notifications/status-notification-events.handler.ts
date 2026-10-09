@@ -1,16 +1,28 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import type { Subscription } from 'rxjs';
-import { DomainEventsService } from '../events/domain-events.service';
-import { NotificationsService } from './notifications.service';
+import { NotificationWriterFanoutService } from "./notification-writer-fanout.service";
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+  Inject,
+} from "@nestjs/common";
+import type { Subscription } from "rxjs";
+import { DomainEventsService } from "../events/domain-events.service";
 
 @Injectable()
-export class StatusNotificationEventsHandler implements OnModuleInit, OnModuleDestroy {
+export class StatusNotificationEventsHandler
+  implements OnModuleInit, OnModuleDestroy
+{
   private readonly logger = new Logger(StatusNotificationEventsHandler.name);
   private sub: Subscription | null = null;
 
   constructor(
     private readonly events: DomainEventsService,
-    private readonly notifications: NotificationsService,
+    @Inject(NotificationWriterFanoutService)
+    private readonly notifications: Pick<
+      NotificationWriterFanoutService,
+      "fanOutStatusUpdateNotifications"
+    >,
   ) {}
 
   onModuleInit(): void {

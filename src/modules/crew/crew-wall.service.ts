@@ -1,18 +1,21 @@
+import { MessagesQueryService } from "../messages";
+import { MessagesWriteService } from "../messages/messages-write.service";
 import {
   BadRequestException,
   Injectable,
   NotFoundException,
-} from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { MessagesService, type MessageMediaInput } from '../messages/messages.service';
-import { SideEffectsService } from '../side-effects/side-effects.service';
-import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { CrewService } from './crew.service';
+  Inject,
+} from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import type { MessageMediaInput } from "../messages";
+import { SideEffectsService } from "../side-effects/side-effects.service";
+import { PresenceRealtimeService } from "../presence/presence-realtime.service";
+import { CrewService } from "./crew.service";
 
 /**
  * Thin wall layer. The wall conversation is a plain `MessageConversation` with type
  * `crew_wall`; all heavy lifting (send, list, edit, react, delete) is handled by
- * {@link MessagesService}. This service just exposes crew-centric entry points:
+ * {@link MessagesWriteService}. This service just exposes crew-centric entry points:
  *  - resolves "my wall" without requiring the client to know the conversation id
  *  - adds crew-specific realtime mirrors (`crew:wall:*`)
  *  - fans out `crew_wall_mention` notifications for @username mentions
@@ -21,7 +24,16 @@ import { CrewService } from './crew.service';
 export class CrewWallService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly messages: MessagesService,
+    @Inject(MessagesQueryService)
+    private readonly messagesQueryService: Pick<
+      MessagesQueryService,
+      "listMessages"
+    >,
+    @Inject(MessagesWriteService)
+    private readonly messagesWriteService: Pick<
+      MessagesWriteService,
+      "sendMessage"
+    >,
     private readonly sideEffects: SideEffectsService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly crew: CrewService,
@@ -36,7 +48,7 @@ export class CrewWallService {
       where: { userId: viewerUserId },
       select: { crewId: true },
     });
-    if (!mem) throw new NotFoundException('You are not in a crew.');
+    if (!mem) throw new NotFoundException("You are not in a crew.");
     const crew = await this.prisma.crew.findUnique({
       where: { id: mem.crewId },
       select: {
@@ -46,7 +58,7 @@ export class CrewWallService {
         members: { select: { userId: true } },
       },
     });
-    if (!crew || crew.deletedAt) throw new NotFoundException('Crew not found.');
+    if (!crew || crew.deletedAt) throw new NotFoundException("Crew not found.");
     return {
       crewId: crew.id,
       conversationId: crew.wallConversationId,
@@ -54,9 +66,13 @@ export class CrewWallService {
     };
   }
 
-  async getMyWall(params: { viewerUserId: string; limit?: number; cursor?: string | null }) {
+  async getMyWall(params: {
+    viewerUserId: string;
+    limit?: number;
+    cursor?: string | null;
+  }) {
     const ctx = await this.requireMyCrew(params.viewerUserId);
-    const result = await this.messages.listMessages({
+    const result = await this.messagesQueryService.listMessages({
       userId: params.viewerUserId,
       conversationId: ctx.conversationId,
       limit: params.limit,
@@ -81,10 +97,12 @@ export class CrewWallService {
 
     // Wall does not support threaded replies per product spec.
     if (params.replyToId) {
-      throw new BadRequestException('Wall messages do not support threaded replies.');
+      throw new BadRequestException(
+        "Wall messages do not support threaded replies.",
+      );
     }
 
-    const result = await this.messages.sendMessage({
+    const result = await this.messagesWriteService.sendMessage({
       userId: params.viewerUserId,
       conversationId: ctx.conversationId,
       body: params.body,
@@ -101,20 +119,20 @@ export class CrewWallService {
     });
 
     // @mention fan-out to crew members only (we never leak mentions to non-members).
-    const mentionedUsernames = extractMentions(params.body ?? '');
+    const mentionedUsernames = extractMentions(params.body ?? "");
     if (mentionedUsernames.length > 0) {
       const mentioned = await this.prisma.user.findMany({
         where: {
-          username: { in: mentionedUsernames, mode: 'insensitive' },
+          username: { in: mentionedUsernames, mode: "insensitive" },
           id: { in: ctx.memberIds },
         },
         select: { id: true },
       });
-      this.sideEffects.dispatch('crew.wall.mentioned', {
+      this.sideEffects.dispatch("crew.wall.mentioned", {
         crewId: ctx.crewId,
         actorUserId: params.viewerUserId,
         recipientUserIds: mentioned.map((u) => u.id),
-        bodySnippet: (params.body ?? '').trim().slice(0, 200) || null,
+        bodySnippet: (params.body ?? "").trim().slice(0, 200) || null,
       });
     }
 
@@ -149,8 +167,8 @@ export class CrewWallService {
         data: toAdd.map((userId) => ({
           conversationId: crew.wallConversationId,
           userId,
-          role: 'member' as const,
-          status: 'accepted' as const,
+          role: "member" as const,
+          status: "accepted" as const,
           acceptedAt: now,
         })),
         skipDuplicates: true,
@@ -158,7 +176,10 @@ export class CrewWallService {
     }
     if (toRemove.length > 0) {
       await this.prisma.messageParticipant.deleteMany({
-        where: { conversationId: crew.wallConversationId, userId: { in: toRemove } },
+        where: {
+          conversationId: crew.wallConversationId,
+          userId: { in: toRemove },
+        },
       });
     }
   }

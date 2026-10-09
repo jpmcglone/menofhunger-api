@@ -1,12 +1,11 @@
+import { ArticleCommentWriterService } from './article-comment-writer.service';
+import { ArticleFeedService } from './article-feed.service';
+import { LOGGED_IN_VIEW_WEIGHT } from '../views/view-tracking.utils';
+import { easternDayKey } from '../../common/time/eastern-day-key';
+import { JOBS } from '../jobs/jobs.constants';
+import { BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
 import { assertPublishableText } from '../../common/moderation/content-filter';
-import {
-  Injectable,
-  NotFoundException,
-  ForbiddenException,
-  BadRequestException,
-  ConflictException,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ViewerContextService } from '../viewer/viewer-context.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -18,25 +17,17 @@ import { SideEffectsService } from '../side-effects/side-effects.service';
 import { ArticleViewsService } from '../article-views/article-views.service';
 import { BoardService } from '../board/board.service';
 import { stableJsonHash } from '../redis/redis-keys';
-import {
-  toArticleDto,
-  toArticleCommentDto,
-  toArticleSharePreviewDto,
-  buildReactionSummaries,
-  articleAuthorInclude,
-  type ArticleWithAuthor,
-  type ArticleCommentWithAuthorAndReactions,
-} from '../../common/dto/article.dto';
-import { toPostDto } from '../../common/dto/post.dto';
-import { findReactionById } from '../../common/constants/reactions';
+import { toArticleDto, type ArticleWithAuthor } from '../../common/dto/article.dto';
 import type { PostVisibility } from '@prisma/client';
 import { slugifyArticleTitle } from '../../common/text/slugify';
-import { MENTION_USER_SELECT } from '../../common/prisma-selects/user.select';
-import { PostsWriteService } from '../posts-read/posts-write.service';
-import { listPublishedRawOn, publishArticleOn, createArticleCommentOn } from './articles-list.query';
+import { ArticleEngagementService } from './article-engagement.service';
+import { ArticleDiscoveryService } from './article-discovery.service';
+import { ArticleCommentsService } from './article-comments.service';
 import { toPage } from '../../common/pagination/page';
-import { normalizeCommentBody, normalizeTag } from '../../common/text/normalize';
 import { assertOwnerOrAdmin } from '../../common/access/assert-owner-or-admin';
+import { syncTags } from './articles-tags';
+import { articleIncludes, articleR2BaseUrl } from './articles.includes';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 function extractExcerpt(tiptapJson: string, maxLength = 200): string {
   try {
@@ -55,27 +46,29 @@ function extractExcerpt(tiptapJson: string, maxLength = 200): string {
   }
 }
 
+const VERIFIED_ARTICLES_PER_DAY = 1;
+
 @Injectable()
 export class ArticlesService {
   readonly logger = new Logger(ArticlesService.name);
 
   constructor(
-    readonly prisma: PrismaService,
-    readonly viewer: ViewerContextService,
-    readonly appConfig: AppConfigService,
-    readonly presenceRealtime: PresenceRealtimeService,
-    readonly cache: CacheService,
-    readonly cacheInvalidation: CacheInvalidationService,
-    readonly jobs: JobsService,
-    readonly sideEffects: SideEffectsService,
-    readonly articleViews: ArticleViewsService,
-    readonly board: BoardService,
-    readonly postsWrite: PostsWriteService,
+    private readonly prisma: PrismaService,
+    private readonly viewer: ViewerContextService,
+    private readonly appConfig: AppConfigService,
+    private readonly presenceRealtime: PresenceRealtimeService,
+    private readonly cache: CacheService,
+    private readonly cacheInvalidation: CacheInvalidationService,
+    private readonly jobs: JobsService,
+    private readonly sideEffects: SideEffectsService,
+    private readonly articleViews: ArticleViewsService,
+    private readonly board: BoardService,
+    private readonly comments: ArticleCommentsService,
+    private readonly engagement: ArticleEngagementService,
+    private readonly discovery: ArticleDiscoveryService,
+    private readonly feed: ArticleFeedService,
+    private readonly commentWriter: ArticleCommentWriterService,
   ) {}
-
-  get r2BaseUrl(): string | null {
-    return this.appConfig.r2()?.publicBaseUrl ?? null;
-  }
 
   private async resolveSlug(title: string, excludeId?: string): Promise<string> {
     const base = slugifyArticleTitle(title) || 'article';
@@ -96,180 +89,14 @@ export class ArticlesService {
     }
   }
 
-  private articleAuthorSelect() {
-    return { select: articleAuthorInclude };
-  }
-
-  articleIncludes(includeReactions = true, includeBoosts = true, viewerUserId?: string | null) {
-    return {
-      author: this.articleAuthorSelect(),
-      tags: { select: { tag: true, label: true }, orderBy: { createdAt: 'asc' as const } },
-      // Select only the fields needed by buildReactionSummaries (avoids loading all columns for every row).
-      ...(includeReactions ? { reactions: { select: { reactionId: true, emoji: true, userId: true } } } : {}),
-      ...(includeBoosts ? {
-        boosts: viewerUserId
-          ? { where: { userId: viewerUserId }, select: { userId: true }, take: 1 }
-          : false,
-      } : {}),
-    };
-  }
-
-  /** Sync tags for an article inside an existing transaction (or the main client). */
-  private async syncTags(
-    db: PrismaService | Parameters<Parameters<PrismaService['$transaction']>[0]>[0],
-    articleId: string,
-    rawTags: string[],
-  ) {
-    const MAX_TAGS = 10;
-    const tags = rawTags
-      .map((r) => ({ label: r.trim().substring(0, 50), tag: normalizeTag(r) }))
-      .filter((t) => t.tag.length >= 1)
-      .slice(0, MAX_TAGS);
-
-    // Delete all existing tags then re-insert — simpler than diffing for N≤10.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (db as any).articleTag.deleteMany({ where: { articleId } });
-    if (tags.length > 0) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (db as any).articleTag.createMany({
-        data: tags.map((t) => ({
-          id: require('crypto').randomUUID(),
-          articleId,
-          tag: t.tag,
-          label: t.label,
-        })),
-        skipDuplicates: true,
-      });
-
-      // Keep canonical taxonomy in sync with article tag writes.
-      for (const t of tags) {
-        const alias = t.label.toLowerCase().trim().slice(0, 80);
-        if (!alias) continue;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const term = await (db as any).taxonomyTerm.upsert({
-          where: { slug: t.tag },
-          update: { label: t.label, kind: 'tag', status: 'active' },
-          create: { slug: t.tag, label: t.label, kind: 'tag', status: 'active' },
-          select: { id: true },
-        });
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (db as any).taxonomyAlias.upsert({
-          where: { alias },
-          update: { termId: term.id, source: 'article_tag' },
-          create: { alias, termId: term.id, source: 'article_tag' },
-        });
-      }
-    }
-  }
-
-  /** Return tag suggestions for autocomplete — most-used first. */
   async listTagSuggestions(q: string): Promise<Array<{ tag: string; label: string; count: number }>> {
-    const normalized = normalizeTag(q);
-
-    // Aggregate across all published articles; pick the most-common label per slug.
-    const grouped = await this.prisma.articleTag.groupBy({
-      by: ['tag'],
-      where: {
-        ...(normalized ? { tag: { startsWith: normalized } } : {}),
-        article: {
-          deletedAt: null,
-          isDraft: false,
-          publishedAt: { not: null },
-          visibility: 'public',
-        },
-      },
-      _count: { tag: true },
-      orderBy: { _count: { tag: 'desc' } },
-      take: 20,
-    });
-
-    if (!grouped.length) return [];
-
-    // For each slug, pick the most-used label variant.
-    const labelRows = await this.prisma.articleTag.findMany({
-      where: { tag: { in: grouped.map((r) => r.tag) } },
-      select: { tag: true, label: true },
-    });
-
-    // Count label occurrences per tag slug → pick winner.
-    const labelMap = new Map<string, Map<string, number>>();
-    for (const r of labelRows) {
-      if (!labelMap.has(r.tag)) labelMap.set(r.tag, new Map());
-      const m = labelMap.get(r.tag)!;
-      m.set(r.label, (m.get(r.label) ?? 0) + 1);
-    }
-
-    return grouped.map((g) => {
-      const variants = labelMap.get(g.tag);
-      let bestLabel = g.tag;
-      if (variants) {
-        let bestCount = 0;
-        for (const [label, count] of variants) {
-          if (count > bestCount) { bestLabel = label; bestCount = count; }
-        }
-      }
-      return { tag: g.tag, label: bestLabel, count: g._count.tag };
-    });
+    return this.discovery.listTagSuggestions(q);
   }
 
   // ─── List trending articles ──────────────────────────────────────────────────
 
-  async listTrending(opts: {
-    viewerUserId?: string | null;
-    limit?: number;
-    /** When the 7-day scored set is short, backfill from older published articles. */
-    fillIfShort?: boolean;
-    includeBody?: boolean;
-  }) {
-    const limit = Math.min(opts.limit ?? 5, 20);
-    const viewerCtx = opts.viewerUserId ? await this.viewer.getViewer(opts.viewerUserId) : null;
-    const allowedVisibilities = this.viewer.allowedPostVisibilities(viewerCtx);
-    const include = this.articleIncludes(true, true, opts.viewerUserId);
-
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-
-    const recent = await this.prisma.article.findMany({
-      where: {
-        isDraft: false,
-        deletedAt: null,
-        publishedAt: { gte: sevenDaysAgo },
-        visibility: { in: allowedVisibilities },
-        trendingScore: { not: null },
-      },
-      orderBy: [{ trendingScore: 'desc' }, { publishedAt: 'desc' }],
-      take: limit,
-      include,
-    }) as ArticleWithAuthor[];
-
-    let articles = recent;
-    if (opts.fillIfShort && recent.length < limit) {
-      const extra = await this.prisma.article.findMany({
-        where: {
-          isDraft: false,
-          deletedAt: null,
-          publishedAt: { not: null },
-          visibility: { in: allowedVisibilities },
-          id: { notIn: recent.map((article) => article.id) },
-        },
-        orderBy: [{ trendingScore: { sort: 'desc', nulls: 'last' } }, { publishedAt: 'desc' }],
-        take: limit - recent.length,
-        include,
-      }) as ArticleWithAuthor[];
-      articles = recent.concat(extra);
-    }
-
-    const viewed = await this.articleViews.viewerViewedArticleIds(
-      opts.viewerUserId,
-      articles.map((a) => a.id),
-    );
-    return articles.map((a) =>
-      toArticleDto(a, this.r2BaseUrl, {
-        viewerUserId: opts.viewerUserId,
-        viewerHasBoosted: opts.viewerUserId ? (a.boosts?.length ?? 0) > 0 : false,
-        viewerHasViewed: opts.viewerUserId ? viewed.has(a.id) : undefined,
-        includeBody: opts.includeBody ?? false,
-      }),
-    );
+  async listTrending(opts: { viewerUserId?: string | null; limit?: number; /** When the 7-day scored set is short, backfill from older published articles. */ fillIfShort?: boolean; includeBody?: boolean; }) {
+    return this.discovery.listTrending(opts);
   }
 
   // ─── List published articles ────────────────────────────────────────────────
@@ -325,17 +152,8 @@ export class ArticlesService {
     return this._listPublishedRaw(opts, limit, sort);
   }
 
-  async _listPublishedRaw(
-    opts: {
-      viewerUserId?: string | null;
-      limit?: number;
-      cursor?: string | null;
-      [key: string]: unknown;
-    },
-    limit?: number,
-    sort?: string,
-  ) {
-    return listPublishedRawOn(this, opts as never, limit as never, sort as never);
+  async _listPublishedRaw(opts: { viewerUserId?: string | null; limit?: number; cursor?: string | null; [key: string]: unknown; }, limit?: number, sort?: string) {
+    return this.feed.listPublishedRaw(opts as never, limit as never, sort as never);
   }
 
   // ─── List user drafts ────────────────────────────────────────────────────────
@@ -351,18 +169,18 @@ export class ArticlesService {
       where: {
         authorId: opts.userId,
         isDraft: true,
-        deletedAt: null,
+        ...NOT_DELETED,
         ...(opts.visibilityFilter ? { visibility: opts.visibilityFilter } : {}),
         ...(opts.cursor ? { id: { lt: opts.cursor } } : {}),
       },
       orderBy: [{ lastSavedAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
-      include: this.articleIncludes(false, false),
+      include: articleIncludes(false, false),
     }) as ArticleWithAuthor[];
 
     const { items: items, nextCursor: nextCursor } = toPage(articles, limit, (r) => r.id);
     return {
-      articles: items.map((a) => toArticleDto(a, this.r2BaseUrl)),
+      articles: items.map((a) => toArticleDto(a, articleR2BaseUrl(this.appConfig))),
       nextCursor,
     };
   }
@@ -372,7 +190,7 @@ export class ArticlesService {
   async getById(id: string, viewerUserId?: string | null) {
     const article = await this.prisma.article.findUnique({
       where: { id },
-      include: this.articleIncludes(true, true, viewerUserId),
+      include: articleIncludes(true, true, viewerUserId),
     }) as ArticleWithAuthor | null;
 
     if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
@@ -392,7 +210,7 @@ export class ArticlesService {
       const viewerCtx = viewerUserId ? await this.viewer.getViewer(viewerUserId) : null;
       const allowed = this.viewer.allowedPostVisibilities(viewerCtx);
       const viewerCanAccess = allowed.includes(article.visibility) || article.authorId === viewerUserId;
-      return toArticleDto(article, this.r2BaseUrl, {
+      return toArticleDto(article, articleR2BaseUrl(this.appConfig), {
         viewerUserId,
         viewerHasBoosted,
         viewerHasViewed,
@@ -400,7 +218,7 @@ export class ArticlesService {
       });
     }
 
-    return toArticleDto(article, this.r2BaseUrl, {
+    return toArticleDto(article, articleR2BaseUrl(this.appConfig), {
       viewerUserId,
       viewerHasBoosted,
       viewerHasViewed,
@@ -438,10 +256,10 @@ export class ArticlesService {
         isDraft: true,
         lastSavedAt: new Date(),
       },
-      include: this.articleIncludes(false, false),
+      include: articleIncludes(false, false),
     }) as ArticleWithAuthor;
 
-    return toArticleDto(article, this.r2BaseUrl);
+    return toArticleDto(article, articleR2BaseUrl(this.appConfig));
   }
 
   // ─── Auto-save / update draft ────────────────────────────────────────────────
@@ -489,7 +307,7 @@ export class ArticlesService {
         // Only mark as edited if the article was already published.
         ...(article.publishedAt ? { editedAt: new Date() } : {}),
       },
-      include: this.articleIncludes(false, false),
+      include: articleIncludes(false, false),
     }) as ArticleWithAuthor;
 
     if (updated.publishedAt && (updated.title !== article.title || updated.visibility !== article.visibility)) {
@@ -498,21 +316,125 @@ export class ArticlesService {
 
     // Sync tags if provided (null/undefined = leave unchanged).
     if (Array.isArray(data.tags)) {
-      await this.syncTags(this.prisma, articleId, data.tags);
+      await syncTags(this.prisma, articleId, data.tags);
       updated.tags = await this.prisma.articleTag.findMany({
         where: { articleId },
-        select: { tag: true, label: true } as any,
+        select: { tag: true, label: true },
         orderBy: { createdAt: 'asc' },
-      }) as any;
+      });
     }
 
-    return toArticleDto(updated, this.r2BaseUrl);
+    return toArticleDto(updated, articleR2BaseUrl(this.appConfig));
   }
 
   // ─── Publish ─────────────────────────────────────────────────────────────────
 
   async publish(userId: string, articleId: string, opts: { postToBoard?: boolean; shareToFeed?: boolean; crosspost?: { pickax?: 'link' | 'native'; x?: 'link' | 'native' } } = {}) {
-    return publishArticleOn(this, userId, articleId, opts);
+    const article = await this.prisma.article.findUnique({ where: { id: articleId } });
+    if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
+    assertOwnerOrAdmin({ userId }, article.authorId, 'Not your article.');
+    if (!article.title.trim()) throw new BadRequestException('Article must have a title before publishing.');
+
+    const viewerCtx = await this.viewer.getViewerOrThrow(userId);
+    if (!this.viewer.isVerified(viewerCtx) && !this.viewer.isPremium(viewerCtx)) {
+      throw new ForbiddenException('Verify your account to publish articles.');
+    }
+
+    const allowedVisibilities = this.viewer.allowedPostVisibilities(viewerCtx);
+    if (!allowedVisibilities.includes(article.visibility)) {
+      throw new ForbiddenException("This article's visibility is not available on your current plan.");
+    }
+
+    const isFirstPublish = !article.publishedAt;
+
+    // Verified non-premium: 1 first-publish per Eastern calendar day
+    if (isFirstPublish && !this.viewer.isPremium(viewerCtx)) {
+      const todayKey = easternDayKey(new Date());
+      // 36h lookback covers any ET offset; filter in memory by day key
+      const windowStart = new Date(Date.now() - 36 * 60 * 60 * 1000);
+      const recentPublished = await this.prisma.article.findMany({
+        where: { authorId: userId, publishedAt: { gte: windowStart }, ...NOT_DELETED, id: { not: articleId } },
+        select: { publishedAt: true },
+      });
+      const todayCount = recentPublished.filter(
+        (a) => a.publishedAt !== null && easternDayKey(a.publishedAt) === todayKey,
+      ).length;
+      if (todayCount >= VERIFIED_ARTICLES_PER_DAY) {
+        throw new HttpException(
+          'You can publish 1 article per day. Upgrade to Premium for unlimited.',
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const published = await tx.article.update({
+        where: { id: articleId },
+        data: {
+          isDraft: false,
+          crosspostChoices: opts.crosspost,
+          publishedAt: article.publishedAt ?? new Date(),
+          editedAt: article.publishedAt ? new Date() : null,
+          lastSavedAt: new Date(),
+        },
+        include: articleIncludes(true, true, userId),
+      }) as ArticleWithAuthor;
+
+      // Seed author self-view synchronously so publish response reflects at least 1 view.
+      if (isFirstPublish) {
+        const seededView = await tx.articleView.createMany({
+          data: [{ articleId, userId }],
+          skipDuplicates: true,
+        });
+        if (seededView.count > 0) {
+          const updatedCounts = await tx.article.update({
+            where: { id: articleId },
+            data: {
+              viewCount: { increment: 1 },
+              totalViewCount: { increment: 1 },
+              weightedViewCount: { increment: LOGGED_IN_VIEW_WEIGHT },
+            },
+            select: { viewCount: true, totalViewCount: true, weightedViewCount: true },
+          });
+          published.viewCount = updatedCounts.viewCount;
+          published.totalViewCount = updatedCounts.totalViewCount;
+          published.weightedViewCount = updatedCounts.weightedViewCount;
+        }
+      }
+      return published;
+    });
+
+    if (isFirstPublish) {
+      await this.crossPostToBoard(userId, updated, opts);
+    }
+
+    // Fire follower notifications only on first publish. The fan-out scales with the author's
+    // follower count, so it runs on the side-effects queue rather than in this process.
+    if (isFirstPublish) {
+      this.sideEffects.dispatch(
+        'article.published',
+        { articleId, authorUserId: userId },
+        { jobId: `article-published-${articleId}` },
+      );
+    }
+
+    void this.cacheInvalidation.bumpFeedGlobal().catch(() => undefined);
+
+    // Notify the WebSub hub so subscribers get real-time feed updates.
+    void this.pingWebsubHub(updated.author?.username ?? null).catch(() => undefined);
+
+    // Enqueue follower article emails on first publish.
+    if (isFirstPublish) {
+      this.jobs
+        .enqueue(JOBS.articlesFollowedArticleEmail, { articleId, authorUserId: userId })
+        .catch((err) => {
+          this.logger.warn(
+            `[email] Failed to enqueue followed-article email job: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+    }
+
+    return toArticleDto(updated, articleR2BaseUrl(this.appConfig), { viewerUserId: userId });
   }
 
   /** First publish: optionally start a Board thread for the article, remembering the author's choice. */
@@ -569,7 +491,7 @@ export class ArticlesService {
     const updated = await this.prisma.article.update({
       where: { id: articleId },
       data: { isDraft: true },
-      include: this.articleIncludes(false, false),
+      include: articleIncludes(false, false),
     }) as ArticleWithAuthor;
 
     await this.board.syncArticleThread(articleId, { deleted: true });
@@ -578,7 +500,7 @@ export class ArticlesService {
     // Notify hub — feed content changed (article removed from public feed).
     void this.pingWebsubHub(authorUser?.username ?? null).catch(() => undefined);
 
-    return toArticleDto(updated, this.r2BaseUrl);
+    return toArticleDto(updated, articleR2BaseUrl(this.appConfig));
   }
 
   // ─── WebSub ──────────────────────────────────────────────────────────────────
@@ -650,453 +572,64 @@ export class ArticlesService {
   // ─── Boost ────────────────────────────────────────────────────────────────────
 
   async boost(userId: string, articleId: string) {
-    await this.assertArticleAccessible(articleId, userId);
-    try {
-      await this.prisma.$transaction([
-        this.prisma.articleBoost.create({ data: { articleId, userId } }),
-        this.prisma.article.update({
-          where: { id: articleId },
-          data: { boostCount: { increment: 1 }, boostScore: null, boostScoreUpdatedAt: null },
-        }),
-      ]);
-    } catch (e: any) {
-      if (e?.code === 'P2002') throw new ConflictException('Already boosted.');
-      throw e;
-    }
-    const afterBoost = await this.prisma.article.findUnique({ where: { id: articleId }, select: { boostCount: true } });
-    if (afterBoost) {
-      this.presenceRealtime.emitArticlesLiveUpdated(articleId, {
-        articleId,
-        version: new Date().toISOString(),
-        reason: 'boostCount',
-        patch: { boostCount: afterBoost.boostCount },
-      });
-    }
-    this.sideEffects.dispatch('article.boosted', { articleId, actorUserId: userId });
-    return { boosted: true };
+    return this.engagement.boost(userId, articleId);
   }
 
   async unboost(userId: string, articleId: string) {
-    const boost = await this.prisma.articleBoost.findUnique({
-      where: { articleId_userId: { articleId, userId } },
-    });
-    if (!boost) throw new NotFoundException('Boost not found.');
-    await this.prisma.$transaction([
-      this.prisma.articleBoost.delete({ where: { articleId_userId: { articleId, userId } } }),
-      this.prisma.article.update({
-        where: { id: articleId },
-        data: { boostCount: { decrement: 1 }, boostScore: null, boostScoreUpdatedAt: null },
-      }),
-    ]);
-    const afterUnboost = await this.prisma.article.findUnique({ where: { id: articleId }, select: { boostCount: true } });
-    if (afterUnboost) {
-      this.presenceRealtime.emitArticlesLiveUpdated(articleId, {
-        articleId,
-        version: new Date().toISOString(),
-        reason: 'boostCount',
-        patch: { boostCount: afterUnboost.boostCount },
-      });
-    }
-    this.sideEffects.dispatch('article.unboosted', { articleId, actorUserId: userId });
-    return { boosted: false };
+    return this.engagement.unboost(userId, articleId);
   }
 
   // ─── Reactions ────────────────────────────────────────────────────────────────
 
   async addReaction(userId: string, articleId: string, reactionId: string) {
-    const reaction = findReactionById(reactionId);
-    if (!reaction) throw new BadRequestException('Invalid reaction.');
-    await this.assertArticleAccessible(articleId, userId);
-    try {
-      await this.prisma.articleReaction.create({
-        data: { articleId, userId, reactionId: reaction.id, emoji: reaction.emoji },
-      });
-    } catch (e: any) {
-      if (e?.code === 'P2002') throw new ConflictException('Already reacted with this emoji.');
-      throw e;
-    }
-    await this.emitArticleReactionsChanged(articleId, userId);
-    this.sideEffects.dispatch('article.reaction.added', { articleId, actorUserId: userId, emoji: reaction.emoji });
-    return { reactionId: reaction.id, emoji: reaction.emoji };
+    return this.engagement.addReaction(userId, articleId, reactionId);
   }
 
   async removeReaction(userId: string, articleId: string, reactionId: string) {
-    const existing = await this.prisma.articleReaction.findUnique({
-      where: { articleId_userId_reactionId: { articleId, userId, reactionId } },
-    });
-    if (!existing) throw new NotFoundException('Reaction not found.');
-    await this.prisma.articleReaction.delete({
-      where: { articleId_userId_reactionId: { articleId, userId, reactionId } },
-    });
-    await this.emitArticleReactionsChanged(articleId, userId);
-    return { success: true };
-  }
-
-  /**
-   * Re-read the article's reactions and emit the refreshed summary to live viewers.
-   *
-   * Deliberately on the request path: this is a content emit that other viewers expect to see
-   * immediately, and it costs one small indexed read. Routing it through the side-effects queue
-   * would trade a sub-millisecond emit for seconds of queue latency to gain durability nobody
-   * needs — a dropped reaction count self-heals on the next page load.
-   */
-  private async emitArticleReactionsChanged(articleId: string, viewerUserId: string): Promise<void> {
-    try {
-      const allReactions = await this.prisma.articleReaction.findMany({ where: { articleId } });
-      this.presenceRealtime.emitArticlesLiveUpdated(articleId, {
-        articleId,
-        version: new Date().toISOString(),
-        reason: 'reactions',
-        patch: { reactions: buildReactionSummaries(allReactions, viewerUserId) },
-      });
-    } catch {
-      // Best-effort
-    }
+    return this.engagement.removeReaction(userId, articleId, reactionId);
   }
 
   // ─── Comments ─────────────────────────────────────────────────────────────────
 
-  commentIncludes() {
-    return {
-      author: this.articleAuthorSelect(),
-      reactions: true,
-      replies: {
-        where: { deletedAt: null },
-        orderBy: { createdAt: 'asc' as const },
-        take: 3,
-        include: {
-          author: this.articleAuthorSelect(),
-          reactions: true,
-        },
-      },
-    };
+  async listComments(opts: { articleId: string; viewerUserId?: string | null; limit?: number; cursor?: string | null; }) {
+    return this.comments.listComments(opts);
   }
 
-  private commentLeafIncludes() {
-    return {
-      author: this.articleAuthorSelect(),
-      reactions: true,
-    };
+  async getComment(opts: { articleId: string; commentId: string; viewerUserId?: string | null; }) {
+    return this.comments.getComment(opts);
   }
 
-  async listComments(opts: {
-    articleId: string;
-    viewerUserId?: string | null;
-    limit?: number;
-    cursor?: string | null;
-  }) {
-    await this.assertArticleAccessible(opts.articleId, opts.viewerUserId);
-    const limit = Math.min(opts.limit ?? 20, 50);
-
-    const comments = await this.prisma.articleComment.findMany({
-      where: {
-        articleId: opts.articleId,
-        parentId: null,
-        deletedAt: null,
-        ...(opts.cursor ? { id: { lt: opts.cursor } } : {}),
-      },
-      orderBy: { createdAt: 'desc' },
-      take: limit + 1,
-      include: this.commentIncludes(),
-    }) as ArticleCommentWithAuthorAndReactions[];
-
-    const { items: items, nextCursor: nextCursor } = toPage(comments, limit, (r) => r.id);
-    return {
-      comments: items.map((c) => toArticleCommentDto(c, this.r2BaseUrl, { viewerUserId: opts.viewerUserId })),
-      nextCursor,
-    };
+  async listCommentReplies(opts: { articleId: string; parentCommentId: string; viewerUserId?: string | null; limit?: number; cursor?: string | null; }) {
+    return this.comments.listCommentReplies(opts);
   }
 
-  /**
-   * One comment (and its parent thread, when nested) so push/hash landings can scroll
-   * to a reply that is not on the first comments page.
-   */
-  async getComment(opts: {
-    articleId: string;
-    commentId: string;
-    viewerUserId?: string | null;
-  }) {
-    await this.assertArticleAccessible(opts.articleId, opts.viewerUserId);
-    const comment = await this.prisma.articleComment.findFirst({
-      where: { id: opts.commentId, articleId: opts.articleId, deletedAt: null },
-      include: this.commentLeafIncludes(),
-    }) as ArticleCommentWithAuthorAndReactions | null;
-    if (!comment) throw new NotFoundException('Reply not found.');
-
-    const commentDto = toArticleCommentDto(comment, this.r2BaseUrl, {
-      viewerUserId: opts.viewerUserId,
-    });
-    if (!comment.parentId) {
-      return { comment: commentDto, parent: null };
-    }
-
-    const parent = await this.prisma.articleComment.findFirst({
-      where: { id: comment.parentId, articleId: opts.articleId },
-      include: this.commentLeafIncludes(),
-    }) as ArticleCommentWithAuthorAndReactions | null;
-    if (!parent) {
-      return { comment: commentDto, parent: null };
-    }
-
-    const parentWithReply = {
-      ...parent,
-      replies: [comment],
-    } as ArticleCommentWithAuthorAndReactions;
-    return {
-      comment: commentDto,
-      parent: toArticleCommentDto(parentWithReply, this.r2BaseUrl, {
-        viewerUserId: opts.viewerUserId,
-      }),
-    };
-  }
-
-  async listCommentReplies(opts: {
-    articleId: string;
-    parentCommentId: string;
-    viewerUserId?: string | null;
-    limit?: number;
-    cursor?: string | null;
-  }) {
-    await this.assertArticleAccessible(opts.articleId, opts.viewerUserId);
-    const parent = await this.prisma.articleComment.findUnique({
-      where: { id: opts.parentCommentId },
-      select: { id: true, articleId: true, parentId: true, deletedAt: true },
-    });
-    if (!parent || parent.deletedAt) throw new NotFoundException('Reply not found.');
-    if (parent.articleId !== opts.articleId) throw new NotFoundException('Reply not found.');
-    if (parent.parentId !== null) throw new BadRequestException('Replies can only be loaded for top-level replies.');
-
-    const limit = Math.min(opts.limit ?? 20, 50);
-    const replies = await this.prisma.articleComment.findMany({
-      where: {
-        articleId: opts.articleId,
-        parentId: opts.parentCommentId,
-        deletedAt: null,
-        ...(opts.cursor ? { id: { gt: opts.cursor } } : {}),
-      },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      take: limit + 1,
-      include: this.commentLeafIncludes(),
-    }) as ArticleCommentWithAuthorAndReactions[];
-
-    const { items: items, nextCursor: nextCursor } = toPage(replies, limit, (r) => r.id);
-    return {
-      comments: items.map((c) => toArticleCommentDto(c, this.r2BaseUrl, { viewerUserId: opts.viewerUserId })),
-      nextCursor,
-    };
-  }
-
-  async createComment(
-    userId: string,
-    articleId: string,
-    data: { body: string; parentId?: string | null },
-  ) {
-    return createArticleCommentOn(this, userId, articleId, data);
+  async createComment(userId: string, articleId: string, data: { body: string; parentId?: string | null }) {
+    return this.commentWriter.createArticleComment(userId, articleId, data);
   }
 
   async updateComment(userId: string, commentId: string, body: string) {
-    const comment = await this.prisma.articleComment.findUnique({ where: { id: commentId } });
-    if (!comment || comment.deletedAt) throw new NotFoundException('Comment not found.');
-    assertOwnerOrAdmin({ userId }, comment.authorId, 'Not your comment.');
-
-    const viewerCtx = await this.viewer.getViewerOrThrow(userId);
-    const normalizedBody = normalizeCommentBody(body);
-    assertPublishableText(normalizedBody);
-    const maxCommentLength = this.viewer.isPremium(viewerCtx) ? 1000 : 500;
-    if (normalizedBody.length > maxCommentLength) {
-      throw new BadRequestException(`Comment must be ${maxCommentLength} characters or fewer.`);
-    }
-
-    const updated = await this.prisma.articleComment.update({
-      where: { id: commentId },
-      data: { body: normalizedBody, editedAt: new Date() },
-      include: this.commentIncludes(),
-    }) as ArticleCommentWithAuthorAndReactions;
-
-    const updatedDto = toArticleCommentDto(updated, this.r2BaseUrl, { viewerUserId: userId });
-    this.presenceRealtime.emitArticlesCommentUpdated(comment.articleId, {
-      articleId: comment.articleId,
-      comment: updatedDto,
-    });
-
-    return updatedDto;
+    return this.comments.updateComment(userId, commentId, body);
   }
 
   async deleteComment(userId: string, commentId: string) {
-    const comment = await this.prisma.articleComment.findUnique({ where: { id: commentId } });
-    if (!comment || comment.deletedAt) throw new NotFoundException('Comment not found.');
-    assertOwnerOrAdmin({ userId }, comment.authorId, 'Not your comment.');
-
-    let newCommentCount: number | null = null;
-    await this.prisma.$transaction(async (tx) => {
-      await tx.articleComment.update({ where: { id: commentId }, data: { deletedAt: new Date() } });
-      if (comment.parentId) {
-        await tx.articleComment.update({
-          where: { id: comment.parentId },
-          data: { replyCount: { decrement: 1 } },
-        });
-        const parentAfter = await tx.articleComment.findUnique({ where: { id: comment.parentId }, select: { replyCount: true } });
-        if (parentAfter && parentAfter.replyCount < 0) {
-          await tx.articleComment.update({ where: { id: comment.parentId }, data: { replyCount: 0 } });
-        }
-      } else {
-        await tx.$executeRaw`UPDATE "Article" SET "commentCount" = GREATEST(0, "commentCount" - 1) WHERE "id" = ${comment.articleId}`;
-        const after = await tx.article.findUnique({ where: { id: comment.articleId }, select: { commentCount: true } });
-        newCommentCount = after?.commentCount ?? 0;
-      }
-    });
-
-    this.presenceRealtime.emitArticlesCommentDeleted(comment.articleId, {
-      articleId: comment.articleId,
-      commentId,
-      parentId: comment.parentId,
-    });
-
-    if (newCommentCount !== null) {
-      this.presenceRealtime.emitArticlesLiveUpdated(comment.articleId, {
-        articleId: comment.articleId,
-        version: new Date().toISOString(),
-        reason: 'commentCount',
-        patch: { commentCount: newCommentCount },
-      });
-      void this.board.syncArticleThread(comment.articleId, { commentCount: newCommentCount }).catch(() => undefined);
-    }
-
-    return { success: true };
+    return this.comments.deleteComment(userId, commentId);
   }
 
   async addCommentReaction(userId: string, commentId: string, reactionId: string) {
-    const reaction = findReactionById(reactionId);
-    if (!reaction) throw new BadRequestException('Invalid reaction.');
-    const comment = await this.prisma.articleComment.findUnique({ where: { id: commentId } });
-    if (!comment || comment.deletedAt) throw new NotFoundException('Comment not found.');
-    await this.assertArticleAccessible(comment.articleId, userId);
-    try {
-      await this.prisma.articleCommentReaction.create({
-        data: { commentId, userId, reactionId: reaction.id, emoji: reaction.emoji },
-      });
-    } catch (e: any) {
-      if (e?.code === 'P2002') throw new ConflictException('Already reacted with this emoji.');
-      throw e;
-    }
-
-    await this.emitCommentReactionsChanged(comment, commentId, userId);
-
-    return { reactionId: reaction.id, emoji: reaction.emoji };
+    return this.comments.addCommentReaction(userId, commentId, reactionId);
   }
 
   async removeCommentReaction(userId: string, commentId: string, reactionId: string) {
-    const existing = await this.prisma.articleCommentReaction.findUnique({
-      where: { commentId_userId_reactionId: { commentId, userId, reactionId } },
-    });
-    if (!existing) throw new NotFoundException('Reaction not found.');
-
-    const comment = await this.prisma.articleComment.findUnique({ where: { id: commentId } });
-
-    await this.prisma.articleCommentReaction.delete({
-      where: { commentId_userId_reactionId: { commentId, userId, reactionId } },
-    });
-
-    if (comment) {
-      await this.emitCommentReactionsChanged(comment, commentId, userId);
-    }
-
-    return { success: true };
-  }
-
-  /** Comment-level counterpart of `emitArticleReactionsChanged` — same reasoning for staying inline. */
-  private async emitCommentReactionsChanged(
-    comment: { articleId: string; parentId: string | null },
-    commentId: string,
-    viewerUserId: string,
-  ): Promise<void> {
-    try {
-      const reactions = await this.prisma.articleCommentReaction.findMany({ where: { commentId } });
-      this.presenceRealtime.emitArticlesCommentReactionChanged(comment.articleId, {
-        articleId: comment.articleId,
-        commentId,
-        parentId: comment.parentId,
-        reactions: buildReactionSummaries(reactions, viewerUserId),
-      });
-    } catch {
-      // Best-effort
-    }
+    return this.comments.removeCommentReaction(userId, commentId, reactionId);
   }
 
   // ─── Article share post ───────────────────────────────────────────────────────
 
   async createSharePost(userId: string, articleId: string, body: string, shareVisibility?: PostVisibility) {
-    const article = await this.prisma.article.findUnique({
-      where: { id: articleId },
-      include: { author: { select: articleAuthorInclude } },
-    }) as ArticleWithAuthor | null;
-
-    if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
-    if (article.isDraft) throw new BadRequestException('Cannot share a draft article.');
-
-    // Ensure sharer can see the article.
-    await this.assertArticleAccessible(articleId, userId);
-
-    // Enforce visibility constraint: share visibility must be >= article visibility.
-    const VISIBILITY_RANK: Record<PostVisibility, number> = {
-      public: 0,
-      verifiedOnly: 1,
-      premiumOnly: 2,
-      onlyMe: 3,
-    };
-    const articleRank = VISIBILITY_RANK[article.visibility] ?? 0;
-    const effectiveVisibility = shareVisibility ?? article.visibility;
-    const shareRank = VISIBILITY_RANK[effectiveVisibility] ?? 0;
-    if (shareRank < articleRank) {
-      throw new BadRequestException(
-        `Share visibility must be at least as restrictive as the article's visibility (${article.visibility}).`,
-      );
-    }
-
-    const post = await this.postsWrite.write.create({
-      data: {
-        userId,
-        body: body.trim(),
-        kind: 'articleShare',
-        visibility: effectiveVisibility,
-        articleId,
-      },
-      include: {
-        user: {
-          select: {
-            id: true, username: true, name: true, premium: true, premiumPlus: true,
-            isOrganization: true, verifiedStatus: true,
-            avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true, bannedAt: true,
-            orgMemberships: { include: { org: { select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true } } } },
-          },
-        },
-        media: true,
-        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
-        article: { include: { author: { select: articleAuthorInclude } } },
-      },
-    });
-
-    const mappedPost = toPostDto(post as any, this.r2BaseUrl);
-    return { post: mappedPost, article: toArticleSharePreviewDto(article, this.r2BaseUrl) };
+    return this.engagement.createSharePost(userId, articleId, body, shareVisibility);
   }
 
   // ─── Internal ─────────────────────────────────────────────────────────────────
 
-  async assertArticleAccessible(articleId: string, viewerUserId?: string | null) {
-    const article = await this.prisma.article.findUnique({
-      where: { id: articleId },
-      select: { id: true, isDraft: true, deletedAt: true, visibility: true, authorId: true },
-    });
-    if (!article || article.deletedAt) throw new NotFoundException('Article not found.');
-    if (article.isDraft && article.authorId !== viewerUserId) {
-      throw new NotFoundException('Article not found.');
-    }
-    if (!article.isDraft) {
-      const viewerCtx = viewerUserId ? await this.viewer.getViewer(viewerUserId) : null;
-      const allowed = this.viewer.allowedPostVisibilities(viewerCtx);
-      if (!allowed.includes(article.visibility) && article.authorId !== viewerUserId) {
-        throw new NotFoundException('Article not found.');
-      }
-    }
-  }
+
 }

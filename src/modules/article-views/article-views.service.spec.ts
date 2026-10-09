@@ -1,6 +1,6 @@
-import { ArticleViewsService } from './article-views.service';
+import { ArticleViewsService } from "./article-views.service";
 
-describe('ArticleViewsService', () => {
+describe("ArticleViewsService", () => {
   function makeService() {
     const prisma = {
       articleView: {
@@ -8,8 +8,8 @@ describe('ArticleViewsService', () => {
       },
       article: {
         findFirst: jest.fn().mockResolvedValue({
-          visibility: 'public',
-          authorId: 'author-1',
+          visibility: "public",
+          authorId: "author-1",
           viewCount: 10,
           totalViewCount: 21,
         }),
@@ -27,7 +27,9 @@ describe('ArticleViewsService', () => {
       ]),
     };
     const cache = {
-      getOrSetJson: jest.fn(async (params: { compute: () => Promise<unknown> }) => params.compute()),
+      getOrSetJson: jest.fn(
+        async (params: { compute: () => Promise<unknown> }) => params.compute(),
+      ),
     };
     const service = new ArticleViewsService(
       prisma as any,
@@ -39,28 +41,37 @@ describe('ArticleViewsService', () => {
     return { service, prisma, cache };
   }
 
-  it('viewerViewedArticleIds returns empty for guests and empty id lists', async () => {
+  it("viewerViewedArticleIds returns empty for guests and empty id lists", async () => {
     const { service, prisma } = makeService();
-    await expect(service.viewerViewedArticleIds(null, ['a1'])).resolves.toEqual(new Set());
-    await expect(service.viewerViewedArticleIds('u1', [])).resolves.toEqual(new Set());
+    await expect(service.viewerViewedArticleIds(null, ["a1"])).resolves.toEqual(
+      new Set(),
+    );
+    await expect(service.viewerViewedArticleIds("u1", [])).resolves.toEqual(
+      new Set(),
+    );
     expect(prisma.articleView.findMany).not.toHaveBeenCalled();
   });
 
-  it('viewerViewedArticleIds returns the viewed id set', async () => {
+  it("viewerViewedArticleIds returns the viewed id set", async () => {
     const { service, prisma } = makeService();
-    prisma.articleView.findMany.mockResolvedValue([{ articleId: 'a1' }, { articleId: 'a3' }]);
-    await expect(service.viewerViewedArticleIds('u1', ['a1', 'a2', 'a3'])).resolves.toEqual(
-      new Set(['a1', 'a3']),
-    );
+    prisma.articleView.findMany.mockResolvedValue([
+      { articleId: "a1" },
+      { articleId: "a3" },
+    ]);
+    await expect(
+      service.viewerViewedArticleIds("u1", ["a1", "a2", "a3"]),
+    ).resolves.toEqual(new Set(["a1", "a3"]));
     expect(prisma.articleView.findMany).toHaveBeenCalledWith({
-      where: { userId: 'u1', articleId: { in: ['a1', 'a2', 'a3'] } },
+      where: { userId: "u1", articleId: { in: ["a1", "a2", "a3"] } },
       select: { articleId: true },
     });
   });
 
-  it('getBreakdown skips the cache when fresh is set', async () => {
+  it("getBreakdown skips the cache when fresh is set", async () => {
     const { service, cache } = makeService();
-    const result = await service.getBreakdown('article-1', null, { fresh: true });
+    const result = await service.getBreakdown("article-1", null, {
+      fresh: true,
+    });
     expect(cache.getOrSetJson).not.toHaveBeenCalled();
     expect(result.total).toBe(10);
     expect(result.totalViewCount).toBe(21);
@@ -69,9 +80,9 @@ describe('ArticleViewsService', () => {
     expect(result.guestTotal).toBe(6);
   });
 
-  it('getBreakdown uses the cache when fresh is not set', async () => {
+  it("getBreakdown uses the cache when fresh is not set", async () => {
     const { service, cache } = makeService();
-    await service.getBreakdown('article-1', null);
+    await service.getBreakdown("article-1", null);
     expect(cache.getOrSetJson).toHaveBeenCalledTimes(1);
   });
 });

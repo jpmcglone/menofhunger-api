@@ -1,36 +1,15 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
 import { CurrentUserId } from '../users/users.decorator';
 import { UserLookupService } from '../user-lookup/user-lookup.service';
-import { newsletterAudienceFiltersSchema } from '../newsletters/newsletter-audience';
 import { NewslettersService } from '../newsletters/newsletters.service';
 import { AdminGuard } from './admin.guard';
-
-export const writeSchema = z.object({
-  subject: z.string().max(200).optional().nullable(),
-  preheader: z.string().max(200).optional().nullable(),
-  bodyJson: z.string().max(100_000).optional().nullable(),
-  ctaLabel: z.string().trim().max(40).optional().nullable(),
-  ctaHref: z.string().trim().max(500).optional().nullable(),
-  imageKey: z.string().trim().max(500).optional().nullable(),
-  audienceFilters: newsletterAudienceFiltersSchema.optional(),
-});
-
-const audienceCountSchema = z.object({
-  audienceFilters: newsletterAudienceFiltersSchema.optional(),
-});
-
-const previewSchema = writeSchema.extend({
-  firstName: z.string().trim().max(80).optional(),
-  name: z.string().trim().max(120).optional(),
-  username: z.string().trim().max(40).optional(),
-});
-
-const scheduleSchema = z.object({
-  scheduledAt: z.string().datetime({ offset: true }).or(z.string().datetime()),
-});
-
-const listSchema = z.object({ limit: z.coerce.number().int().min(1).max(50).optional() });
+import {
+  writeSchema,
+  audienceCountSchema,
+  previewSchema,
+  scheduleSchema,
+  listSchema,
+} from './admin-newsletters.schemas';
 
 @UseGuards(AdminGuard)
 @Controller('admin/newsletters')

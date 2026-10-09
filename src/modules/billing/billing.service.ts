@@ -1,3 +1,4 @@
+import { isUniqueViolation } from '../../common/prisma/errors';
 import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import type Stripe from 'stripe';
@@ -5,7 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import type { BillingCheckoutSessionDto, BillingMeDto, BillingPortalSessionDto, BillingTier } from '../../common/dto';
 import type { VerifiedStatus } from '@prisma/client';
-import { Prisma } from '@prisma/client';
+
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { PublicProfileCacheService } from '../users/public-profile-cache.service';
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
@@ -14,7 +15,7 @@ import { PosthogService } from '../../common/posthog/posthog.service';
 import { SlackService } from '../../common/slack/slack.service';
 import { EntitlementService, laterDate } from './entitlement.service';
 import { ReferralService } from './referral.service';
-import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
+import { USER_BRIEF_SELECT, USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 
 type StripeCtx = { stripe: Stripe; cfg: NonNullable<ReturnType<AppConfigService['stripe']>> };
 
@@ -92,9 +93,7 @@ export class BillingService {
         referralBonusGrantedAt: true,
         recruitedBy: {
           select: {
-            id: true,
-            username: true,
-            name: true,
+            ...USER_BRIEF_SELECT,
             avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
             avatarUpdatedAt: true,
             premium: true,
@@ -357,7 +356,7 @@ export class BillingService {
         await stripe.subscriptions.update(user.stripeSubscriptionId!, {
           items: [{ id: itemId, price: cfg.pricePremiumPlusMonthly }],
           proration_behavior: 'create_prorations',
-          metadata: { ...((sub as any).metadata ?? {}), tier: 'premiumPlus' },
+          metadata: { ...(sub.metadata ?? {}), tier: 'premiumPlus' },
         });
         this.logger.log(`[billing] Upgraded user ${params.userId} from Premium → Premium+`);
         await this.syncSubscriptionToUser({ customerId: user.stripeCustomerId!, subscriptionId: user.stripeSubscriptionId! });
@@ -415,7 +414,7 @@ export class BillingService {
         : {}),
     });
 
-    const url = (session as any)?.url as string | null | undefined;
+    const url = session?.url as string | null | undefined;
     if (!url) throw new BadRequestException('Stripe did not return a checkout URL.');
     return { url };
   }
@@ -506,7 +505,7 @@ export class BillingService {
       try {
         await this.prisma.stripeWebhookEvent.create({ data: { id: event.id } });
       } catch (e: unknown) {
-        if (!(e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')) throw e;
+        if (!(isUniqueViolation(e))) throw e;
         // Concurrent request raced us to the insert — re-check processedAt before proceeding.
         const concurrent = await this.prisma.stripeWebhookEvent.findUnique({
           where: { id: event.id },
@@ -550,10 +549,9 @@ export class BillingService {
     if (event.type === 'invoice.payment_succeeded') {
       const invoice = event.data.object as Stripe.Invoice;
       const customerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id ?? null;
-      const subscriptionId =
-        typeof (invoice as any).subscription === 'string'
-          ? (invoice as any).subscription
-          : (invoice as any).subscription?.id ?? null;
+      // The pinned Stripe typings omit `Invoice.subscription`, which the webhook payload still carries.
+      const invoiceSubscription = (invoice as Stripe.Invoice & { subscription?: string | { id: string } | null }).subscription;
+      const subscriptionId = typeof invoiceSubscription === 'string' ? invoiceSubscription : invoiceSubscription?.id ?? null;
       if (!customerId || !subscriptionId) {
         await this.prisma.stripeWebhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
         return;
@@ -573,9 +571,7 @@ export class BillingService {
     const user = await this.prisma.user.findFirst({
       where: { stripeCustomerId: params.customerId },
       select: {
-        id: true,
-        username: true,
-        name: true,
+        ...USER_BRIEF_SELECT,
         verifiedStatus: true,
         premium: true,
         premiumPlus: true,
@@ -593,10 +589,12 @@ export class BillingService {
 
     const priceId = sub.items?.data?.[0]?.price?.id ?? null;
     const status = String(sub.status ?? '');
-    const cancelAtPeriodEnd = Boolean((sub as any).cancel_at_period_end);
-    const currentPeriodEndSec = (sub as any)?.current_period_end as number | null | undefined;
+    const cancelAtPeriodEnd = Boolean(sub.cancel_at_period_end);
+    // Period bounds moved off `Subscription` in newer typings but are still present on the payload.
+    const periodBounds = sub as Stripe.Subscription & { current_period_start?: number | null; current_period_end?: number | null };
+    const currentPeriodEndSec = periodBounds.current_period_end;
     const currentPeriodEnd = currentPeriodEndSec ? new Date(currentPeriodEndSec * 1000) : null;
-    const currentPeriodStartSec = (sub as any)?.current_period_start as number | null | undefined;
+    const currentPeriodStartSec = periodBounds.current_period_start;
     const currentPeriodStart = currentPeriodStartSec ? new Date(currentPeriodStartSec * 1000) : null;
 
     // Save Stripe state to DB first, then let EntitlementService resolve the effective tier

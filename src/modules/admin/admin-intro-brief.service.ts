@@ -7,13 +7,9 @@ import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import type { AdminIntroBriefDto, AdminIntroBriefQueuedDto, AdminIntroPairDto, AdminIntroPersonDto } from '../../common/dto/admin-intro-brief.dto';
 import { canonicalizeTopicValue } from '../../common/topics/topic-utils';
-import {
-  AFFINITY_SEARCH_DAYS,
-  INTRO_POST_DAYS,
-  mergedUserTopicsSql,
-  userTopicSourceCtesSql,
-} from '../../common/discovery/user-affinity.sql';
+import { AFFINITY_SEARCH_DAYS, INTRO_POST_DAYS, mergedUserTopicsSql, userTopicSourceCtesSql } from '../../common/discovery/user-affinity.sql';
 import { uniqueStrings } from '../../common/arrays/unique-strings';
+import { toJsonInput } from '../../common/prisma/json';
 
 type CandidateRow = {
   leftUserId: string;
@@ -181,13 +177,13 @@ export class AdminIntroBriefService {
       create: {
         weekKey,
         brief,
-        pairsJson: pairs as unknown as Prisma.InputJsonValue,
+        pairsJson: toJsonInput(pairs),
         modelUsed: result.modelUsed,
         createdAt: writtenAt,
       },
       update: {
         brief,
-        pairsJson: pairs as unknown as Prisma.InputJsonValue,
+        pairsJson: toJsonInput(pairs),
         modelUsed: result.modelUsed,
         createdAt: writtenAt,
       },

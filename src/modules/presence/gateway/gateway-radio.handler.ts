@@ -1,3 +1,4 @@
+import { socketData } from './gateway-socket-data';
 import { Injectable, Logger } from '@nestjs/common';
 import type { Socket } from 'socket.io';
 import { FollowsService } from '../../follows/follows.service';
@@ -5,7 +6,7 @@ import { RadioChatService } from '../../radio/radio-chat.service';
 import { RadioService } from '../../radio/radio.service';
 import type { RadioChatSenderDto, RadioListenerDto, RadioLobbyCountsDto } from '../../../common/dto';
 import { PresenceService } from '../presence.service';
-import { PresenceRedisStateService } from '../presence-redis-state.service';
+import { PresenceRedisBusService } from '../presence-redis-bus.service';
 import { GatewayContextService } from './gateway-context.service';
 import { radioChatRoom } from './gateway-rooms';
 
@@ -16,7 +17,7 @@ export class RadioGatewayHandler {
 
   constructor(
     private readonly presence: PresenceService,
-    private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presenceRedis: PresenceRedisBusService,
     private readonly follows: FollowsService,
     private readonly radio: RadioService,
     private readonly radioChat: RadioChatService,
@@ -93,7 +94,7 @@ export class RadioGatewayHandler {
     if (!this.radio.isValidStationId(stationId)) return;
 
     const userId =
-      (client.data as { userId?: string })?.userId ??
+      socketData(client).userId ??
       this.presence.getUserIdForSocket(client.id) ??
       null;
     if (!userId) return;
@@ -129,7 +130,7 @@ export class RadioGatewayHandler {
     if (!this.radio.isValidStationId(stationId)) return;
 
     const userId =
-      (client.data as { userId?: string })?.userId ??
+      socketData(client).userId ??
       this.presence.getUserIdForSocket(client.id) ??
       null;
     if (!userId) return;
@@ -188,26 +189,26 @@ export class RadioGatewayHandler {
     // Require authentication — unauthenticated clients must not receive the chat snapshot
     // or live messages without a verified session.
     const userId =
-      (client.data as { userId?: string })?.userId ??
+      socketData(client).userId ??
       this.presence.getUserIdForSocket(client.id) ??
       null;
     if (!userId) return;
 
-    const prev = String((client.data as any)?.radioChatStationId ?? '').trim() || null;
+    const prev = String(socketData(client).radioChatStationId ?? '').trim() || null;
     if (prev && prev !== stationId) {
       client.leave(radioChatRoom(prev));
     }
 
-    (client.data as any).radioChatStationId = stationId;
+    socketData(client).radioChatStationId = stationId;
     client.join(radioChatRoom(stationId));
     client.emit('radio:chatSnapshot', this.radioChat.snapshot(stationId));
   }
 
   handleRadioChatUnsubscribe(client: Socket): void {
-    const prev = String((client.data as any)?.radioChatStationId ?? '').trim() || null;
+    const prev = String(socketData(client).radioChatStationId ?? '').trim() || null;
     if (!prev) return;
     client.leave(radioChatRoom(prev));
-    (client.data as any).radioChatStationId = null;
+    socketData(client).radioChatStationId = null;
   }
 
   handleRadioChatSend(client: Socket, payload: { stationId?: string; body?: string }): void {
@@ -215,18 +216,18 @@ export class RadioGatewayHandler {
     const body = String(payload?.body ?? '');
     if (!this.radio.isValidStationId(stationId)) return;
 
-    const subscribed = String((client.data as any)?.radioChatStationId ?? '').trim();
+    const subscribed = String(socketData(client).radioChatStationId ?? '').trim();
     if (!subscribed || subscribed !== stationId) return;
 
     const userId =
-      (client.data as { userId?: string })?.userId ??
+      socketData(client).userId ??
       this.presence.getUserIdForSocket(client.id) ??
       null;
     if (!userId) return;
 
     if (!this.radioChat.canSend(userId)) return;
 
-    const sender = ((client.data as any)?.radioChatUser ?? null) as RadioChatSenderDto | null;
+    const sender = (socketData(client).radioChatUser ?? null) as RadioChatSenderDto | null;
     if (!sender?.id) return;
 
     const msg = this.radioChat.appendMessage({ stationId, sender, body });

@@ -3,16 +3,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { LandingService } from "../landing/landing.service";
 import { readBoardAnalytics } from "./admin-analytics-board.read";
 import { readChannelsAnalytics } from "./admin-analytics-channels.read";
-import type {
-  AdminAnalyticsArticlesDto,
-  AdminAnalyticsCoinsDto,
-  AdminAnalyticsDto,
-  AdminAnalyticsEngagementDto,
-  AdminAnalyticsGroupsDto,
-  AdminAnalyticsSpacesDto,
-  AnalyticsGranularity,
-  AnalyticsRange,
-} from "../../common/dto/admin-analytics.dto";
+import type { AdminAnalyticsArticlesDto, AdminAnalyticsCoinsDto, AdminAnalyticsDto, AdminAnalyticsEngagementDto, AdminAnalyticsGroupsDto, AdminAnalyticsSpacesDto, AnalyticsGranularity, AnalyticsRange } from "../../common/dto/admin-analytics.dto";
 function toTimeSeries(rows: Array<{ bucket: Date; count: bigint }>) {
   return rows.map((r) => ({
     bucket: r.bucket.toISOString().split("T")[0]!,

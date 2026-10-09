@@ -1,18 +1,20 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 export type PublicRecordPostRow = { author: string | null; createdAt: Date; body: string };
 export type PublicRecordBoardRow = { author: string | null; createdAt: Date; title: string | null; body: string };
 
 function publicRootWhere(): Prisma.PostWhereInput {
   return {
-    deletedAt: null,
+    ...NOT_DELETED,
     isDraft: false,
     visibility: 'public',
     parentId: null,
     communityGroupId: null,
-    user: { bannedAt: null },
+    user: NOT_BANNED_USER_WHERE,
   };
 }
 
@@ -54,12 +56,12 @@ export class PostsPublicRecordService {
   async recentGroupPosts(groupId: string, take: number): Promise<PublicRecordPostRow[]> {
     const rows = await this.prisma.post.findMany({
       where: {
-        deletedAt: null,
+        ...NOT_DELETED,
         isDraft: false,
         communityGroupId: groupId,
         parentId: null,
         visibility: { not: 'onlyMe' },
-        user: { bannedAt: null },
+        user: NOT_BANNED_USER_WHERE,
       },
       orderBy: { createdAt: 'desc' },
       take,

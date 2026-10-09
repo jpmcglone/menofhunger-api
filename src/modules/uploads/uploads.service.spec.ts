@@ -1,7 +1,10 @@
 import { BadRequestException, ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
 import { Readable } from 'node:stream';
+import type { S3Client } from '@aws-sdk/client-s3';
 import sharp from 'sharp';
-import { UploadsService } from './uploads.service';
+import { makeUploadsService } from './uploads.testing';
+import type { UploadsService } from './uploads.service';
+import { normalizeJpegOrientationIfNeeded } from './uploads-jpeg-orientation';
 
 const R2_CFG = {
   accountId: 'acct',
@@ -50,7 +53,7 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
 
 function makeService(overrides: Partial<Deps> = {}) {
   const deps = makeDeps(overrides);
-  const service = new UploadsService(
+  const service = makeUploadsService(
     deps.prisma,
     deps.appConfig,
     deps.publicProfileCache,
@@ -70,7 +73,7 @@ function stubS3(
   impl: (commandName: string, input: any) => Promise<unknown> | unknown,
 ) {
   const send = jest.fn(async (cmd: any) => impl(cmd.constructor.name, cmd.input));
-  (service as any).s3.send = send;
+  (service as any).storage.s3.send = send;
   return send;
 }
 
@@ -472,7 +475,6 @@ describe('UploadsService.commitBannerUpload', () => {
 
 describe('UploadsService EXIF orientation normalization', () => {
   it('re-encodes sideways JPEGs (EXIF orientation) and rewrites the object', async () => {
-    const { service } = makeService();
     // 10x20 image stored with EXIF orientation 6 (rotate 90° CW to display).
     const jpeg = await makeJpeg(10, 20, 6);
     const send = jest.fn(async (cmd: any) => {
@@ -480,8 +482,8 @@ describe('UploadsService EXIF orientation normalization', () => {
       return {};
     });
 
-    const result = await (service as any).normalizeJpegOrientationIfNeeded({
-      s3: { send },
+    const result = await normalizeJpegOrientationIfNeeded({
+      s3: { send } as unknown as S3Client,
       bucket: 'test-bucket',
       key: 'dev/avatars/u1/sideways.jpg',
       maxBytes: 5 * 1024 * 1024,
@@ -504,7 +506,7 @@ describe('UploadsService EXIF orientation normalization', () => {
       if (cmd.constructor.name === 'GetObjectCommand') return { Body: Readable.from(jpeg) };
       return {};
     });
-    const result = await (service as any).getImageInfoAndNormalizeJpegIfNeeded({
+    const result = await (service as any).storage.getImageInfoAndNormalizeJpegIfNeeded({
       s3: { send }, bucket: 'test', key: 'photo.jpg', contentType: 'image/jpeg',
       maxBytes: 12 * 1024 * 1024, cacheControl: 'public',
     });
@@ -521,7 +523,7 @@ describe('UploadsService EXIF orientation normalization', () => {
       if (cmd.constructor.name === 'GetObjectCommand') return { Body: Readable.from(jpeg) };
       return {};
     });
-    const result = await (service as any).getImageInfoAndNormalizeJpegIfNeeded({
+    const result = await (service as any).storage.getImageInfoAndNormalizeJpegIfNeeded({
       s3: { send }, bucket: 'test', key: 'photo.jpg', contentType: 'image/jpeg',
       maxBytes: 12 * 1024 * 1024, cacheControl: 'public',
     });
@@ -537,7 +539,7 @@ describe('UploadsService EXIF orientation normalization', () => {
       if (name === 'HeadObjectCommand') return { ContentType: 'image/jpeg', ContentLength: 100 };
       return {};
     });
-    jest.spyOn(service as any, 'getImageInfoAndNormalizeJpegIfNeeded')
+    jest.spyOn((service as any).storage, 'getImageInfoAndNormalizeJpegIfNeeded')
       .mockRejectedValue(new ServiceUnavailableException('busy'));
     await expect(service[method]('u1', `dev/${prefix}/u1/photo.jpg`))
       .rejects.toBeInstanceOf(ServiceUnavailableException);
@@ -546,15 +548,14 @@ describe('UploadsService EXIF orientation normalization', () => {
   });
 
   it('leaves upright JPEGs untouched', async () => {
-    const { service } = makeService();
     const jpeg = await makeJpeg(10, 20);
     const send = jest.fn(async (cmd: any) => {
       if (cmd.constructor.name === 'GetObjectCommand') return { Body: Readable.from(jpeg) };
       return {};
     });
 
-    const result = await (service as any).normalizeJpegOrientationIfNeeded({
-      s3: { send },
+    const result = await normalizeJpegOrientationIfNeeded({
+      s3: { send } as unknown as S3Client,
       bucket: 'test-bucket',
       key: 'dev/avatars/u1/upright.jpg',
       maxBytes: 5 * 1024 * 1024,

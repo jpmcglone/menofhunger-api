@@ -1,12 +1,16 @@
 import { Body, Controller, Delete, Get, Req, Param, Post, Patch, Query, UseGuards } from "@nestjs/common";
 import { AdminGuard, type AdminRequest } from "./admin.guard";
 import { AdminUsersService } from './admin-users.service';
+import { AdminUserActivityService } from './admin-user-activity.service';
+import { AdminUserOrgsService } from './admin-user-orgs.service';
 
 @UseGuards(AdminGuard)
 @Controller("admin/users")
 export class AdminUsersController {
   constructor(
     private readonly adminUsers: AdminUsersService,
+    private readonly activity: AdminUserActivityService,
+    private readonly orgs: AdminUserOrgsService,
   ) {}
 
   @Get("banned")
@@ -55,17 +59,17 @@ export class AdminUsersController {
 
   @Get("by-username/:username/recent/posts")
   recentPostsByUsername(@Param() params: unknown, @Query() query: unknown) {
-    return this.adminUsers.recentPostsByUsername(params, query);
+    return this.activity.recentPostsByUsername(params, query);
   }
 
   @Get("by-username/:username/recent/articles")
   recentArticlesByUsername(@Param() params: unknown, @Query() query: unknown) {
-    return this.adminUsers.recentArticlesByUsername(params, query);
+    return this.activity.recentArticlesByUsername(params, query);
   }
 
   @Get("by-username/:username/recent/searches")
   recentSearchesByUsername(@Param() params: unknown, @Query() query: unknown) {
-    return this.adminUsers.recentSearchesByUsername(params, query);
+    return this.activity.recentSearchesByUsername(params, query);
   }
 
   @Patch(":id/profile")
@@ -118,32 +122,32 @@ export class AdminUsersController {
 
   @Get(":id/orgs")
   listOrgMemberships(@Param("id") id: string) {
-    return this.adminUsers.listOrgMemberships(id);
+    return this.orgs.listOrgMemberships(id);
   }
 
   @Post(":id/orgs")
   addOrgMembership(@Param("id") id: string, @Body() body: unknown) {
-    return this.adminUsers.addOrgMembership(id, body);
+    return this.orgs.addOrgMembership(id, body);
   }
 
   @Delete(":id/orgs/:orgId")
   removeOrgMembership(@Param("id") id: string, @Param("orgId") orgId: string) {
-    return this.adminUsers.removeOrgMembership(id, orgId);
+    return this.orgs.removeOrgMembership(id, orgId);
   }
 
   @Post(":id/convert-to-page")
   convertToPage(@Param("id") id: string, @Body() body: unknown) {
-    return this.adminUsers.convertToPage(id, body);
+    return this.orgs.convertToPage(id, body);
   }
 
   @Get(":id/operators")
   listOperators(@Param("id") id: string) {
-    return this.adminUsers.listOperators(id);
+    return this.orgs.listOperators(id);
   }
 
   @Post(":id/operators")
   addOperator(@Param("id") id: string, @Body() body: unknown) {
-    return this.adminUsers.addOperator(id, body);
+    return this.orgs.addOperator(id, body);
   }
 
   @Delete(":id/operators/:operatorUserId")
@@ -151,12 +155,12 @@ export class AdminUsersController {
     @Param("id") id: string,
     @Param("operatorUserId") operatorUserId: string,
   ) {
-    return this.adminUsers.removeOperator(id, operatorUserId);
+    return this.orgs.removeOperator(id, operatorUserId);
   }
 
   @Get(":id/operated-pages")
   listOperatedPages(@Param("id") id: string) {
-    return this.adminUsers.listOperatedPages(id);
+    return this.orgs.listOperatedPages(id);
   }
 
   @Post(":id/email/unverify")

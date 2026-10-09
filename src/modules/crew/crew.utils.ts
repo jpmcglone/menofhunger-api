@@ -1,5 +1,6 @@
 import { PrismaService } from '../prisma/prisma.service';
 import { slugifyCrewHandle } from '../../common/text/slugify';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 /** Crew slug sanitizer: lowercase, hyphen-separated, capped at 72 chars before dedup. */
 /**
@@ -25,7 +26,7 @@ export async function ensureUniqueCrewSlug(
       prisma.crew.findFirst({
         where: {
           slug: candidate,
-          deletedAt: null,
+          ...NOT_DELETED,
           ...(opts?.excludeCrewId ? { NOT: { id: opts.excludeCrewId } } : {}),
         },
         select: { id: true },

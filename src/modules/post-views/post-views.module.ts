@@ -4,12 +4,13 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { RedisModule } from '../redis/redis.module';
 import { PostViewsController } from './post-views.controller';
+import { PostViewsBatchService } from './post-views-batch.service';
 import { PostViewsService } from './post-views.service';
 
 @Module({
   imports: [AuthModule, RealtimeModule, RedisModule, NotificationsModule],
   controllers: [PostViewsController],
-  providers: [PostViewsService],
+  providers: [PostViewsService, PostViewsBatchService],
   exports: [PostViewsService],
 })
 export class PostViewsModule {}

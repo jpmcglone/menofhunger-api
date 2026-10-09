@@ -1,57 +1,25 @@
+import { Inject } from '@nestjs/common';
+import { PostsDraftsService } from './posts-drafts.service';
+import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { z } from 'zod';
-import { AuthGuard } from '../auth/auth.guard';
+import { AuthGuard } from '../auth/auth-public-api';
 import { AppConfigService } from '../app/app-config.service';
 import { CurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import { PostsService } from './posts.service';
+
 import { toPostDto } from './post.dto';
-import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
-
-const draftMediaUploadSchema = z.object({
-  source: z.literal('upload'),
-  kind: z.enum(['image', 'gif', 'video']),
-  r2Key: z.string().min(1),
-  thumbnailR2Key: z.string().min(1).optional(),
-  width: z.coerce.number().int().min(1).max(20000).optional(),
-  height: z.coerce.number().int().min(1).max(20000).optional(),
-  durationSeconds: z.coerce.number().int().min(0).max(3600).optional(),
-  alt: z.string().trim().max(500).nullish(),
-});
-
-const draftMediaSchema = z.discriminatedUnion('source', [
-  draftMediaUploadSchema,
-  z.object({
-    source: z.literal('giphy'),
-    kind: z.literal('gif'),
-    url: z.string().url(),
-    mp4Url: z.string().url().optional(),
-    width: z.coerce.number().int().min(1).max(20000).optional(),
-    height: z.coerce.number().int().min(1).max(20000).optional(),
-    alt: z.string().trim().max(500).nullish(),
-  }),
-]);
+import { draftMediaSchema, listSchema, createSchema, patchSchema } from './drafts.schemas';
 
 type DraftMediaItem = z.infer<typeof draftMediaSchema>;
-
-const listSchema = cursorPageQuerySchema();
-
-const createSchema = z.object({
-  body: z.string().trim().max(1000).optional(),
-  media: z.array(draftMediaSchema).max(4).optional(),
-});
-
-const patchSchema = z.object({
-  body: z.string().trim().max(1000).optional(),
-  media: z.array(draftMediaSchema).max(4).optional(),
-});
 
 @UseGuards(AuthGuard)
 @Controller('drafts')
 export class DraftsController {
   constructor(
-    private readonly posts: PostsService,
+    @Inject(PostsDraftsService) private readonly postsDrafts: Pick<PostsDraftsService, 'listDrafts' | 'createDraft' | 'updateDraft' | 'deleteDraft'>,
+    @Inject(PostsViewerEnrichmentService) private readonly postsEnrichment: Pick<PostsViewerEnrichmentService, 'viewerContext'>,
     private readonly appConfig: AppConfigService,
   ) {}
 
@@ -66,8 +34,8 @@ export class DraftsController {
     const parsed = listSchema.parse(query);
     const limit = parsed.limit ?? 30;
     const cursor = parsed.cursor ?? null;
-    const res = await this.posts.listDrafts({ userId, limit, cursor });
-    const viewer = await this.posts.viewerContext(userId);
+    const res = await this.postsDrafts.listDrafts({ userId, limit, cursor });
+    const viewer = await this.postsEnrichment.viewerContext(userId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
     return {
       data: res.posts.map((p) =>
@@ -90,12 +58,12 @@ export class DraftsController {
   async create(@CurrentUserId() userId: string, @Body() body: unknown) {
     const parsed = createSchema.parse(body);
     const media = (parsed.media ?? null) as DraftMediaItem[] | null;
-    const created = await this.posts.createDraft({
+    const created = await this.postsDrafts.createDraft({
       userId,
       body: (parsed.body ?? '').trim(),
       media,
     });
-    const viewer = await this.posts.viewerContext(userId);
+    const viewer = await this.postsEnrichment.viewerContext(userId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
     return {
       data: toPostDto(created, this.appConfig.r2()?.publicBaseUrl ?? null, {
@@ -115,13 +83,13 @@ export class DraftsController {
   async patch(@CurrentUserId() userId: string, @Param('id') id: string, @Body() body: unknown) {
     const parsed = patchSchema.parse(body);
     const media = (parsed.media ?? null) as DraftMediaItem[] | null;
-    const updated = await this.posts.updateDraft({
+    const updated = await this.postsDrafts.updateDraft({
       userId,
       draftId: id,
       body: typeof parsed.body === 'string' ? parsed.body.trim() : undefined,
       media,
     });
-    const viewer = await this.posts.viewerContext(userId);
+    const viewer = await this.postsEnrichment.viewerContext(userId);
     const viewerHasAdmin = Boolean(viewer?.siteAdmin);
     return {
       data: toPostDto(updated, this.appConfig.r2()?.publicBaseUrl ?? null, {
@@ -139,7 +107,7 @@ export class DraftsController {
   })
   @Delete(':id')
   async delete(@CurrentUserId() userId: string, @Param('id') id: string) {
-    const result = await this.posts.deleteDraft({ userId, draftId: id });
+    const result = await this.postsDrafts.deleteDraft({ userId, draftId: id });
     return { data: result };
   }
 }

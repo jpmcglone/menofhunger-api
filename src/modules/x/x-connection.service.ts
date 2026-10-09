@@ -1,43 +1,22 @@
 import { xCapabilities } from "./integration-capabilities";
 import type { IntegrationCapabilityDto } from "../../common/dto/integrations.dto";
 import { IntegrationBudgetService } from "./integration-budget.service";
-import {
-  integrationLimits,
-  X_REFERENCE_PRICES,
-} from "./integration-budget.policy";
+import { integrationLimits, X_REFERENCE_PRICES } from "./integration-budget.policy";
 import type { IntegrationAllowanceDto } from "../../common/dto/integrations.dto";
 import { XUsageService } from "./x-usage.service";
 import type { XMonthlyAllowanceDto } from "../partner/partner.dto";
 import { randomBytes } from "crypto";
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-  ServiceUnavailableException,
-} from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, ServiceUnavailableException } from "@nestjs/common";
 import type { XConnection } from "@prisma/client";
 import { openSecret, sealSecret } from "../../common/crypto/secret-box";
-import {
-  X_LINK_COST_MICROS,
-  X_NATIVE_COST_MICROS,
-} from "../../common/crosspost/crosspost-eligibility";
+import { X_LINK_COST_MICROS, X_NATIVE_COST_MICROS } from "../../common/crosspost/crosspost-eligibility";
 import { AppConfigService } from "../app/app-config.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { RedisService } from "../redis/redis.service";
 import { PublicProfileCacheService } from "../users/public-profile-cache.service";
 import { UsersMeRealtimeService } from "../users/users-me-realtime.service";
 import { UsersPublicRealtimeService } from "../users/users-public-realtime.service";
-import {
-  XApiClient,
-  XApiError,
-  hasRequiredXScopes,
-  isXUsername,
-  pkceChallenge,
-  pkceVerifier,
-  type XTokenPair,
-} from "./x-api.client";
+import { XApiClient, XApiError, hasRequiredXScopes, isXUsername, pkceChallenge, pkceVerifier, type XTokenPair } from "./x-api.client";
 import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 
 export type XAllowance = {

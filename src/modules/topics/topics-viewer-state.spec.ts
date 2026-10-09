@@ -10,17 +10,17 @@ describe('topic feed viewer state', () => {
       combinedTopicsCached: jest.fn().mockResolvedValue([{ category: 'community', topic: 'Brotherhood' }]),
       viewerContext: { getViewer: jest.fn().mockResolvedValue({ id: 'viewer' }) },
       allowedVisibilitiesForViewer: jest.fn().mockReturnValue(['public', 'verifiedOnly']),
-      postsRead: { read: { findMany: jest.fn().mockResolvedValue(rows) } },
-      posts: { composeFeedPostDtos: jest.fn().mockResolvedValue(enriched) },
+      postsRead: { findMany: jest.fn().mockResolvedValue(rows) },
+      postsCompose: { composeFeedPostDtos: jest.fn().mockResolvedValue(enriched) },
     };
     const params = { viewerUserId: 'viewer', limit: 1, cursor: null, topic: 'Brotherhood', category: 'community' };
     const method = kind === 'topic' ? TopicsService.prototype.listTopicPosts : TopicsService.prototype.listCategoryPosts;
     const result = await method.call(service, params);
     expect(result).toEqual({ posts: enriched, nextCursor: 'first' });
-    expect(service.posts.composeFeedPostDtos).toHaveBeenCalledWith({
+    expect(service.postsCompose.composeFeedPostDtos).toHaveBeenCalledWith({
       viewerUserId: 'viewer', filteredPosts: [rows[0]], collapsedItemsByItemId: new Map(),
     });
-    expect(service.postsRead.read.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    expect(service.postsRead.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { AND: expect.arrayContaining([{ deletedAt: null, isDraft: false }, { communityGroupId: null, boardOnly: false }]) },
       take: 2,
     }));

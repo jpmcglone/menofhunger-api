@@ -1,86 +1,17 @@
 import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { Injectable, Logger } from '@nestjs/common';
 import type { NotificationKind } from '@prisma/client';
-import * as webpush from 'web-push';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceService } from '../presence/presence.service';
-import { CacheService } from '../redis/cache.service';
-import { RedisKeys } from '../redis/redis-keys';
-import { CacheTtl } from '../redis/cache-ttl';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
-import type { NotificationPreferencesDto } from '../../common/dto';
 import { NotificationPreferencesService } from './notification-preferences.service';
 import { ApnsPushService } from './apns-push.service';
 import { crewStreakBrokenPushBody } from './crew-streak-broken-copy';
-
-import { PostsReadService } from '../posts-read/posts-read.service';
-import { sendWebPushToRecipientOn, sendKindPushForActorOn } from './notification-push.send';
-export type PushActorContext = {
-  id: string;
-  username: string | null;
-  name: string | null;
-  avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
-  /** Accepts a Date or an ISO string — publicAssetUrl handles both. */
-  avatarUpdatedAt: Date | string | null;
-};
-
-/** Coalesce window (ms) per push kind to reduce fatigue. */
-const PUSH_COALESCE_MS: Partial<Record<string, number>> = {
-  nudge: 15 * 60 * 1000,
-  followed_post: 5 * 60 * 1000,
-  status_update: 5 * 60 * 1000,
-  repost: 2 * 60 * 1000,
-  message: 30 * 1000,
-};
-const DEFAULT_COALESCE_MS = 60 * 1000;
-
-/** Sentence-case a short action phrase for lock-screen subtitles ("checked in" → "Checked in"). */
-function sentenceCaseAction(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
-}
-
-/** Lock-screen action lines read as a label before the preview: "Checked in:". */
-function withActionColon(value: string): string {
-  const text = value.trim();
-  if (!text) return '';
-  return /[:.!?]$/.test(text) ? text : `${text}:`;
-}
-
-/**
- * System / non-actor pushes. Their `fallbackTitle` IS the alert title — never reuse it
- * as subtitle (that produces "Good morning" / "Good morning" on lock screen).
- */
-const SYSTEM_PUSH_KINDS = new Set<NotificationKind>([
-  'word_of_the_day',
-  'quote_of_the_day',
-  'checkin_reminder',
-  'on_this_day',
-  'account_verified',
-  'premium_started',
-  'premium_ended',
-  'poll_results_ready',
-  'space_reminder_day',
-  'space_reminder_soon',
-  'space_live',
-  'space_schedule_cancelled',
-  'space_schedule_rescheduled',
-]);
-
-/**
- * Prefer a concrete group name over generic "their/your/the/a group" phrasing
- * so Communication-style pushes still name the group after the title becomes the actor.
- */
-function actionWithGroupName(action: string, groupName: string): string {
-  const replaced = action
-    .replace(/\btheir group\b/i, groupName)
-    .replace(/\byour group\b/i, groupName)
-    .replace(/\bthe group\b/i, groupName)
-    .replace(/\ba group\b/i, groupName);
-  return replaced;
-}
+import { NotificationPushDeliveryService } from './notification-push-delivery.service';
+import { NotificationPushKindService } from './notification-push-kind.service';
+import { actorDisplayName, trimPushBody } from './notification-push-copy';
+export type { PushActorContext } from './notification-push.constants';
 
 /**
  * Web Push delivery: subscription management, VAPID setup, per-kind copy,
@@ -88,494 +19,17 @@ function actionWithGroupName(action: string, groupName: string): string {
  */
 @Injectable()
 export class NotificationPushService {
-  readonly logger = new Logger(NotificationPushService.name);
-  private vapidConfigured = false;
+  private readonly logger = new Logger(NotificationPushService.name);
 
   constructor(
-    readonly prisma: PrismaService,
-    readonly appConfig: AppConfigService,
-    readonly presence: PresenceService,
-    readonly preferences: NotificationPreferencesService,
-    readonly apnsPush: ApnsPushService,
-    readonly cache: CacheService,
-    readonly postsRead: PostsReadService,
+    private readonly prisma: PrismaService,
+    private readonly appConfig: AppConfigService,
+    private readonly presence: PresenceService,
+    private readonly preferences: NotificationPreferencesService,
+    private readonly apnsPush: ApnsPushService,
+    private readonly delivery: NotificationPushDeliveryService,
+    private readonly kindPush: NotificationPushKindService,
   ) {}
-
-  /**
-   * Fetch the minimal user fields needed for APNs rich content. Result is cached
-   * in Redis for 5 minutes so fan-out jobs for the same actor (e.g. 10k followers
-   * of a new post) avoid N identical DB reads for the same row.
-   */
-  async getActorMini(userId: string): Promise<PushActorContext | null> {
-    return this.cache.getOrSetNullableJson<PushActorContext>({
-      enabled: Boolean(userId),
-      key: RedisKeys.pushActorMini(userId),
-      ttlSeconds: CacheTtl.pushActorMiniSeconds,
-      nullTtlSeconds: CacheTtl.pushActorMiniNullSeconds,
-      compute: () =>
-        this.prisma.user.findUnique({
-          where: { id: userId },
-          select: { id: true, username: true, name: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, avatarUpdatedAt: true },
-        }),
-    });
-  }
-
-  /** True if at least one push channel (Web Push VAPID or native APNs) can send. */
-  pushChannelConfigured(): boolean {
-    return this.appConfig.vapidConfigured() || this.apnsPush.configured();
-  }
-
-  shouldSendPushForKind(
-    prefs: Pick<
-      NotificationPreferencesDto,
-      | 'pushComment'
-      | 'pushBoost'
-      | 'pushFollow'
-      | 'pushMention'
-      | 'pushRepost'
-      | 'pushNudge'
-      | 'pushFollowedPost'
-      | 'pushMessage'
-      | 'pushGroupActivity'
-      | 'pushDailyContent'
-      | 'pushCheckinReminder'
-    >,
-    kind: NotificationKind,
-  ): boolean {
-    if (kind === 'comment') return Boolean(prefs.pushComment);
-    if (kind === 'boost') return Boolean(prefs.pushBoost);
-    if (kind === 'follow') return Boolean(prefs.pushFollow);
-    if (kind === 'mention') return Boolean(prefs.pushMention);
-    if (kind === 'repost') return Boolean(prefs.pushRepost);
-    if (kind === 'nudge') return Boolean(prefs.pushNudge);
-    if (kind === 'followed_post' || kind === 'checkin_post') return Boolean(prefs.pushFollowedPost);
-    if (kind === 'followed_article') return Boolean(prefs.pushFollowedPost);
-    if (kind === 'followed_space') return Boolean(prefs.pushFollowedPost);
-    if (kind === 'status_update') return Boolean(prefs.pushFollowedPost);
-    if (kind === 'message') return Boolean(prefs.pushMessage);
-    if (
-      kind === 'community_group_member_joined' ||
-      kind === 'community_group_join_approved' ||
-      kind === 'community_group_join_rejected' ||
-      kind === 'community_group_member_removed' ||
-      kind === 'community_group_disbanded' ||
-      kind === 'group_join_request' ||
-      kind === 'community_group_invite_received' ||
-      kind === 'community_group_invite_accepted' ||
-      kind === 'community_group_invite_declined' ||
-      kind === 'community_group_invite_cancelled'
-    ) return Boolean(prefs.pushGroupActivity);
-    // marv_not_in_group is an informational notice, not an action the user needs to
-    // act on urgently — skip push to avoid noise.
-    if (kind === 'marv_not_in_group') return false;
-    if (kind === 'word_of_the_day' || kind === 'quote_of_the_day' || kind === 'on_this_day')
-      return Boolean(prefs.pushDailyContent);
-    if (kind === 'checkin_reminder') return Boolean(prefs.pushCheckinReminder);
-    // Non-mapped kinds pass through default (allow).
-    return true;
-  }
-
-  actorDisplayName(actor?: PushActorContext | null): string {
-    const name = (actor?.name ?? '').trim();
-    if (name) return name;
-    const username = (actor?.username ?? '').trim();
-    if (username) return `@${username}`;
-    return 'Someone';
-  }
-
-  trimPushBody(body?: string | null, max = 140): string | null {
-    const text = (body ?? '').trim().replace(/\s+/g, ' ');
-    if (!text) return null;
-    if (text.length <= max) return text;
-    return `${text.slice(0, Math.max(0, max - 1))}…`;
-  }
-
-  buildPushTag(params: {
-    recipientUserId: string;
-    kind: NotificationKind;
-    actorUserId?: string | null;
-    subjectPostId?: string | null;
-    subjectUserId?: string | null;
-  }): string {
-    const { recipientUserId, kind, actorUserId, subjectPostId, subjectUserId } = params;
-    if (subjectPostId) return `notif-${kind}-post-${subjectPostId}`;
-    if (subjectUserId) return `notif-${kind}-user-${subjectUserId}`;
-    if (actorUserId) return `notif-${kind}-actor-${actorUserId}`;
-    return `notif-${kind}-${recipientUserId}`;
-  }
-
-  buildPushCopy(params: {
-    kind: NotificationKind;
-    actor?: PushActorContext | null;
-    fallbackTitle?: string | null;
-    body?: string | null;
-    subjectArticleId?: string | null;
-  }): { title: string; body?: string } {
-    const { kind, actor, fallbackTitle, body, subjectArticleId } = params;
-    const actorName = this.actorDisplayName(actor);
-    const snippet = this.trimPushBody(body);
-    // Prefer the role-specific DB title (already encodes "post" vs "comment" / article variants)
-    // when it's set, just prefixed with the actor name. This keeps push wording in lockstep
-    // with what the in-app row shows.
-    const titleFromFallback = (fallbackTitle ?? '').trim();
-    if (kind === 'comment') {
-      if (titleFromFallback) {
-        return {
-          title: `${actorName} ${titleFromFallback}`,
-          body: snippet ?? (subjectArticleId ? 'Open to view the comment.' : 'Open to view the reply.'),
-        };
-      }
-      if (subjectArticleId) {
-        return {
-          title: `${actorName} replied to your article`,
-          body: snippet ?? 'Open to view the reply.',
-        };
-      }
-      return {
-        title: `${actorName} replied to your post`,
-        body: snippet ?? 'Open to view the reply.',
-      };
-    }
-    if (kind === 'mention') {
-      if (titleFromFallback) {
-        return {
-          title: `${actorName} ${titleFromFallback}`,
-          body: snippet ?? 'Open to view the mention.',
-        };
-      }
-      if (subjectArticleId) {
-        return {
-          title: `${actorName} mentioned you in an article comment`,
-          body: snippet ?? 'Open to view the mention.',
-        };
-      }
-      return {
-        title: `${actorName} mentioned you`,
-        body: snippet ?? 'Open to view the mention.',
-      };
-    }
-    if (kind === 'follow') {
-      return {
-        title: `${actorName} followed you`,
-        body: snippet ?? 'Open their profile.',
-      };
-    }
-    if (kind === 'boost') {
-      if (subjectArticleId) {
-        return {
-          title: `${actorName} boosted your article`,
-          body: snippet ?? 'Your article is getting traction.',
-        };
-      }
-      return {
-        title: titleFromFallback
-          ? `${actorName} ${titleFromFallback}`
-          : `${actorName} boosted your post`,
-        body: snippet ?? 'Your post is getting traction.',
-      };
-    }
-    if (kind === 'repost') {
-      if (titleFromFallback) {
-        return {
-          title: `${actorName} ${titleFromFallback}`,
-          body: snippet ?? 'Open to view.',
-        };
-      }
-      return {
-        title: `${actorName} reposted your post`,
-        body: snippet ?? 'Open to view the repost.',
-      };
-    }
-    if (kind === 'followed_post') {
-      return {
-        title: titleFromFallback
-          ? `${actorName} ${titleFromFallback}`
-          : `${actorName} posted`,
-        body: snippet ?? 'Open to read it.',
-      };
-    }
-    if (kind === 'checkin_post') {
-      return {
-        title: titleFromFallback
-          ? `${actorName} ${titleFromFallback}`
-          : `${actorName} checked in`,
-        body: snippet ?? 'Open to see their check-in.',
-      };
-    }
-    if (kind === 'status_update') {
-      return {
-        title: `${actorName} updated their status`,
-        body: snippet ?? 'Open their profile to see it.',
-      };
-    }
-    if (kind === 'followed_article') {
-      return {
-        title: `${actorName} published an article`,
-        body: snippet ?? 'Open to read it.',
-      };
-    }
-    if (kind === 'nudge') {
-      return {
-        title: `${actorName} nudged you`,
-        body: snippet ?? 'Open notifications to respond.',
-      };
-    }
-    if (kind === 'poll_results_ready') {
-      return {
-        title: 'Poll results are ready',
-        body: snippet ?? 'Open to see the results.',
-      };
-    }
-    if (kind === 'coin_transfer') {
-      return {
-        title: `${actorName} sent you coins`,
-        body: snippet ?? 'Open to view your coin activity.',
-      };
-    }
-    if (kind === 'group_join_request') {
-      return {
-        title: `${actorName} asked to join your group`,
-        body: snippet ?? 'Open to review the request.',
-      };
-    }
-    if (kind === 'crew_invite_received') {
-      return {
-        title: `${actorName} invited you to their crew`,
-        body: snippet ?? 'Open to see the invite.',
-      };
-    }
-    if (kind === 'crew_invite_accepted') {
-      return {
-        title: `${actorName} accepted your crew invite`,
-        body: snippet ?? 'Welcome them to the crew.',
-      };
-    }
-    if (kind === 'crew_invite_declined') {
-      return {
-        title: `${actorName} declined your crew invite`,
-        body: snippet ?? 'No worries — invite someone else.',
-      };
-    }
-    if (kind === 'crew_member_joined') {
-      return {
-        title: `${actorName} joined your crew`,
-        body: snippet ?? 'Say hello on the wall.',
-      };
-    }
-    if (kind === 'crew_member_left') {
-      return {
-        title: `${actorName} left your crew`,
-        body: snippet ?? 'Your crew roster changed.',
-      };
-    }
-    if (kind === 'crew_member_kicked') {
-      return {
-        title: 'Crew roster changed',
-        body: snippet ?? 'A member was removed from your crew.',
-      };
-    }
-    if (kind === 'crew_owner_transferred') {
-      return {
-        title: 'Crew ownership transferred',
-        body: snippet ?? 'Your crew has a new owner.',
-      };
-    }
-    if (kind === 'crew_owner_transfer_vote') {
-      return {
-        title: `${actorName} started a vote in your crew`,
-        body: snippet ?? 'Open to cast your vote.',
-      };
-    }
-    if (kind === 'crew_wall_mention') {
-      return {
-        title: `${actorName} mentioned you on the wall`,
-        body: snippet ?? 'Open the crew wall to reply.',
-      };
-    }
-    if (kind === 'crew_disbanded') {
-      return {
-        title: 'Your crew was disbanded',
-        body: snippet ?? 'Start a new crew when you\u2019re ready.',
-      };
-    }
-    if (kind === 'crew_invite_cancelled') {
-      return {
-        title: 'Crew invite cancelled',
-        body: snippet ?? 'The invite is no longer active.',
-      };
-    }
-    if (kind === 'community_group_invite_received') {
-      return {
-        title: `${actorName} invited you to a group`,
-        body: snippet ?? 'Open to see the invite.',
-      };
-    }
-    if (kind === 'community_group_invite_accepted') {
-      return {
-        title: `${actorName} accepted your group invite`,
-        body: snippet ?? 'Welcome them to the group.',
-      };
-    }
-    if (kind === 'community_group_invite_declined') {
-      return {
-        title: `${actorName} declined your group invite`,
-        body: snippet ?? 'No worries — invite someone else.',
-      };
-    }
-    if (kind === 'community_group_invite_cancelled') {
-      return {
-        title: 'Group invite cancelled',
-        body: snippet ?? 'The invite is no longer active.',
-      };
-    }
-    if (kind === 'community_group_member_joined') {
-      return {
-        title: `${actorName} joined the group`,
-        body: snippet ?? 'Open to see the new member.',
-      };
-    }
-    if (kind === 'community_group_join_approved') {
-      return {
-        title: 'Your join request was approved',
-        body: snippet ?? 'You\u2019re now a member.',
-      };
-    }
-    if (kind === 'community_group_join_rejected') {
-      return {
-        title: 'Your join request was not accepted',
-        body: snippet ?? 'You can request to join another group.',
-      };
-    }
-    if (kind === 'community_group_member_removed') {
-      return {
-        title: 'You were removed from a group',
-        body: snippet ?? 'Open to see your groups.',
-      };
-    }
-    if (kind === 'community_group_disbanded') {
-      return {
-        title: 'A group you were in was disbanded',
-        body: snippet ?? 'Open to find another group.',
-      };
-    }
-    if (kind === 'message') {
-      return {
-        title: `${actorName} sent you a message`,
-        body: snippet ?? 'Open to read it.',
-      };
-    }
-    if (kind === 'checkin_reminder') {
-      return {
-        title: titleFromFallback || 'Have you checked in today?',
-        body: snippet ?? 'Post your check-in to keep your streak alive.',
-      };
-    }
-    if (kind === 'on_this_day') {
-      return {
-        title: titleFromFallback || 'On this day',
-        body: snippet ?? 'Open to revisit your check-in.',
-      };
-    }
-    if (kind === 'word_of_the_day') {
-      return {
-        title: titleFromFallback || 'Good morning!',
-        body: snippet ?? 'Open for today\u2019s word.',
-      };
-    }
-    if (kind === 'quote_of_the_day') {
-      return {
-        title: titleFromFallback || 'Quote of the day',
-        body: snippet ?? 'Open to read today\u2019s quote.',
-      };
-    }
-    if (kind === 'account_verified') {
-      return {
-        title: titleFromFallback || "You're verified",
-        body: snippet ?? 'Your account is now verified. Welcome.',
-      };
-    }
-    if (kind === 'premium_started') {
-      return {
-        title: titleFromFallback || "You're Premium",
-        body: snippet ?? 'Premium is active. Thanks for backing Men of Hunger.',
-      };
-    }
-    if (kind === 'premium_ended') {
-      return {
-        title: titleFromFallback || 'Your Premium ended',
-        body: snippet ?? 'Premium access has ended. You can restart anytime.',
-      };
-    }
-    if (kind === 'space_reminder_day') {
-      return {
-        title: titleFromFallback || 'Space today',
-        body: snippet ?? 'A space you asked about is scheduled for today.',
-      };
-    }
-    if (kind === 'space_reminder_soon') {
-      return {
-        title: titleFromFallback || 'Space starting soon',
-        body: snippet ?? 'Starts in about 30 minutes.',
-      };
-    }
-    if (kind === 'space_live') {
-      return {
-        title: titleFromFallback || 'Space is live',
-        body: snippet ?? 'Tap to join now.',
-      };
-    }
-    if (kind === 'space_schedule_cancelled') {
-      return {
-        title: titleFromFallback || 'Space cancelled',
-        body: snippet ?? 'The scheduled space was cancelled.',
-      };
-    }
-    if (kind === 'space_schedule_rescheduled') {
-      return {
-        title: titleFromFallback || 'Space rescheduled',
-        body: snippet ?? 'The start time changed.',
-      };
-    }
-    if (kind === 'followed_space') {
-      return {
-        title: titleFromFallback || 'Space scheduled',
-        body: snippet ?? 'Someone you follow scheduled a space.',
-      };
-    }
-    // Generic kind is used for one-off actor-driven events that don't have their own kind
-    // (e.g. article emoji reactions). Prefix the DB title with the actor name when both
-    // are present so the push reads like "Jane reacted to your article" with body=emoji.
-    if (kind === 'generic' && titleFromFallback && actor) {
-      return {
-        title: `${actorName} ${titleFromFallback}`,
-        ...(snippet ? { body: snippet } : { body: 'Open to view it.' }),
-      };
-    }
-    if (kind === 'generic') {
-      return {
-        title: titleFromFallback || 'New activity',
-        body: snippet ?? 'Open to view it.',
-      };
-    }
-    // These kinds do not currently send push notifications, but explicit copy keeps a future
-    // delivery path from falling back to technical or generic text.
-    if (kind === 'community_group_post') {
-      return {
-        title: titleFromFallback || 'New group post',
-        body: snippet ?? 'Open to read it.',
-      };
-    }
-    if (kind === 'marv_not_in_group') {
-      return {
-        title: titleFromFallback || 'Group update',
-        body: snippet ?? 'Open to view the update.',
-      };
-    }
-    return {
-      title: titleFromFallback || 'New notification',
-      ...(snippet ? { body: snippet } : { body: 'You have a new notification.' }),
-    };
-  }
 
   /** Upsert push subscription for a user (idempotent). */
   async pushSubscribe(
@@ -625,7 +79,7 @@ export class NotificationPushService {
 
   /** Send a single test push (Web Push and/or APNs) to the user (for "Send test notification" in settings). */
   async sendTestPush(userId: string): Promise<{ sent: boolean; message?: string }> {
-    if (!this.pushChannelConfigured()) {
+    if (!this.delivery.pushChannelConfigured()) {
       return { sent: false, message: 'Push notifications are not configured on this server.' };
     }
     const subCount = await this.prisma.pushSubscription.count({ where: { userId } });
@@ -640,28 +94,6 @@ export class NotificationPushService {
       test: true,
     });
     return { sent: true };
-  }
-
-  /**
-   * Returns true if a push with this coalesceKey was already sent within the window for this kind.
-   * coalesceKey is the resolved push tag (subject-scoped), so distinct subjects each get their own window.
-   */
-  async isPushCoalesced(recipientUserId: string, coalesceKey: string, kind: string): Promise<boolean> {
-    const windowMs = PUSH_COALESCE_MS[kind] ?? DEFAULT_COALESCE_MS;
-    const since = new Date(Date.now() - windowMs);
-    const row = await this.prisma.pushCoalesce.findUnique({
-      where: { userId_coalesceKey: { userId: recipientUserId, coalesceKey } },
-      select: { sentAt: true },
-    });
-    return row ? row.sentAt >= since : false;
-  }
-
-  async recordPushSent(recipientUserId: string, coalesceKey: string): Promise<void> {
-    await this.prisma.pushCoalesce.upsert({
-      where: { userId_coalesceKey: { userId: recipientUserId, coalesceKey } },
-      create: { userId: recipientUserId, coalesceKey, sentAt: new Date() },
-      update: { sentAt: new Date() },
-    });
   }
 
   /**
@@ -702,70 +134,8 @@ export class NotificationPushService {
       canDeliver?: () => Promise<boolean>;
     },
   ) {
-    return sendWebPushToRecipientOn(this, recipientUserId, params);
+    return this.delivery.sendWebPushToRecipient(recipientUserId, params);
   }
-  /** Pages never own devices — deliver to each operator. Persons keep their own tokens. */
-  async tokenOwnersForRecipient(
-    recipientUserId: string,
-    accountKind?: string | null,
-  ): Promise<string[]> {
-    if (accountKind !== 'page') return [recipientUserId];
-    const operators = await this.prisma.userPageOperator.findMany({
-      where: { pageUserId: recipientUserId },
-      select: { operatorUserId: true },
-    });
-    return operators.map((row) => row.operatorUserId);
-  }
-
-  /** Web Push delivery to all browser subscriptions; prunes expired (410/404). */
-  async sendWebPushOnly(
-    recipientUserId: string,
-    params: { payload: string; canDeliver?: () => Promise<boolean> },
-  ): Promise<void> {
-    if (!this.appConfig.vapidConfigured()) return;
-    if (!this.vapidConfigured) {
-      const publicKey = this.appConfig.vapidPublicKey();
-      const privateKey = this.appConfig.vapidPrivateKey();
-      if (publicKey && privateKey) {
-        webpush.setVapidDetails('mailto:support@menofhunger.com', publicKey, privateKey);
-        this.vapidConfigured = true;
-      } else return;
-    }
-
-    const subs = await this.prisma.pushSubscription.findMany({
-      where: { userId: recipientUserId },
-      select: { id: true, endpoint: true, p256dh: true, auth: true },
-    });
-
-    if (subs.length === 0) {
-      this.logger.debug(`[push] No subscriptions for user ${recipientUserId}; skipping web push.`);
-      return;
-    }
-
-    const expiredIds: string[] = [];
-    for (const sub of subs) {
-      if (params.canDeliver && !await params.canDeliver()) return;
-      try {
-        await webpush.sendNotification(
-          {
-            endpoint: sub.endpoint,
-            keys: { p256dh: sub.p256dh, auth: sub.auth },
-          },
-          params.payload,
-          { TTL: 60 * 60 * 24 },
-        );
-      } catch (err: unknown) {
-        const statusCode = (err as { statusCode?: number })?.statusCode;
-        if (statusCode === 410 || statusCode === 404) {
-          expiredIds.push(sub.id);
-        } else if (params.canDeliver) throw err;
-      }
-    }
-    if (expiredIds.length > 0) {
-      await this.prisma.pushSubscription.deleteMany({ where: { id: { in: expiredIds } } }).catch(() => {});
-    }
-  }
-
   /**
    * Send a single "still waiting on you" push for an unread reply notification.
    * The cron is responsible for selecting eligible notifications and stamping `nudgedBackAt`
@@ -781,16 +151,16 @@ export class NotificationPushService {
     /** Optional snippet of the original reply, stored on Notification.body. */
     bodySnippet?: string | null;
   }): Promise<void> {
-    if (!this.pushChannelConfigured()) return;
+    if (!this.delivery.pushChannelConfigured()) return;
     try {
       const prefs = await this.preferences.getPreferencesInternal(params.recipientUserId);
       if (!prefs.pushReplyNudge) return;
     } catch {
       // Best-effort: if prefs read fails, default to sending.
     }
-    const actor = await this.getActorMini(params.actorUserId);
+    const actor = await this.delivery.getActorMini(params.actorUserId);
     if (!actor) return;
-    const actorName = this.actorDisplayName(actor);
+    const actorName = actorDisplayName(actor);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const icon = publicAssetUrl({
       publicBaseUrl,
@@ -798,7 +168,7 @@ export class NotificationPushService {
       updatedAt: actor.avatarUpdatedAt,
     });
     const url = params.actorPostId ? `/p/${params.actorPostId}` : '/notifications';
-    const snippet = this.trimPushBody(params.bodySnippet, 120);
+    const snippet = trimPushBody(params.bodySnippet, 120);
     await this.sendWebPushToRecipient(params.recipientUserId, {
       title: `${actorName} is still waiting to hear back`,
       // Replay the original reply text if we have it; otherwise the title carries the whole signal.
@@ -831,7 +201,7 @@ export class NotificationPushService {
     currentStreakDays: number;
     memberCount: number;
   }): Promise<void> {
-    if (!this.pushChannelConfigured()) return;
+    if (!this.delivery.pushChannelConfigured()) return;
     const { currentStreakDays, memberCount } = params;
     if (currentStreakDays <= 0 || params.recipientUserIds.length === 0) return;
 
@@ -876,7 +246,7 @@ export class NotificationPushService {
     crewName: string | null;
     missedMembers: Array<{ id: string; displayName: string | null; username: string | null }>;
   }): Promise<void> {
-    if (!this.pushChannelConfigured()) return;
+    if (!this.delivery.pushChannelConfigured()) return;
     if (params.recipientUserIds.length === 0) return;
 
     const url = params.crewSlug ? `/c/${encodeURIComponent(params.crewSlug)}` : '/crew';
@@ -939,10 +309,10 @@ export class NotificationPushService {
     }
     const sender = (params.senderName ?? '').trim();
     const title = sender ? `New message from ${sender}` : 'New message';
-    const body = this.trimPushBody(params.body, 150) ?? 'Open chat to read the message.';
+    const body = trimPushBody(params.body, 150) ?? 'Open chat to read the message.';
     const url = `/chat?c=${encodeURIComponent(params.conversationId)}`;
     const tag = `message-conversation-${params.conversationId}`;
-    const senderUser = await this.getActorMini(params.senderUserId);
+    const senderUser = await this.delivery.getActorMini(params.senderUserId);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const icon = senderUser
       ? publicAssetUrl({
@@ -971,83 +341,6 @@ export class NotificationPushService {
     }
   }
 
-  pushCategory(kind: NotificationKind, hasReplyPost: boolean): string | null {
-    if ((kind === 'comment' || kind === 'mention') && hasReplyPost) return 'moh.category.reply';
-    if (kind === 'follow') return 'moh.category.follow';
-    if (kind === 'community_group_invite_received') return 'moh.category.groupInvite';
-    return null;
-  }
-
-  /**
-   * Lock-screen subtitle for APNs / web push.
-   *
-   * iOS Communication notifications (NSE + INSendMessageIntent) replace the alert
-   * title with the actor's display name. The verb/context therefore lives here —
-   * and is also folded into the body via `apnsBodyWithVisibleAction`, because the
-   * Communication UI often omits subtitle on the lock screen.
-   *
-   * System kinds must not echo `fallbackTitle` as subtitle — that title already is
-   * the bold first line (e.g. "Good morning" / "Good morning").
-   */
-  pushSubtitle(
-    kind: NotificationKind,
-    groupName?: string | null,
-    fallbackTitle?: string | null,
-    subjectArticleId?: string | null,
-  ): string | null {
-    const group = (groupName ?? '').trim();
-    if (SYSTEM_PUSH_KINDS.has(kind)) {
-      return group || null;
-    }
-
-    const action = sentenceCaseAction(fallbackTitle ?? '');
-
-    if (group && action) return withActionColon(actionWithGroupName(action, group));
-    if (group) return group;
-    if (action) return withActionColon(action);
-
-    if (kind === 'comment') {
-      return withActionColon(subjectArticleId ? 'Replied to your article' : 'Replied to your post');
-    }
-    if (kind === 'mention') {
-      return withActionColon(subjectArticleId ? 'Mentioned you in an article' : 'Mentioned you');
-    }
-    if (kind === 'follow') return withActionColon('Followed you');
-    if (kind === 'boost') {
-      return withActionColon(subjectArticleId ? 'Boosted your article' : 'Boosted your post');
-    }
-    if (kind === 'repost') return withActionColon('Reposted your post');
-    if (kind === 'followed_post') return withActionColon('Posted');
-    if (kind === 'checkin_post') return withActionColon('Checked in');
-    if (kind === 'status_update') return withActionColon('Updated their status');
-    if (kind === 'nudge') return withActionColon('Nudged you');
-    if (kind === 'followed_article') return withActionColon('Published an article');
-    if (kind === 'message') return withActionColon('Sent you a message');
-    return null;
-  }
-
-  /**
-   * iOS Communication notifications replace the title with the sender name and
-   * often omit the subtitle. Fold the action into the body so lock-screen copy
-   * still says what happened (e.g. "Replied to your post:\nWash sheets…").
-   * DMs stay message-style (name + body only).
-   */
-  apnsBodyWithVisibleAction(params: {
-    kind: string;
-    body: string;
-    subtitle?: string | null;
-    actorUsername?: string | null;
-  }): string {
-    const snippet = (params.body ?? '').trim();
-    if (!params.actorUsername || params.kind === 'message') return snippet;
-    const action = (params.subtitle ?? '').trim();
-    if (!action) return snippet;
-    if (!snippet) return action;
-    const actionBare = action.replace(/[:.!?]+$/, '');
-    if (actionBare && snippet.toLowerCase().includes(actionBare.toLowerCase())) return snippet;
-    return `${action}\n${snippet}`;
-  }
-
   /**
    * Standard actor-driven push for a notification kind: checks prefs, loads the
    * actor plus current post/group context for rich APNs fields, and sends. Used
@@ -1069,6 +362,6 @@ export class NotificationPushService {
     notificationId?: string | null;
     sourceLabel?: string;
   }) {
-    return sendKindPushForActorOn(this, params);
+    return this.kindPush.sendKindPushForActor(params);
   }
 }

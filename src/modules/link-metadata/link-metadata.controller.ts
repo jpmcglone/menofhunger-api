@@ -1,22 +1,12 @@
 import { profileLinkMetadata } from "./profile-link-metadata";
 import { Controller, Get, Query, Res, UseGuards } from "@nestjs/common";
-import { z } from "zod";
 import type { Response } from "express";
-import { OptionalAuthGuard } from "../auth/optional-auth.guard";
+import { OptionalAuthGuard } from "../auth/auth-public-api";
 import { OptionalCurrentUserId } from "../users/users.decorator";
 import { LinkMetadataService } from "./link-metadata.service";
 import { Throttle } from "@nestjs/throttler";
-import {
-  rateLimitLimit,
-  rateLimitTtl,
-} from "../../common/throttling/rate-limit.resolver";
-
-const getSchema = z.object({
-  url: z.string().trim().max(2048).url(),
-  // Response-shape cache key used by clients when rich metadata fields change.
-  v: z.coerce.number().int().positive().optional(),
-  purpose: z.enum(["profile"]).optional(),
-});
+import { rateLimitLimit, rateLimitTtl } from "../../common/throttling/rate-limit.resolver";
+import { getSchema } from './link-metadata.schemas';
 
 @UseGuards(OptionalAuthGuard)
 @Controller("link-metadata")

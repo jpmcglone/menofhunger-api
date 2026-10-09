@@ -1,4 +1,4 @@
-import { PresenceRedisStateService } from './presence-redis-state.service';
+import { makePresenceRedisState } from './presence-redis-state.testing';
 
 type Store = {
   sets: Map<string, Set<string>>;
@@ -70,41 +70,41 @@ function makeAnonRedis() {
     }),
   } as any;
 
-  const svc = new PresenceRedisStateService(
+  const { anon: svc, read } = makePresenceRedisState(
     redis,
     { presenceIdleDisconnectMinutes: jest.fn(() => 10) } as any,
     { persistLastOnlineAt: jest.fn(), clearPersistThrottle: jest.fn() } as any,
   );
 
-  return { svc, store, raw };
+  return { svc, read, store, raw };
 }
 
 describe('PresenceRedisStateService — anonymous guests', () => {
   const ANON = 'anon_abcdef123456';
 
   it('counts two sockets with the same anonId as one unique guest', async () => {
-    const { svc } = makeAnonRedis();
+    const { svc, read } = makeAnonRedis();
 
     const first = await svc.registerAnonSocket({ socketId: 's1', anonId: ANON, client: 'web' });
     const second = await svc.registerAnonSocket({ socketId: 's2', anonId: ANON, client: 'web' });
 
     expect(first.isNewlyOnline).toBe(true);
     expect(second.isNewlyOnline).toBe(false);
-    expect(await svc.anonymousOnlineCount()).toBe(1);
+    expect(await read.anonymousOnlineCount()).toBe(1);
   });
 
   it('drops the unique guest only after the last socket disconnects', async () => {
-    const { svc } = makeAnonRedis();
+    const { svc, read } = makeAnonRedis();
     await svc.registerAnonSocket({ socketId: 's1', anonId: ANON, client: 'web' });
     await svc.registerAnonSocket({ socketId: 's2', anonId: ANON, client: 'web' });
 
     const firstOff = await svc.unregisterAnonSocket({ socketId: 's1', anonId: ANON });
     expect(firstOff.isNowOffline).toBe(false);
-    expect(await svc.anonymousOnlineCount()).toBe(1);
+    expect(await read.anonymousOnlineCount()).toBe(1);
 
     const lastOff = await svc.unregisterAnonSocket({ socketId: 's2', anonId: ANON });
     expect(lastOff.isNowOffline).toBe(true);
-    expect(await svc.anonymousOnlineCount()).toBe(0);
+    expect(await read.anonymousOnlineCount()).toBe(0);
   });
 
   it('uses a short TTL so a dead instance cannot leave ghost guests', async () => {
@@ -114,13 +114,13 @@ describe('PresenceRedisStateService — anonymous guests', () => {
   });
 
   it('counts distinct anon ids separately', async () => {
-    const { svc } = makeAnonRedis();
+    const { svc, read } = makeAnonRedis();
     await svc.registerAnonSocket({ socketId: 's1', anonId: ANON, client: 'web' });
     await svc.registerAnonSocket({
       socketId: 's2',
       anonId: 'anon_otherguest99',
       client: 'web',
     });
-    expect(await svc.anonymousOnlineCount()).toBe(2);
+    expect(await read.anonymousOnlineCount()).toBe(2);
   });
 });

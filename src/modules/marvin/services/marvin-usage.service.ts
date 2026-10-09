@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { MarvinMode, MarvinSource, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PresenceRealtimeService } from '../../presence/presence-realtime.service';
-import { AccountSwitchService } from '../../auth/account-switch.service';
+import { AccountSwitchService } from '../../auth/auth-public-api';
 import type { MarvCreditSummary } from './marvin-credit.service';
 import type { MarvErrorCode } from '../marvin.constants';
 

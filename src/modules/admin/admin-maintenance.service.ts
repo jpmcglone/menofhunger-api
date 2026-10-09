@@ -5,6 +5,7 @@ import { PostsReadService } from '../posts-read/posts-read.service';
 import { canonicalizeTopicValue } from '../../common/topics/topic-utils';
 import { easternDayKey, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
 import { computeCheckinStreakStats } from '../checkins/checkin-streaks';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 /** One-off data repair and backfill operations behind `admin/jobs`. */
 @Injectable()
@@ -139,8 +140,8 @@ export class AdminMaintenanceService {
 
     for (const user of users) {
       const userId = user.id;
-      const posts = await this.postsRead.read.findMany({
-        where: { userId, kind: 'checkin', visibility: { not: 'onlyMe' }, deletedAt: null, isDraft: false },
+      const posts = await this.postsRead.findMany({
+        where: { userId, kind: 'checkin', visibility: { not: 'onlyMe' }, ...NOT_DELETED, isDraft: false },
         select: { createdAt: true, checkinDayKey: true },
         orderBy: { createdAt: 'asc' },
       });

@@ -1,7 +1,6 @@
 import { BadRequestException, Controller, ForbiddenException, Get, Query, ServiceUnavailableException, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { z } from 'zod';
-import { AuthGuard } from '../auth/auth.guard';
+import { AuthGuard } from '../auth/auth-public-api';
 import { AppConfigService } from '../app/app-config.service';
 import { UserLookupService } from '../user-lookup/user-lookup.service';
 import { CurrentUserId } from '../users/users.decorator';
@@ -9,15 +8,7 @@ import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit
 import { RedisKeys } from '../redis/redis-keys';
 import { CacheService } from '../redis/cache.service';
 import { CacheTtl } from '../redis/cache-ttl';
-
-const searchSchema = z.object({
-  q: z.string().trim().min(1).max(120),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-});
-
-const trendingSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-});
+import { searchSchema, trendingSchema } from './giphy.schemas';
 
 type GiphySearchResponse = {
   data: Array<{

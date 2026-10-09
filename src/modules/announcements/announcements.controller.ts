@@ -1,24 +1,9 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { z } from 'zod';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
 import { OptionalCurrentUserId } from '../users/users.decorator';
 import { AnnouncementsService } from './announcements.service';
-
-const platformSchema = z.enum(['web', 'ios']);
-const anonymousIdSchema = z.string().trim().min(12).max(128).optional();
-
-const pendingQuerySchema = z.object({
-  platform: platformSchema,
-  anonymousId: anonymousIdSchema,
-});
-
-const eventBodySchema = z.object({
-  type: z.enum(['presented', 'viewed', 'dismissed', 'clicked', 'abandoned']),
-  platform: platformSchema,
-  anonymousId: anonymousIdSchema,
-  dismissMethod: z.enum(['close_button', 'backdrop', 'escape', 'swipe']).optional().nullable(),
-});
+import { pendingQuerySchema, eventBodySchema } from './announcements.schemas';
 
 @ApiTags('Announcements')
 @UseGuards(OptionalAuthGuard)

@@ -17,7 +17,7 @@ export class AdminReferralService {
   }
 
   newMemberPosts(input: { newMemberDays: number; minAgeMinutes: number; limit: number }): Promise<AdminNewMemberPostsDto> {
-    return readUnansweredNewMemberPosts(this.postsRead.read, input);
+    return readUnansweredNewMemberPosts(this.postsRead, input);
   }
 
   async referralAnalytics(): Promise<AdminReferralAnalyticsDto> {

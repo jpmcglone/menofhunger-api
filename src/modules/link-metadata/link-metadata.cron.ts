@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { LinkMetadataService } from './link-metadata.service';
+import { LinkMetadataBackfillService } from './link-metadata-backfill.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { AppConfigService } from '../app/app-config.service';
@@ -10,7 +10,7 @@ export class LinkMetadataCron {
   private readonly logger = new Logger(LinkMetadataCron.name);
 
   constructor(
-    private readonly linkMetadata: LinkMetadataService,
+    private readonly backfill: LinkMetadataBackfillService,
     private readonly jobs: JobsService,
     private readonly appConfig: AppConfigService,
   ) {}
@@ -31,7 +31,7 @@ export class LinkMetadataCron {
 
   async runHandleBackfill() {
     try {
-      const result = await this.linkMetadata.runBackfill();
+      const result = await this.backfill.runBackfill();
       if (result.cached > 0 || result.truncated) {
         this.logger.log(
           `Link metadata backfill: ${result.urlsFound} URLs, ${result.cached} newly cached${result.truncated ? ' (truncated by cap)' : ''}`,

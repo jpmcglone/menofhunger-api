@@ -9,7 +9,11 @@ export class PartnerProfileDto {
   @ApiProperty() canonicalUrl!: string;
   @ApiProperty({ enum: ['person', 'page'] }) accountKind!: string;
   @ApiProperty() createdAt!: string;
-  @ApiPropertyOptional({ type: 'object', properties: { followers: { type: 'integer' }, following: { type: 'integer' } } }) counts?: { followers: number; following: number };
+  @ApiPropertyOptional({
+    type: 'object',
+    properties: { followers: { type: 'integer' }, following: { type: 'integer' } },
+  })
+  counts?: { followers: number; following: number };
 }
 export class PartnerVerificationDto {
   @ApiProperty() accountId!: string;
@@ -27,8 +31,10 @@ export class PartnerMediaDto {
 export class PartnerEngagementDto {
   @ApiProperty({ description: 'Visible boosts from permitted, non-banned accounts.' }) boosts!: number;
   @ApiProperty({ description: 'Visible direct replies for posts, visible comments for articles.' }) comments!: number;
-  @ApiProperty({ description: 'Recorded distinct signed-in viewers, filtered for permitted accounts; not reach.' }) uniqueViewers!: number;
-  @ApiPropertyOptional({ description: 'Visible article reaction records; a member can use multiple reactions.' }) reactions?: number;
+  @ApiProperty({ description: 'Recorded distinct signed-in viewers, filtered for permitted accounts; not reach.' })
+  uniqueViewers!: number;
+  @ApiPropertyOptional({ description: 'Visible article reaction records; a member can use multiple reactions.' })
+  reactions?: number;
 }
 export class PartnerSourceDto {
   @ApiProperty() name!: string;

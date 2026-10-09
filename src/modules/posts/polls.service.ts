@@ -1,8 +1,8 @@
+import { isUniqueViolation } from '../../common/prisma/errors';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import type { VerifiedStatus } from '@prisma/client';
+
 import { PrismaService } from '../prisma/prisma.service';
-import { ViewerContextService } from '../viewer/viewer-context.service';
+import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { toPostPollDto } from '../../common/dto/post.dto';
 
@@ -14,8 +14,8 @@ export class PollsService {
     private readonly realtime: PresenceRealtimeService,
   ) {}
 
-  private allowedVisibilitiesForViewer(viewer: { verifiedStatus: VerifiedStatus; premium: boolean; premiumPlus?: boolean; siteAdmin?: boolean } | null) {
-    return this.viewerContext.allowedPostVisibilities(viewer as any);
+  private allowedVisibilitiesForViewer(viewer: ViewerContext | null) {
+    return this.viewerContext.allowedPostVisibilities(viewer);
   }
 
   private async getPostForVoting(params: { viewerUserId: string; postId: string }) {
@@ -91,7 +91,7 @@ export class PollsService {
           },
         });
       } catch (err: any) {
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        if (isUniqueViolation(err)) {
           throw new ForbiddenException('You have already voted on this poll.');
         }
         throw err;

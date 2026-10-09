@@ -1,8 +1,9 @@
 import { CanActivate, ExecutionContext, Injectable, NotFoundException } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { getSessionCookie } from '../../common/session-cookie';
-import { AuthService, type SessionResult } from '../auth/auth.service';
-import type { AuthedRequest } from '../auth/auth.guard';
+import { type SessionResult } from '../auth/auth-public-api';
+import { AuthService } from '../auth/auth-public-api';
+import type { AuthedRequest } from '../auth/auth-public-api';
 import { isOwnAdminSession } from './admin-session';
 
 /**

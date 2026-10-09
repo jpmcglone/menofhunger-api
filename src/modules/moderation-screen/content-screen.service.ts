@@ -5,6 +5,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 const NEW_ACCOUNT_DAYS = 14;
 const NEW_AUTHOR_POST_COUNT = 5;
 const MIN_BODY_CHARS = 8;
@@ -36,8 +37,8 @@ export class ContentScreenService {
   async screenPost(postId: string, systemReporterUserId: string | null): Promise<'skipped' | 'clean' | 'flagged' | 'failed'> {
     const cfg = this.config.contentScreen();
     if (!cfg.enabled || !systemReporterUserId) return 'skipped';
-    const post = await this.postsRead.read.findFirst({
-      where: { id: postId, deletedAt: null, isDraft: false, kind: { not: 'repost' }, communityGroupId: null, visibility: { not: 'onlyMe' } },
+    const post = await this.postsRead.findFirst({
+      where: { id: postId, ...NOT_DELETED, isDraft: false, kind: { not: 'repost' }, communityGroupId: null, visibility: { not: 'onlyMe' } },
       select: { id: true, body: true, userId: true, user: { select: { createdAt: true, isBot: true } } },
     });
     const body = (post?.body ?? '').trim();
@@ -71,7 +72,7 @@ export class ContentScreenService {
   private async worthScreening(userId: string, createdAt: Date, body: string): Promise<boolean> {
     if (LINK.test(body)) return true;
     if (Date.now() - createdAt.getTime() < NEW_ACCOUNT_DAYS * 24 * 60 * 60 * 1000) return true;
-    const count = await this.postsRead.read.count({ where: { userId, deletedAt: null }, take: NEW_AUTHOR_POST_COUNT + 1 });
+    const count = await this.postsRead.count({ where: { userId, ...NOT_DELETED }, take: NEW_AUTHOR_POST_COUNT + 1 });
     return count <= NEW_AUTHOR_POST_COUNT;
   }
 
@@ -79,7 +80,8 @@ export class ContentScreenService {
     try {
       this.client ??= new OpenAI({ apiKey, timeout: 8_000, maxRetries: 1 });
       const result = await this.client.moderations.create({ model: 'omni-moderation-latest', input });
-      return (result.results[0]?.category_scores as unknown as Scores | undefined) ?? null;
+      const scores = result.results[0]?.category_scores;
+      return scores ? { ...scores } : null;
     } catch (err) {
       this.logger.warn(`[content-screen] failed: ${err instanceof Error ? err.message : String(err)}`);
       return null;

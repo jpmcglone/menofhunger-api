@@ -19,7 +19,7 @@ function setup() {
   const presence = { emitGroupChannelTyping: jest.fn() };
   const platform = { briefing: jest.fn(async () => 'Public Men of Hunger briefing.') };
   const tools = { dispatch: jest.fn(async () => '{"posts":[{"body":"hi"}]}') };
-  const processor = new MarvinChannelReplyProcessor(db as never, config as never, scope as never, {} as never, messages as never, {} as never, effects as never, credits as never, routing as never, ai as never, usage as never, platform as never, tools as never, presence as never);
+  const processor = new MarvinChannelReplyProcessor(db as never, config as never, scope as never, {} as never, messages as never, messages as never, {} as never, effects as never, credits as never, routing as never, ai as never, usage as never, platform as never, tools as never, presence as never);
   const deliver = jest.spyOn(processor as never, 'deliver' as never).mockResolvedValue({ id: 'reply', created: true } as never);
   return { processor, db, scope, credits, ai, deliver, effects, usage, presence, platform, tools };
 }

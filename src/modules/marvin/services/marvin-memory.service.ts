@@ -1,11 +1,16 @@
+import { Inject } from '@nestjs/common';
+import { PostsFeedLookupService } from '../../posts/posts-feed-lookup.service';
+import { NOT_BANNED_USER_WHERE } from '../../../common/prisma-selects/user.where';
 import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma, MarvinSource } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { PostsService } from '../../posts/posts.service';
+import { isActiveGroupMember } from '../../viewer/group-membership.queries';
+
 import type { MarvAIToolCallContext } from './marvin-ai.service';
 import { asksForCommunityOverview, memoryScore, memoryTerms } from './marvin-memory-policy';
 
 import { PostsReadService } from '../../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../../common/prisma/where';
 const postSelect = {
   id: true, body: true, createdAt: true, editedAt: true, deletedAt: true, isDraft: true,
   visibility: true, communityGroupId: true, parentId: true, rootId: true, topics: true,
@@ -21,27 +26,27 @@ type Session = { scope: string; rootId?: string; groupId?: string; conversationI
 @Injectable()
 export class MarvinMemoryService {
   private readonly logger = new Logger(MarvinMemoryService.name);
-  constructor(private readonly prisma: PrismaService, private readonly posts: PostsService, private readonly postsRead: PostsReadService) {}
+  constructor(private readonly prisma: PrismaService, @Inject(PostsFeedLookupService) private readonly postsLookup: Pick<PostsFeedLookupService, 'getById'>, private readonly postsRead: PostsReadService) {}
 
   /** Called only on member reply jobs, after consent. No text is copied into the memory table. */
   async prepare(ctx: MarvAIToolCallContext, source: MarvinSource): Promise<string | null> {
     const session = await this.session(ctx, source);
     if (!session) return null;
     try {
-      const publicPosts = await this.postsRead.read.findMany({
+      const publicPosts = await this.postsRead.findMany({
         where: { ...this.safePosts(session), parentId: null, communityGroupId: null, visibility: 'public', marvinMemorySource: null },
         select: postSelect, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 40,
       });
       await this.observePosts(publicPosts, session);
       if (session.rootId) {
-        const rows = await this.postsRead.read.findMany({
+        const rows = await this.postsRead.findMany({
           where: { ...this.safePosts(session), OR: [{ id: session.rootId }, { rootId: session.rootId }] },
           select: postSelect, orderBy: { createdAt: 'desc' }, take: 60,
         });
         await this.observePosts(rows, session);
       }
       if (session.groupId) {
-        const rows = await this.postsRead.read.findMany({
+        const rows = await this.postsRead.findMany({
           where: { ...this.safePosts(session), communityGroupId: session.groupId, parentId: null, visibility: { in: ['public', 'verifiedOnly'] }, marvinMemorySource: null },
           select: postSelect, orderBy: { createdAt: 'desc' }, take: 30,
         });
@@ -82,7 +87,7 @@ export class MarvinMemoryService {
     };
     const sourceFilters: Prisma.MarvinMemorySourceWhereInput[] = [{ post: postWhere }];
     if (session.conversationId && !overview) sourceFilters.push({ message: {
-      ...this.safeMessages(session, ctx.requesterUserId), sender: { isBot: false, bannedAt: null },
+      ...this.safeMessages(session, ctx.requesterUserId), sender: { isBot: false, ...NOT_BANNED_USER_WHERE },
       OR: terms.map(term => ({ body: { contains: term, mode: 'insensitive' as const } })),
     } });
     try {
@@ -124,7 +129,7 @@ export class MarvinMemoryService {
 
   private async session(ctx: MarvAIToolCallContext, source: MarvinSource): Promise<Session | null> {
     if (!ctx.requesterUserId || (ctx.conversationId && (ctx.triggeringPostId || ctx.rootPostId))) return null;
-    const viewer = await this.prisma.user.findFirst({ where: { id: ctx.requesterUserId, bannedAt: null, isBot: false }, select: { id: true } });
+    const viewer = await this.prisma.user.findFirst({ where: { id: ctx.requesterUserId, ...NOT_BANNED_USER_WHERE, isBot: false }, select: { id: true } });
     if (!viewer) return null;
     const blocks = await this.prisma.userBlock.findMany({
       where: { OR: [{ blockerId: viewer.id }, { blockedId: viewer.id }] }, select: { blockerId: true, blockedId: true },
@@ -146,16 +151,13 @@ export class MarvinMemoryService {
       return message ? { scope: `conversation:${conversation.id}`, conversationId: conversation.id, blockedIds } : null;
     }
     if (source !== 'public_thread' || !ctx.triggeringPostId || ctx.conversationId) return null;
-    const post = await this.postsRead.read.findFirst({ where: { id: ctx.triggeringPostId, deletedAt: null, isDraft: false }, select: postSelect });
+    const post = await this.postsRead.findFirst({ where: { id: ctx.triggeringPostId, ...NOT_DELETED, isDraft: false }, select: postSelect });
     if (!post || !await this.canReadPost(post.id, viewer.id)) return null;
     const rootId = post.rootId ?? post.id;
     if (ctx.rootPostId && ctx.rootPostId !== rootId) return null;
     const groupId = post.root?.communityGroupId ?? post.communityGroupId ?? undefined;
     if (groupId) {
-      const member = await this.prisma.communityGroupMember.findFirst({ where: {
-        groupId, userId: viewer.id, status: 'active', group: { deletedAt: null },
-      }, select: { userId: true } });
-      if (!member) return null;
+      if (!await isActiveGroupMember(this.prisma, groupId, viewer.id)) return null;
     }
     const scope = await this.validatedPostScope(post);
     return scope ? { scope, rootId, groupId, blockedIds } : null;
@@ -184,7 +186,7 @@ export class MarvinMemoryService {
     while (parentId) {
       if (seen.has(parentId) || seen.size > 32) return null;
       seen.add(parentId);
-      const parent = ancestors.has(parentId) ? ancestors.get(parentId) : await this.postsRead.read.findFirst({ where: { id: parentId }, select: {
+      const parent = ancestors.has(parentId) ? ancestors.get(parentId) : await this.postsRead.findFirst({ where: { id: parentId }, select: {
         id: true, parentId: true, rootId: true, communityGroupId: true,
         visibility: true, deletedAt: true, isDraft: true,
       } });
@@ -204,13 +206,13 @@ export class MarvinMemoryService {
   }
 
   private safePosts(session: Session): Prisma.PostWhereInput {
-    return { deletedAt: null, isDraft: false, visibility: { not: 'onlyMe' }, userId: { notIn: session.blockedIds }, user: { isBot: false, bannedAt: null } };
+    return { ...NOT_DELETED, isDraft: false, visibility: { not: 'onlyMe' }, userId: { notIn: session.blockedIds }, user: { isBot: false, ...NOT_BANNED_USER_WHERE } };
   }
   private safeMessages(session: Session, requesterId: string): Prisma.MessageWhereInput {
-    return { conversationId: session.conversationId!, deletedForAll: false, senderId: { notIn: session.blockedIds }, sender: { bannedAt: null }, deletions: { none: { userId: requesterId } } };
+    return { conversationId: session.conversationId!, deletedForAll: false, senderId: { notIn: session.blockedIds }, sender: NOT_BANNED_USER_WHERE, deletions: { none: { userId: requesterId } } };
   }
   private async canReadPost(id: string, requesterId: string): Promise<boolean> {
-    try { await this.posts.getById({ id, viewerUserId: requesterId }); return true; } catch { return false; }
+    try { await this.postsLookup.getById({ id, viewerUserId: requesterId }); return true; } catch { return false; }
   }
   private async observePosts(rows: MemoryPost[], session: Session) {
     const allowed = ['public', session.scope, ...(session.rootId ? [`thread:${session.rootId}`] : []), ...(session.groupId ? [`group:${session.groupId}`] : [])];

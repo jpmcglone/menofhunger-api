@@ -1,3 +1,4 @@
+import { postBackfillCursorOn, postHashtagBackfillBatchOn, backfillPostHashtags } from '../posts-read/post-transaction.commands';
 import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -104,23 +105,10 @@ export class AdminHashtagsService {
       const cursorWhere = await createdAtIdCursorWhere({
         cursor: effectiveCursor,
         lookup: async (id) =>
-          await tx.post.findUnique({
-            where: { id },
-            select: { id: true, createdAt: true },
-          }),
+          await postBackfillCursorOn(tx, id),
       });
 
-      const rows = await tx.post.findMany({
-        where: {
-          AND: [
-            { deletedAt: null },
-            ...(cursorWhere ? [cursorWhere] : []),
-          ],
-        },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take: batchSize + 1,
-        select: { id: true, body: true, hashtags: true, hashtagCasings: true },
-      });
+      const rows = await postHashtagBackfillBatchOn(tx, cursorWhere, batchSize + 1);
 
       const batch = rows.slice(0, batchSize);
       const hasMore = rows.length > batchSize;
@@ -143,8 +131,8 @@ export class AdminHashtagsService {
         const nextHashtags = tokens.map((t) => t.tag);
         const nextCasings = tokens.map((t) => t.variant);
 
-        const curHashtags = Array.isArray((p as any).hashtags) ? ((p as any).hashtags as string[]) : [];
-        const curCasings = Array.isArray((p as any).hashtagCasings) ? ((p as any).hashtagCasings as string[]) : [];
+        const curHashtags = Array.isArray(p.hashtags) ? (p.hashtags as string[]) : [];
+        const curCasings = Array.isArray(p.hashtagCasings) ? (p.hashtagCasings as string[]) : [];
 
         const changed =
           curHashtags.length !== nextHashtags.length ||
@@ -154,10 +142,7 @@ export class AdminHashtagsService {
 
         if (changed) {
           updatedPosts += 1;
-          await tx.post.update({
-            where: { id: p.id },
-            data: { hashtags: nextHashtags, hashtagCasings: nextCasings },
-          });
+          await backfillPostHashtags(tx, p.id, nextHashtags, nextCasings);
         }
 
         // Rebuild counts based on tokens (one per unique lowercase tag per post).

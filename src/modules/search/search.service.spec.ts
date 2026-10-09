@@ -1,6 +1,9 @@
-import { SearchService } from './search.service';
+import { SearchUsersService } from './search-users.service';
+import { buildSearchService } from './search.testing';
+import { SearchScopeService } from './search-scope.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { postSearchMatchWhere } from './search-where.builders';
 function makeService(viewer: any = null) {
   const prisma: any = {
     post: {
@@ -24,12 +27,12 @@ function makeService(viewer: any = null) {
     }),
   };
 
-  const service = new SearchService(prisma, new PostsReadService(prisma as never),
+  const service = buildSearchService(prisma, new PostsReadService(prisma as never),
     {} as any,
     posts,
     { ensureArticleBoostScoresFresh: async () => {} } as any,
     viewerContext,
-    { isValid: () => false, searchPrefix: async () => [] } as any);
+    { isValid: () => false, searchPrefix: async () => [] } as any, new SearchUsersService(prisma, {} as any));
 
   return { service, prisma, posts, viewerContext };
 }
@@ -129,11 +132,11 @@ describe('SearchService.searchCommunityGroups — group visibility', () => {
       },
     };
 
-    const service = new SearchService(prisma, new PostsReadService(prisma as never), {} as any, {} as any, { ensureArticleBoostScoresFresh: async () => {} } as any, {
+    const service = buildSearchService(prisma, new PostsReadService(prisma as never), {} as any, {} as any, { ensureArticleBoostScoresFresh: async () => {} } as any, {
       getViewer: jest.fn(async () => null),
       isVerified: jest.fn(() => true),
       allowedPostVisibilities: jest.fn(() => ['public']),
-    } as any, { isValid: () => false, searchPrefix: async () => [] } as any);
+    } as any, { isValid: () => false, searchPrefix: async () => [] } as any, new SearchUsersService(prisma, {} as any));
 
     return { service, prisma, openGroup, privateGroup };
   }
@@ -212,12 +215,12 @@ describe('SearchService.recordUserSearch', () => {
         }),
       },
     };
-    const service = new SearchService(prisma, new PostsReadService(prisma as never),
+    const service = buildSearchService(prisma, new PostsReadService(prisma as never),
       {} as any,
       { ensureBoostScoresFresh: async () => new Map(), computeScoresForPostIds: async () => new Map() } as any,
       { ensureArticleBoostScoresFresh: async () => {} } as any,
       { getViewer: async () => null, isVerified: () => false, allowedPostVisibilities: () => ['public'] } as any,
-      { isValid: () => false, searchPrefix: async () => [] } as any);
+      { isValid: () => false, searchPrefix: async () => [] } as any, new SearchUsersService(prisma, {} as any));
     return { service, prisma, rows };
   }
 
@@ -314,12 +317,12 @@ describe('SearchService.searchUsers — ranking', () => {
         viewerNotificationPreferences: new Map(),
       })),
     };
-    const service = new SearchService(prisma, new PostsReadService(prisma as never),
+    const service = buildSearchService(prisma, new PostsReadService(prisma as never),
       follows,
       { ensureBoostScoresFresh: async () => new Map(), computeScoresForPostIds: async () => new Map() } as any,
       { ensureArticleBoostScoresFresh: async () => {} } as any,
       { getViewer: async () => null, isVerified: () => false, allowedPostVisibilities: () => ['public'] } as any,
-      { isValid: () => false, searchPrefix: async () => [] } as any);
+      { isValid: () => false, searchPrefix: async () => [] } as any, new SearchUsersService(prisma, follows));
     return { service };
   }
 
@@ -366,7 +369,7 @@ describe('SearchService topic-enriched post search', () => {
     prisma.post.findMany.mockResolvedValue([post]);
     const result = await service.searchPosts({ viewerUserId: null, q: 'game', limit: 10, cursor: null });
     expect(result.posts.map((p) => p.id)).toEqual(['warcraft']);
-    expect(prisma.post.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ['warcraft'] } } }));
+    expect(prisma.post.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ['warcraft'] }, deletedAt: null } }));
   });
 });
 
@@ -398,21 +401,52 @@ describe('photo note search helpers', () => {
   });
 
   it('short-query post match reaches photos through the files whose note fits', async () => {
-    const { service, prisma } = makeService();
+    const { prisma } = makeService();
     prisma.mediaSearchNote = { findMany: jest.fn(async () => [{ r2Key: 'posts/a.jpg' }]) };
-    const keys = await service.mediaNoteKeysFor('rack', ['rack']);
+    const keys = await new SearchScopeService(prisma, {} as any).mediaNoteKeysFor('rack', ['rack']);
     expect(keys).toEqual(['posts/a.jpg']);
     expect(prisma.mediaSearchNote.findMany.mock.calls[0][0].take).toBe(200);
-    const where: any = service.postSearchMatchWhere('rack', ['rack'], keys);
+    const where: any = postSearchMatchWhere('rack', ['rack'], keys);
     expect(where.OR).toContainEqual({
       media: { some: { deletedAt: null, OR: [{ r2Key: { in: keys } }, { thumbnailR2Key: { in: keys } }] } },
     });
-    expect((service.postSearchMatchWhere('rack', ['rack']) as any).OR.some((c: any) => c.media)).toBe(false);
+    expect((postSearchMatchWhere('rack', ['rack']) as any).OR.some((c: any) => c.media)).toBe(false);
   });
 
   it('keeps searching when the note lookup fails', async () => {
-    const { service, prisma } = makeService();
+    const { prisma } = makeService();
     prisma.mediaSearchNote = { findMany: jest.fn(async () => { throw new Error('offline'); }) };
-    await expect(service.mediaNoteKeysFor('rack', ['rack'])).resolves.toEqual([]);
+    await expect(new SearchScopeService(prisma, {} as any).mediaNoteKeysFor('rack', ['rack'])).resolves.toEqual([]);
+  });
+});
+
+describe('post search over embedded link previews', () => {
+  it('returns a post whose body lacks the term but whose link preview contains it, under the same visibility filters', async () => {
+    const { service, prisma } = makeService(null);
+    const post = { id: 'ap-post', body: 'Real discussion here https://x.com/AP/status/1', topics: [],
+      createdAt: new Date(), user: { username: 'john', name: 'John' } };
+    prisma.$queryRaw.mockImplementation(async (sql: any) => {
+      const text = sql.strings.join('');
+      return text.includes('link_hits') && text.includes('"LinkMetadata"') && text.includes(`p."visibility" = 'public'`) &&
+        text.includes('FROM "PostLink" pl JOIN link_hits lh ON lh.url = pl."url"') ? [{ id: post.id }] : [];
+    });
+    prisma.post.findMany.mockResolvedValue([post]);
+    const result = await service.searchPosts({ viewerUserId: null, q: 'pentagon', limit: 10, cursor: null });
+    expect(result.posts.map((p) => p.id)).toEqual(['ap-post']);
+  });
+
+  it('matches a legacy post with no PostLink rows through the gated body fallback', async () => {
+    const { service, prisma } = makeService(null);
+    const legacy = { id: 'legacy-post', body: 'Old post https://x.com/AP/status/1', topics: [],
+      createdAt: new Date(), user: { username: 'john', name: 'John' } };
+    prisma.$queryRaw.mockImplementation(async (sql: any) => {
+      const text = sql.strings.join('');
+      const gated = text.includes(`p."body" LIKE '%http%'`) && text.includes('NOT EXISTS (SELECT 1 FROM "PostLink" pl0 WHERE pl0."postId" = p."id")') &&
+        text.includes(`position(rtrim(lh.url, '/') in p."body")`);
+      return gated ? [{ id: legacy.id }] : [];
+    });
+    prisma.post.findMany.mockResolvedValue([legacy]);
+    const result = await service.searchPosts({ viewerUserId: null, q: 'pentagon', limit: 10, cursor: null });
+    expect(result.posts.map((p) => p.id)).toEqual(['legacy-post']);
   });
 });

@@ -1,10 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-import { EmailService } from '../email/email.service';
-import { AppConfigService } from '../app/app-config.service';
-import { MessagesService } from '../messages/messages.service';
-import { PostsReadService } from '../posts-read/posts-read.service';
+import { Injectable, Logger } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { EmailService } from "../email/email.service";
+import { AppConfigService } from "../app/app-config.service";
+import { PostsReadService } from "../posts-read/posts-read.service";
 
 @Injectable()
 export class NotificationsEmailSupportService {
@@ -13,7 +12,7 @@ export class NotificationsEmailSupportService {
     private readonly prisma: PrismaService,
     private readonly email: EmailService,
     private readonly appConfig: AppConfigService,
-    private readonly messages: MessagesService,
+
     private readonly postsRead: PostsReadService,
   ) {}
   private notificationsFromAddress(): string | undefined {
@@ -35,7 +34,7 @@ export class NotificationsEmailSupportService {
       text: params.text,
       html: params.html,
       from: this.notificationsFromAddress(),
-      category: 'engagement',
+      category: "engagement",
       userId: params.userId,
     });
 
@@ -44,7 +43,9 @@ export class NotificationsEmailSupportService {
       return;
     }
 
-    this.logger.debug(`[${params.logTag}] not sent to userId=${params.userId} reason=${sent.reason ?? 'unknown'}`);
+    this.logger.debug(
+      `[${params.logTag}] not sent to userId=${params.userId} reason=${sent.reason ?? "unknown"}`,
+    );
   }
 
   /**
@@ -54,8 +55,23 @@ export class NotificationsEmailSupportService {
    */
   async listRecentNotificationItemsByRecipientIds(
     recipientIdsRaw: string[],
-  ): Promise<Map<string, Array<{ title: string | null; body: string | null; subjectPostId: string | null }>>> {
-    const ids = Array.from(new Set((recipientIdsRaw ?? []).map((x) => String(x ?? '').trim()).filter(Boolean)));
+  ): Promise<
+    Map<
+      string,
+      Array<{
+        title: string | null;
+        body: string | null;
+        subjectPostId: string | null;
+      }>
+    >
+  > {
+    const ids = Array.from(
+      new Set(
+        (recipientIdsRaw ?? [])
+          .map((x) => String(x ?? "").trim())
+          .filter(Boolean),
+      ),
+    );
     if (ids.length === 0) return new Map();
 
     const values = ids.map((id) => Prisma.sql`(${id})`);
@@ -97,9 +113,16 @@ export class NotificationsEmailSupportService {
       ORDER BY "recipientUserId" ASC, rn ASC
     `);
 
-    const out = new Map<string, Array<{ title: string | null; body: string | null; subjectPostId: string | null }>>();
+    const out = new Map<
+      string,
+      Array<{
+        title: string | null;
+        body: string | null;
+        subjectPostId: string | null;
+      }>
+    >();
     for (const r of rows) {
-      const uid = String(r?.recipientUserId ?? '').trim();
+      const uid = String(r?.recipientUserId ?? "").trim();
       if (!uid) continue;
       const list = out.get(uid) ?? [];
       list.push({
@@ -121,11 +144,19 @@ export class NotificationsEmailSupportService {
   async listEmailableNotificationCountsByRecipientIds(
     recipientIdsRaw: string[],
   ): Promise<Map<string, number>> {
-    const ids = Array.from(new Set((recipientIdsRaw ?? []).map((x) => String(x ?? '').trim()).filter(Boolean)));
+    const ids = Array.from(
+      new Set(
+        (recipientIdsRaw ?? [])
+          .map((x) => String(x ?? "").trim())
+          .filter(Boolean),
+      ),
+    );
     if (ids.length === 0) return new Map();
 
     const values = ids.map((id) => Prisma.sql`(${id})`);
-    const rows = await this.prisma.$queryRaw<Array<{ recipientUserId: string; count: number }>>(
+    const rows = await this.prisma.$queryRaw<
+      Array<{ recipientUserId: string; count: number }>
+    >(
       Prisma.sql`
         WITH u("userId") AS (VALUES ${Prisma.join(values)})
         SELECT
@@ -149,15 +180,21 @@ export class NotificationsEmailSupportService {
 
     const out = new Map<string, number>();
     for (const r of rows) {
-      const uid = String(r?.recipientUserId ?? '').trim();
+      const uid = String(r?.recipientUserId ?? "").trim();
       if (!uid) continue;
       out.set(uid, Math.max(0, Math.floor(r?.count ?? 0)));
     }
     return out;
   }
 
-  async getUnreadChatTotalsByUserIds(userIdsRaw: string[]): Promise<Map<string, number>> {
-    const ids = Array.from(new Set((userIdsRaw ?? []).map((x) => String(x ?? '').trim()).filter(Boolean)));
+  async getUnreadChatTotalsByUserIds(
+    userIdsRaw: string[],
+  ): Promise<Map<string, number>> {
+    const ids = Array.from(
+      new Set(
+        (userIdsRaw ?? []).map((x) => String(x ?? "").trim()).filter(Boolean),
+      ),
+    );
     if (ids.length === 0) return new Map();
 
     const values = ids.map((id) => Prisma.sql`(${id})`);
@@ -180,7 +217,7 @@ export class NotificationsEmailSupportService {
 
     const out = new Map<string, number>();
     for (const r of rows) {
-      const uid = String(r?.userId ?? '').trim();
+      const uid = String(r?.userId ?? "").trim();
       if (!uid) continue;
       const n = Math.max(0, Math.floor(r?.count ?? 0));
       out.set(uid, (out.get(uid) ?? 0) + n);

@@ -1,17 +1,14 @@
+import { PUBLISHED_POST_SQL } from '../../common/sql/post-eligibility.sql';
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
-import type {
-  AdminAnalyticsBoardDto,
-  AnalyticsGranularity,
-} from "../../common/dto/admin-analytics.dto";
+import type { AdminAnalyticsBoardDto, AnalyticsGranularity } from "../../common/dto/admin-analytics.dto";
 
 /** Live Board rows by people (bots excluded), minus article mirrors. */
 const boardRows = Prisma.sql`
   FROM "Post" p
   JOIN "User" u ON u.id = p."userId" AND u."isBot" = false
   WHERE p."kind" = 'board'
-    AND p."deletedAt" IS NULL
-    AND p."isDraft" = false
+    AND ${PUBLISHED_POST_SQL}
     AND p."articleId" IS NULL
 `;
 
@@ -115,8 +112,7 @@ export async function readBoardAnalytics(
         JOIN "BoardThread" t ON t."postId" = p.id
         JOIN "User" u ON u.id = p."userId" AND u."isBot" = false
         WHERE p."kind" = 'board'
-          AND p."deletedAt" IS NULL
-          AND p."isDraft" = false
+          AND ${PUBLISHED_POST_SQL}
           AND p."articleId" IS NULL
           AND p."parentId" IS NULL
           ${inRange(Prisma.sql`p."createdAt"`)}

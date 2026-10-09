@@ -3,7 +3,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from "@nestjs/common";
-import { ScheduledPostsService } from "./scheduled-posts.service";
+import { makeScheduledPostsService } from './scheduled-posts.testing';
 
 function makeScheduledUser(
   overrides: Partial<{
@@ -123,7 +123,7 @@ function makeService(
   const x: any = {
     requestPostCrosspost: jest.fn(async () => ({ status: "queued" })),
   };
-  const service = new ScheduledPostsService(
+  const service = makeScheduledPostsService(
     prisma,
     mutation,
     realtime,

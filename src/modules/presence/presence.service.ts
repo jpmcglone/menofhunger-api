@@ -1,3 +1,4 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { Injectable, Logger } from '@nestjs/common';
 import type { Server } from 'socket.io';
 import { AppConfigService } from '../app/app-config.service';
@@ -171,7 +172,7 @@ export class PresenceService {
     const users = await this.prisma.user.findMany({
       where: {
         id: { in: ids },
-        bannedAt: null,
+        ...NOT_BANNED_USER_WHERE,
         statusText: { not: null },
         statusExpiresAt: { gt: now },
       },

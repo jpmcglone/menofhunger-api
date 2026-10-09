@@ -5,29 +5,13 @@ import { Param, Res } from "@nestjs/common";
 import type { Response } from "express";
 import { XProfilePreviewService } from "./x-profile-preview.service";
 import { ConnectionIdempotencyService } from "../outbound/connection-idempotency.service";
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Post,
-  UseGuards,
-  Req,
-  ForbiddenException,
-} from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Post, UseGuards, Req, ForbiddenException } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
-import { z } from "zod";
-import { AuthGuard, type AuthedRequest } from "../auth/auth.guard";
+import { AuthGuard, type AuthedRequest } from "../auth/auth-public-api";
 import { CurrentUserId } from "../users/users.decorator";
 import { XConnectionService } from "./x-connection.service";
-
-const connectSchema = z.object({
-  code: z.string().trim().min(1).max(2000),
-  state: z.string().trim().min(1).max(200),
-});
+import { connectSchema } from './x.schemas';
 
 @ApiTags("integrations")
 @Controller("me/integrations/x")

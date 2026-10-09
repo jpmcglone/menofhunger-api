@@ -1,8 +1,10 @@
+import { NOT_BANNED_USER_WHERE } from '../../../common/prisma-selects/user.where';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { MarvinParticipationDto } from '../../../common/dto/marvin/marvin-personal.dto';
 
 import { PostsReadService } from '../../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../../common/prisma/where';
 @Injectable()
 export class MarvinParticipationService {
   constructor(private readonly prisma: PrismaService, private readonly postsRead: PostsReadService) {}
@@ -12,16 +14,16 @@ export class MarvinParticipationService {
     const [viewer, follows, posts] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: userId }, select: { interests: true } }),
       this.prisma.follow.findMany({ where: { followerId: userId }, select: { followingId: true }, take: 1000 }),
-      this.postsRead.read.findMany({ where: {
+      this.postsRead.findMany({ where: {
         id: excludePostId ? { not: excludePostId } : undefined,
         userId: { not: userId }, visibility: 'public', communityGroupId: null, parentId: null,
-        kind: 'regular', isDraft: false, deletedAt: null, createdAt: { gte: new Date(now.getTime() - 14 * 86400000) },
-        user: { bannedAt: null, isBot: false,
+        kind: 'regular', isDraft: false, ...NOT_DELETED, createdAt: { gte: new Date(now.getTime() - 14 * 86400000) },
+        user: { ...NOT_BANNED_USER_WHERE, isBot: false,
           blocksInitiated: { none: { blockedId: userId } }, blocksReceived: { none: { blockerId: userId } } },
-        replies: { none: { userId, deletedAt: null, isDraft: false } },
+        replies: { none: { userId, ...NOT_DELETED, isDraft: false } },
       }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 60,
       select: { id: true, body: true, userId: true, user: { select: { username: true, name: true, interests: true } },
-        _count: { select: { replies: { where: { deletedAt: null, isDraft: false, user: { isBot: false, bannedAt: null } } } } } },
+        _count: { select: { replies: { where: { ...NOT_DELETED, isDraft: false, user: { isBot: false, ...NOT_BANNED_USER_WHERE } } } } } },
       }),
     ]);
     const following = new Set(follows.map(f => f.followingId));

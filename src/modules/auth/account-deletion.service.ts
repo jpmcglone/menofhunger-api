@@ -1,7 +1,7 @@
 import { revokeAccountChannels, emitChannelAccessChange } from '../group-channels/channel-lifecycle';
+import { ACCOUNT_DELETION_ERASING_REASON, ACCOUNT_DELETION_PENDING_REASON } from './account-deletion.constants';
 import type { AccountDeletionRequestDto, AccountDeletionStatusDto } from '../../common/dto';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from './auth.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
@@ -17,7 +17,18 @@ import { eraseAccountRecords } from './account-erasure';
 @Injectable()
 export class AccountDeletionService {
   private readonly logger = new Logger(AccountDeletionService.name);
-  constructor(private readonly prisma: PrismaService, private readonly auth: AuthService, private readonly moduleRef: ModuleRef) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auth: AuthService,
+    private readonly presence: PresenceRealtimeService,
+    private readonly usersMe: UsersMeRealtimeService,
+    private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
+    private readonly billing: BillingService,
+    private readonly imageReview: AdminImageReviewService,
+    private readonly email: EmailService,
+    private readonly redis: RedisService,
+    private readonly cache: CacheInvalidationService,
+  ) {}
 
   async requestDeletion(userId: string, _params?: { reason?: string | null; details?: string | null }): Promise<AccountDeletionRequestDto> {
     const now = new Date();
@@ -33,15 +44,15 @@ export class AccountDeletionService {
           confirmationEmail: user.emailVerifiedAt ? user.email : null },
       });
       const updated = await tx.user.update({ where: { id: userId }, data: {
-        bannedAt: now, bannedReason: 'self_deleted_pending', deletionRequestedAt: now, deletionScheduledAt: receipt.scheduledAt,
+        bannedAt: now, bannedReason: ACCOUNT_DELETION_PENDING_REASON, deletionRequestedAt: now, deletionScheduledAt: receipt.scheduledAt,
       } });
       return { receipt, updated, channelGroups };
     });
-    for (const groupId of result.channelGroups) await emitChannelAccessChange(this.prisma, this.moduleRef.get(PresenceRealtimeService, { strict: false }), groupId, userId);
-    this.moduleRef.get(UsersMeRealtimeService, { strict: false }).emitMeUpdatedFromUser(result.updated, 'account_deleted');
+    for (const groupId of result.channelGroups) await emitChannelAccessChange(this.prisma, this.presence, groupId, userId);
+    this.usersMe.emitMeUpdatedFromUser(result.updated, 'account_deleted');
     await this.auth.revokeAllSessionsForUser(userId);
-    this.moduleRef.get(PresenceRealtimeService, { strict: false }).disconnectUserSockets(userId);
-    await this.moduleRef.get(PublicProfileCacheService, { strict: false }).invalidateForUser(user);
+    this.presence.disconnectUserSockets(userId);
+    await this.publicProfileCache.invalidateForUser(user);
     return { success: true as const, deletionScheduledAt: result.receipt.scheduledAt.toISOString(), deletionStatusToken: result.receipt.id };
   }
 
@@ -55,7 +66,7 @@ export class AccountDeletionService {
   async finalizeDueDeletions(limit = 100): Promise<{ finalized: number }> {
     const now = new Date();
     // Backfill requests scheduled by older app versions before receipts existed.
-    const pending = await this.prisma.user.findMany({ where: { bannedReason: 'self_deleted_pending', deletionScheduledAt: { lte: now } }, take: limit });
+    const pending = await this.prisma.user.findMany({ where: { bannedReason: ACCOUNT_DELETION_PENDING_REASON, deletionScheduledAt: { lte: now } }, take: limit });
     for (const user of pending) await this.prisma.accountDeletionReceipt.upsert({ where: { userId: user.id }, update: {}, create: {
       userId: user.id, scheduledAt: user.deletionScheduledAt!, expiresAt: new Date(now.getTime() + 90 * 86400000),
       confirmationEmail: user.emailVerifiedAt ? user.email : null,
@@ -78,7 +89,7 @@ export class AccountDeletionService {
   }
 
   private async finalizeReceipt(receiptId: string): Promise<boolean> {
-    return await this.moduleRef.get(RedisService, { strict: false }).withLock(
+    return await this.redis.withLock(
       `account-erasure:${receiptId}`, { ttlMs: 15 * 60_000 }, () => this.eraseReceipt(receiptId),
     ) ?? false;
   }
@@ -91,18 +102,18 @@ export class AccountDeletionService {
     if (!receipt.startedAt) {
       // Claim atomically against login cancellation; after this point restoration is refused.
       const claimed = await this.prisma.$transaction(async tx => {
-        const claim = await tx.user.updateMany({ where: { id: userId, bannedReason: 'self_deleted_pending', deletionScheduledAt: { lte: now } }, data: { bannedReason: 'self_deleted_erasing' } });
+        const claim = await tx.user.updateMany({ where: { id: userId, bannedReason: ACCOUNT_DELETION_PENDING_REASON, deletionScheduledAt: { lte: now } }, data: { bannedReason: ACCOUNT_DELETION_ERASING_REASON } });
         if (!claim.count) return false;
         await tx.accountDeletionReceipt.update({ where: { id: receiptId }, data: { startedAt: now } });
         return true;
       });
       if (!claimed) return false;
     }
-    const media = this.moduleRef.get(AdminImageReviewService, { strict: false });
+    const media = this.imageReview;
     if (!receipt.erasedAt) {
       // External work runs in the scheduled worker, not in the deletion request.
       // Failures remain durable and retry; never claim completion after partial cleanup.
-      await this.moduleRef.get(BillingService, { strict: false }).cancelSubscriptionForAccountDeletion(userId);
+      await this.billing.cancelSubscriptionForAccountDeletion(userId);
       const keys = await media.accountErasureKeys(userId);
       receipt = await this.prisma.accountDeletionReceipt.update({ where: { id: receiptId }, data: { mediaKeys: keys } });
       const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { username: true } });
@@ -110,23 +121,22 @@ export class AccountDeletionService {
         await eraseAccountRecords(tx, userId);
         await tx.accountDeletionReceipt.update({ where: { id: receiptId }, data: { erasedAt: new Date() } });
       }, { timeout: 60000 });
-      await this.moduleRef.get(PublicProfileCacheService, { strict: false }).invalidateForUser({ id: userId, username: user?.username ?? null });
+      await this.publicProfileCache.invalidateForUser({ id: userId, username: user?.username ?? null });
     }
-    await this.moduleRef.get(PublicProfileCacheService, { strict: false }).invalidateForUser({ id: userId, username: null });
+    await this.publicProfileCache.invalidateForUser({ id: userId, username: null });
     await media.eraseUnreferencedAccountMedia(receipt.mediaKeys);
     // Invalidate derived content, including summaries generated before erasure.
-    const redis = this.moduleRef.get(RedisService, { strict: false }).raw();
+    const redis = this.redis.raw();
     for (const pattern of ['marv:catchup:*', `profile:*${userId}*`, `marv:*${userId}*`]) {
       let cursor = '0';
       do { const result = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100); cursor = result[0];
         if (result[1].length) await redis.del(...result[1]);
       } while (cursor !== '0');
     }
-    const cache = this.moduleRef.get(CacheInvalidationService, { strict: false });
-    await cache.bumpFeedGlobal();
-    await cache.bumpSearchGlobal();
+    await this.cache.bumpFeedGlobal();
+    await this.cache.bumpSearchGlobal();
     if (receipt.confirmationEmail) {
-      const result = await this.moduleRef.get(EmailService, { strict: false }).sendText({ to: receipt.confirmationEmail,
+      const result = await this.email.sendText({ to: receipt.confirmationEmail,
         subject: 'Your Men of Hunger account has been deleted',
         text: 'Your account and associated personal content and fitness data have been deleted. Apple subscriptions are managed separately in your Apple subscription settings. Contact hello@menofhunger.com if you need help.', category: 'transactional' });
       if (!result.sent) throw new Error('Deletion confirmation will retry.');

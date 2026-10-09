@@ -1,5 +1,5 @@
 import { CanActivate, ExecutionContext, Injectable, NotFoundException } from '@nestjs/common';
-import type { AuthedRequest } from '../auth/auth.guard';
+import type { AuthedRequest } from '../auth/auth-public-api';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**

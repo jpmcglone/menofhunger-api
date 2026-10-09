@@ -3,7 +3,8 @@ import type { CommunityGroupPreviewDto } from '../../common/dto/community-group.
 import type { PostVideoEmbedDto } from '../../common/dto/post.dto';
 import type { PostWithAuthorAndMedia } from './post.dto';
 
-type PostWithParentId = { id: string; parentId?: string | null } & Record<string, unknown>;
+/** A feed row ready for DTO mapping; the quoted post is only present on rows loaded with the raw include. */
+type AttachablePost = PostWithAuthorAndMedia & { quotedPost?: PostWithAuthorAndMedia | null };
 
 type PostChainNode = {
   author?: { id?: string | null } | null;
@@ -28,7 +29,7 @@ export function postChainInvolvesAuthor(post: PostChainNode | null | undefined, 
  * Build a recursive mapper that attaches parent chain to each post DTO.
  * Used by list() and listForUser() to avoid duplicating the attachParentChain logic.
  */
-export function buildAttachParentChain<T extends PostWithParentId>(opts: {
+export function buildAttachParentChain<T extends AttachablePost>(opts: {
   parentMap: Map<string, Post | T>;
   baseUrl: string | null;
   boosted: Set<string>;
@@ -93,7 +94,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
   function attachParentChain(post: T): ReturnType<typeof toPostDto> & { parent?: ReturnType<typeof toPostDto> } {
     const internalOverride = internalByPostId?.get(post.id);
     const score = scoreByPostId?.get(post.id);
-    const authorId = (post as any).user?.id ?? (post as any).userId ?? null;
+    const authorId = post.user?.id ?? post.userId ?? null;
     const viewerBlockStatus =
       authorId && blockedByViewer?.has(authorId)
         ? 'viewer_blocked'
@@ -107,8 +108,8 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
       Boolean(postWithPoll.poll?.creatorSkippedAt);
 
     // For flat reposts (kind='repost'), attach the nested reposted post DTO.
-    const isRepost = (post as any).kind === 'repost';
-    const repostedPostIdVal = isRepost ? ((post as any).repostedPostId as string | null | undefined) : null;
+    const isRepost = post.kind === 'repost';
+    const repostedPostIdVal = isRepost ? (post.repostedPostId as string | null | undefined) : null;
     const repostedPostRaw = repostedPostIdVal ? repostedPostMap?.get(repostedPostIdVal) : undefined;
     const repostedPostDto = repostedPostRaw ? attachParentChain(repostedPostRaw) : undefined;
 
@@ -117,7 +118,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     // cannot access that post; omit quotedPost so the client shows "Post unavailable".
     // Single-post paths that don't supply quotedPostMap fall back to the raw Prisma include
     // so they keep working without the full feed plumbing.
-    const quotedPostIdVal = (post as any).quotedPostId as string | null | undefined;
+    const quotedPostIdVal = post.quotedPostId as string | null | undefined;
     let quotedPostDto: ReturnType<typeof toPostDto> | undefined;
     if (quotedPostMap && quotedPostIdVal) {
       // Feed path: use the viewer-gated map; absence = gated out.
@@ -125,10 +126,10 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
       quotedPostDto = quotedFromMap ? (attachParentChain(quotedFromMap) as ReturnType<typeof toPostDto>) : undefined;
     } else {
       // Single-post / legacy path: fall back to the raw Prisma include.
-      const quotedPostRaw = (post as any).quotedPost ?? null;
+      const quotedPostRaw = post.quotedPost ?? null;
       quotedPostDto =       quotedPostRaw
-        ? toPostDto(quotedPostRaw as PostWithAuthorAndMedia, baseUrl, {
-            videoEmbed: videoEmbedByPostId?.get((quotedPostRaw as { id: string }).id) ?? null,
+        ? toPostDto(quotedPostRaw, baseUrl, {
+            videoEmbed: videoEmbedByPostId?.get(quotedPostRaw.id) ?? null,
           })
         : undefined;
     }
@@ -138,7 +139,7 @@ export function buildAttachParentChain<T extends PostWithParentId>(opts: {
     const gid = String((post as { communityGroupId?: string | null }).communityGroupId ?? '').trim();
     const groupPreview = gid ? groupPreviewByGroupId?.get(gid) : undefined;
 
-    const dto = toPostDto(post as unknown as PostWithAuthorAndMedia, baseUrl, {
+    const dto = toPostDto(post, baseUrl, {
       viewerHasBoosted: boosted.has(post.id),
       viewerHasBookmarked: bookmarksByPostId.has(post.id),
       viewerBookmarkCollectionIds: bookmarksByPostId.get(post.id)?.collectionIds ?? [],

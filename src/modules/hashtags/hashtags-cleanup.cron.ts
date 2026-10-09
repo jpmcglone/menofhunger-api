@@ -18,7 +18,7 @@ export class HashtagsCleanupCron {
 
   /**
    * Safety net: remove zero-count hashtag rows that may linger due to legacy data or partial failures.
-   * Mirrors per-tag cleanup in `PostsService`, but applied globally.
+   * Mirrors per-tag cleanup in `PostsMutationEditsService`, but applied globally.
    */
   @Cron('0 5 * * *')
   async cleanupOrphanHashtags() {

@@ -1,14 +1,15 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
+import { toPage } from '../../common/pagination/page';
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { PrismaService } from "../prisma/prisma.service";
 import { BillingService } from "../billing/billing.service";
 import { PostsReadService } from "../posts-read/posts-read.service";
-import type {
-  AdminMemberDiagnosticsDto,
-  AdminOperationsContentDto,
-} from "../../common/dto/admin-operations.dto";
+import type { AdminMemberDiagnosticsDto, AdminOperationsContentDto } from "../../common/dto/admin-operations.dto";
 import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
+import { createdAtIdBefore } from '../../common/pagination/created-at-id-cursor';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 export const adminOperationsIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/);
 export const adminOperationsContentSchema = z
@@ -41,9 +42,7 @@ export class AdminOperationsService {
     const user = await this.prisma.user.findUnique({
       where: { id },
       select: {
-        id: true,
-        username: true,
-        name: true,
+        ...USER_BRIEF_SELECT,
         createdAt: true,
         verifiedStatus: true,
         bannedAt: true,
@@ -154,8 +153,8 @@ export class AdminOperationsService {
       parentId: null,
       kind: input.source === "all" ? { in: ["regular", "board"] } : input.source === "board" ? "board" : "regular",
       isDraft: false,
-      deletedAt: null,
-      user: { isBot: false, bannedAt: null },
+      ...NOT_DELETED,
+      user: { isBot: false, ...NOT_BANNED_USER_WHERE },
       ...(input.q
         ? {
             OR: [
@@ -169,9 +168,9 @@ export class AdminOperationsService {
             replies: {
               none: {
                 isDraft: false,
-                deletedAt: null,
+                ...NOT_DELETED,
                 visibility: "public",
-                user: { bannedAt: null },
+                user: NOT_BANNED_USER_WHERE,
               },
             },
           }
@@ -179,7 +178,7 @@ export class AdminOperationsService {
     };
     if (input.cursor) {
       // Check the cursor against this same audience and interval; never reset to page one.
-      const cursor = await this.postsRead.read.findFirst({
+      const cursor = await this.postsRead.findFirst({
         where: { AND: [where, { id: input.cursor }] },
         select: { id: true, createdAt: true },
       });
@@ -188,15 +187,10 @@ export class AdminOperationsService {
           "Cursor is no longer available. Restart the content query.",
         );
       where.AND = [
-        {
-          OR: [
-            { createdAt: { lt: cursor.createdAt } },
-            { createdAt: cursor.createdAt, id: { lt: cursor.id } },
-          ],
-        },
+        createdAtIdBefore({ createdAt: cursor.createdAt, id: cursor.id }),
       ];
     }
-    const rows = await this.postsRead.read.findMany({
+    const rows = await this.postsRead.findMany({
       where,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: input.limit + 1,
@@ -211,7 +205,7 @@ export class AdminOperationsService {
         user: { select: USER_BRIEF_SELECT },
       },
     });
-    const page = rows.slice(0, input.limit);
+    const { items: page, nextCursor } = toPage(rows, input.limit, (last) => last.id);
     return {
       data: {
         asOf: now.toISOString(),
@@ -226,7 +220,7 @@ export class AdminOperationsService {
         })),
       },
       pagination: {
-        nextCursor: rows.length > input.limit ? page.at(-1)!.id : null,
+        nextCursor,
       },
     };
   }

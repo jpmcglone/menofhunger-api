@@ -2,14 +2,17 @@
  * The auto-verify site toggle is evaluated here, in the worker, rather than at the signup /
  * referral call site — so an admin flipping the toggle takes effect for jobs already queued.
  */
-import { VerificationSideEffectsHandler } from './verification-side-effects.handler';
+import { VerificationSideEffectsHandler } from "./verification-side-effects.handler";
 
-function build(opts: { autoVerify: boolean; autoVerifyRecruiterId: string | null }) {
+function build(opts: {
+  autoVerify: boolean;
+  autoVerifyRecruiterId: string | null;
+}) {
   const userVerification = {
     verifyUser: jest.fn(async () => ({
       verified: true,
       alreadyVerified: false,
-      userId: 'u1',
+      userId: "u1",
       previousUnverifiedAt: null,
     })),
   };
@@ -21,7 +24,9 @@ function build(opts: { autoVerify: boolean; autoVerifyRecruiterId: string | null
     shouldAutoVerify: jest.fn((cfg: any, recruitedById: string | null) => {
       if (!cfg.autoVerifyNewUsers) return false;
       if (cfg.autoVerifyRecruiterId == null) return true;
-      return Boolean(recruitedById && cfg.autoVerifyRecruiterId === recruitedById);
+      return Boolean(
+        recruitedById && cfg.autoVerifyRecruiterId === recruitedById,
+      );
     }),
   };
   const notifications = { create: jest.fn(async () => undefined) };
@@ -35,68 +40,128 @@ function build(opts: { autoVerify: boolean; autoVerifyRecruiterId: string | null
     registry as any,
     sideEffects as any,
   );
-  return { handler, userVerification, siteConfig, notifications, registry, sideEffects };
+  return {
+    handler,
+    userVerification,
+    siteConfig,
+    notifications,
+    registry,
+    sideEffects,
+  };
 }
 
-describe('user.auto-verify', () => {
-  it('verifies when the toggle matches the recruiter', async () => {
-    const { handler, userVerification } = build({ autoVerify: true, autoVerifyRecruiterId: 'recruiter-1' });
+describe("user.auto-verify", () => {
+  it("verifies when the toggle matches the recruiter", async () => {
+    const { handler, userVerification } = build({
+      autoVerify: true,
+      autoVerifyRecruiterId: "recruiter-1",
+    });
 
-    await handler['onAutoVerify']({ userId: 'u1', recruitedById: 'recruiter-1', source: 'auto_referral' });
+    await handler["onAutoVerify"]({
+      userId: "u1",
+      recruitedById: "recruiter-1",
+      source: "auto_referral",
+    });
 
-    expect(userVerification.verifyUser).toHaveBeenCalledWith({ userId: 'u1', source: 'auto_referral' });
+    expect(userVerification.verifyUser).toHaveBeenCalledWith({
+      userId: "u1",
+      source: "auto_referral",
+    });
   });
 
-  it('verifies every signup when no recruiter filter is set', async () => {
-    const { handler, userVerification } = build({ autoVerify: true, autoVerifyRecruiterId: null });
+  it("verifies every signup when no recruiter filter is set", async () => {
+    const { handler, userVerification } = build({
+      autoVerify: true,
+      autoVerifyRecruiterId: null,
+    });
 
-    await handler['onAutoVerify']({ userId: 'u1', recruitedById: null, source: 'auto_signup' });
+    await handler["onAutoVerify"]({
+      userId: "u1",
+      recruitedById: null,
+      source: "auto_signup",
+    });
 
-    expect(userVerification.verifyUser).toHaveBeenCalledWith({ userId: 'u1', source: 'auto_signup' });
+    expect(userVerification.verifyUser).toHaveBeenCalledWith({
+      userId: "u1",
+      source: "auto_signup",
+    });
   });
 
-  it('does nothing when the toggle is off', async () => {
-    const { handler, userVerification } = build({ autoVerify: false, autoVerifyRecruiterId: 'recruiter-1' });
+  it("does nothing when the toggle is off", async () => {
+    const { handler, userVerification } = build({
+      autoVerify: false,
+      autoVerifyRecruiterId: "recruiter-1",
+    });
 
-    await handler['onAutoVerify']({ userId: 'u1', recruitedById: 'recruiter-1', source: 'auto_referral' });
+    await handler["onAutoVerify"]({
+      userId: "u1",
+      recruitedById: "recruiter-1",
+      source: "auto_referral",
+    });
 
     expect(userVerification.verifyUser).not.toHaveBeenCalled();
   });
 
-  it('does nothing when the recruiter filter does not match', async () => {
-    const { handler, userVerification } = build({ autoVerify: true, autoVerifyRecruiterId: 'other-recruiter' });
+  it("does nothing when the recruiter filter does not match", async () => {
+    const { handler, userVerification } = build({
+      autoVerify: true,
+      autoVerifyRecruiterId: "other-recruiter",
+    });
 
-    await handler['onAutoVerify']({ userId: 'u1', recruitedById: 'recruiter-1', source: 'auto_referral' });
+    await handler["onAutoVerify"]({
+      userId: "u1",
+      recruitedById: "recruiter-1",
+      source: "auto_referral",
+    });
 
     expect(userVerification.verifyUser).not.toHaveBeenCalled();
   });
 
   /** The toggle must be read fresh, not from the 5-minute cache the rate limiter uses. */
-  it('reads the toggle uncached', async () => {
-    const { handler, siteConfig } = build({ autoVerify: true, autoVerifyRecruiterId: null });
+  it("reads the toggle uncached", async () => {
+    const { handler, siteConfig } = build({
+      autoVerify: true,
+      autoVerifyRecruiterId: null,
+    });
 
-    await handler['onAutoVerify']({ userId: 'u1', recruitedById: null, source: 'auto_signup' });
+    await handler["onAutoVerify"]({
+      userId: "u1",
+      recruitedById: null,
+      source: "auto_signup",
+    });
 
     expect(siteConfig.getUncached).toHaveBeenCalled();
   });
 });
 
-describe('user.verified', () => {
-  it('writes the account_verified notification', async () => {
-    const { handler, notifications } = build({ autoVerify: false, autoVerifyRecruiterId: null });
+describe("user.verified", () => {
+  it("writes the account_verified notification", async () => {
+    const { handler, notifications } = build({
+      autoVerify: false,
+      autoVerifyRecruiterId: null,
+    });
 
-    await handler['onVerified']({ userId: 'u1' });
+    await handler["onVerified"]({ userId: "u1" });
 
     expect(notifications.create).toHaveBeenCalledWith(
-      expect.objectContaining({ recipientUserId: 'u1', kind: 'account_verified', subjectUserId: 'u1' }),
+      expect.objectContaining({
+        recipientUserId: "u1",
+        kind: "account_verified",
+        subjectUserId: "u1",
+      }),
     );
   });
 
-  it('hands referral rewards and invite codes to billing', async () => {
-    const { handler, sideEffects } = build({ autoVerify: false, autoVerifyRecruiterId: null });
+  it("hands referral rewards and invite codes to billing", async () => {
+    const { handler, sideEffects } = build({
+      autoVerify: false,
+      autoVerifyRecruiterId: null,
+    });
 
-    await handler['onVerified']({ userId: 'u1' });
+    await handler["onVerified"]({ userId: "u1" });
 
-    expect(sideEffects.dispatch).toHaveBeenCalledWith('referral.verified', { userId: 'u1' });
+    expect(sideEffects.dispatch).toHaveBeenCalledWith("referral.verified", {
+      userId: "u1",
+    });
   });
 });

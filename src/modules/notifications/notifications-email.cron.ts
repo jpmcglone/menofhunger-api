@@ -1,4 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { MessagesConversationStateService } from "../messages";
+import { NotificationsEmailSupportService } from "./notifications-email-support.service";
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
@@ -8,7 +12,6 @@ import { buildFollowedArticleEmail, renderTiptapPreviewHtml } from '../email/ema
 import { buildGreeting, getRecipientEmail, getVerifiedRecipientEmail } from '../email/email-send.helpers';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
-import { MessagesService } from '../messages/messages.service';
 import { messagePreviewText } from '../messages/message.dto';
 import { EMAIL, escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
@@ -16,9 +19,6 @@ import { SlackService } from '../../common/slack/slack.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
 
-import { Optional } from "@nestjs/common";
-import { NotificationsEmailSupportService } from "./notifications-email-support.service";
-import { NotificationsEmailWeeklyService } from "./notifications-email-weekly.service";
 import { safeBaseUrl, easternYmdHm, truncate } from "./notifications-email.helpers";
 
 @Injectable()
@@ -30,36 +30,16 @@ export class NotificationsEmailCron {
   // Still delivers within a business hour for most users.
   private readonly INSTANT_EMAIL_COOLDOWN_MS = 6 * 60 * 60_000;
 
-  private readonly support: NotificationsEmailSupportService;
-  private readonly weekly: NotificationsEmailWeeklyService;
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly email: EmailService,
     private readonly appConfig: AppConfigService,
     private readonly jobs: JobsService,
-    private readonly messages: MessagesService,
+    @Inject(MessagesConversationStateService) private readonly messages: Pick< MessagesConversationStateService, "getUnreadSummary" >,
     private readonly slack: SlackService,
     private readonly postsRead: PostsReadService,
-    @Optional() support?: NotificationsEmailSupportService,
-    @Optional() weekly?: NotificationsEmailWeeklyService,
-  ) {
-    this.support = support ?? new NotificationsEmailSupportService(prisma, email, appConfig, messages, postsRead);
-    this.weekly = weekly ?? new NotificationsEmailWeeklyService(prisma, email, appConfig, jobs, messages, slack, postsRead, this.support);
-  }
-
-  sendWeeklyDigest(...args: Parameters<NotificationsEmailWeeklyService["sendWeeklyDigest"]>) {
-    return this.weekly.sendWeeklyDigest(...args);
-  }
-  runSendWeeklyDigest(...args: Parameters<NotificationsEmailWeeklyService["runSendWeeklyDigest"]>) {
-    return this.weekly.runSendWeeklyDigest(...args);
-  }
-  sendStreakReminderEmail(...args: Parameters<NotificationsEmailWeeklyService["sendStreakReminderEmail"]>) {
-    return this.weekly.sendStreakReminderEmail(...args);
-  }
-  runSendStreakReminderEmail(...args: Parameters<NotificationsEmailWeeklyService["runSendStreakReminderEmail"]>) {
-    return this.weekly.runSendStreakReminderEmail(...args);
-  }
+    private readonly support: NotificationsEmailSupportService,
+  ) {}
 
   @Cron('*/15 * * * *')
   async sendNewNotificationsNudges(): Promise<void> {
@@ -258,7 +238,8 @@ export class NotificationsEmailCron {
     if (!emailCfg) return;
 
     try {
-      const userId = typeof (payload as any)?.userId === 'string' ? String((payload as any).userId).trim() : '';
+      const rawUserId = (payload as { userId?: unknown } | null | undefined)?.userId;
+      const userId = typeof rawUserId === 'string' ? rawUserId.trim() : '';
       if (!userId) return;
 
     const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());
@@ -316,8 +297,7 @@ export class NotificationsEmailCron {
           subjectPost: { select: { visibility: true } },
         },
       }),
-      this.messages
-        .getUnreadSummary(userId)
+      this.messages.getUnreadSummary(userId)
         .then((c) => (c.primary ?? 0) + (c.requests ?? 0))
         .catch(() => 0),
       this.prisma.messageParticipant.findMany({
@@ -398,13 +378,15 @@ export class NotificationsEmailCron {
     });
 
     type ActorTier = 'premium' | 'verified' | 'organization' | null;
-    function actorTierFor(n: typeof notifs[number]): ActorTier {
-      const a = n.actor as null | {
+    function actorTierFor(n: {
+      actor?: {
         premium?: boolean | null;
         premiumPlus?: boolean | null;
         isOrganization?: boolean | null;
         verifiedStatus?: string | null;
-      };
+      } | null;
+    }): ActorTier {
+      const a = n.actor;
       if (!a) return null;
       if (a.isOrganization) return 'organization';
       if (Boolean(a.premium || a.premiumPlus)) return 'premium';
@@ -418,8 +400,8 @@ export class NotificationsEmailCron {
       return '';
     }
     type PostVisibility = 'public' | 'verifiedOnly' | 'premiumOnly' | 'onlyMe';
-    function postVisibilityFor(n: typeof notifs[number]): PostVisibility | null {
-      const vis = (n as any)?.subjectPost?.visibility;
+    function postVisibilityFor(n: { subjectPost?: { visibility?: string | null } | null }): PostVisibility | null {
+      const vis = n?.subjectPost?.visibility;
       if (vis === 'public' || vis === 'verifiedOnly' || vis === 'premiumOnly' || vis === 'onlyMe') return vis;
       return null;
     }
@@ -482,9 +464,9 @@ ${chatPreviewRows
               const label = n.kind === 'comment' ? 'Reply' : 'Mention';
               const msg = truncate((n.body ?? n.title ?? '').trim(), 140);
               const href = n.subjectPostId ? `${baseUrl}/p/${encodeURIComponent(n.subjectPostId)}` : notificationsUrl;
-              const tier = actorTierFor(n as any);
+              const tier = actorTierFor(n);
               const tierPill = tier ? ` <span style="display:inline-block;width:6px;"></span>${renderPill(actorTierLabel(tier), { actorTier: tier })}` : '';
-              const vis = postVisibilityFor(n as any);
+              const vis = postVisibilityFor(n);
               const visPill =
                 vis && vis !== 'public'
                   ? ` <span style="display:inline-block;width:6px;"></span>${renderPill(postVisibilityLabel(vis), { postVisibility: vis })}`
@@ -630,7 +612,7 @@ ${chatPreviewRows
           where: {
             email: { not: null },
             emailVerifiedAt: { not: null },
-            bannedAt: null,
+            ...NOT_BANNED_USER_WHERE,
             // Must be at least 24h old, but no older than 30 days (flood + staleness guard).
             createdAt: { lte: threshold24h, gte: maxLookback },
             OR: [
@@ -767,9 +749,7 @@ ${chatPreviewRows
           deletedAt: true,
           author: {
             select: {
-              id: true,
-              username: true,
-              name: true,
+              ...USER_BRIEF_SELECT,
               bio: true,
               articleBio: true,
               avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,

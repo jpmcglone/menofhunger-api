@@ -1,154 +1,11 @@
-import { isProtectedChannelKey } from '../group-channels/channel-media.service';
-import { DeleteObjectCommand, ListObjectsV2Command, type ListObjectsV2CommandOutput, S3Client } from '@aws-sdk/client-s3';
-import { createHash } from 'node:crypto';
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
-import { Prisma, type PostMediaKind } from '@prisma/client';
+import { DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { publicAssetUrl } from '../../common/assets/public-asset-url';
-import { PublicProfileCacheService } from '../users/public-profile-cache.service';
-import {
-  articleBodyContainsKey,
-  scrubKeyFromArticleBody,
-} from './admin-image-review.references';
-import { resolveAllReferencesOn } from './admin-image-review.references-resolve';
-
-// ============================================================
-// REFERENCE TYPES — shapes returned by resolveAllReferences()
-// ============================================================
-
-export type PostRef = {
-  postMediaId: string;
-  postId: string;
-  postCreatedAt: string;
-  postVisibility: string;
-  authorId: string;
-  authorUsername: string | null;
-  deletedAt: string | null;
-  /** true when this key is a video poster frame (thumbnailR2Key), not the main asset */
-  isThumbnail: boolean;
-};
-
-export type MessageRef = {
-  messageMediaId: string;
-  messageId: string;
-  conversationId: string;
-  isThumbnail: boolean;
-  sentAt: string;
-  senderId: string;
-  senderUsername: string | null;
-  senderName: string | null;
-  channelId?: string;
-  channelName?: string;
-  channelPrivacy?: string;
-  groupId?: string;
-  groupName?: string;
-  groupSlug?: string;
-};
-
-type ChannelUploadRef = {
-  uploadId: string;
-  channelId: string;
-  userId: string;
-  username: string | null;
-  channelName: string;
-  groupId: string;
-  groupName: string;
-  groupSlug: string;
-  expiresAt: string;
-};
-
-export type UserRef = {
-  userId: string;
-  username: string | null;
-  name: string | null;
-  premium: boolean;
-  premiumPlus: boolean;
-  verifiedStatus: string | null;
-  isAvatar: boolean;
-  isBanner: boolean;
-};
-
-type GroupRef = {
-  groupId: string;
-  slug: string;
-  name: string;
-  isAvatar: boolean;
-  isCover: boolean;
-};
-
-type CrewRef = {
-  crewId: string;
-  slug: string;
-  name: string | null;
-  isAvatar: boolean;
-  isCover: boolean;
-};
-
-type PollRef = {
-  pollOptionId: string;
-  pollId: string;
-  postId: string;
-};
-
-type ArticleRef = {
-  articleId: string;
-  slug: string;
-  title: string | null;
-  authorId: string;
-  /** Cover thumbnail (Article.thumbnailR2Key) vs TipTap body embed. */
-  isInline: boolean;
-};
-
-export type AssetPrimaryType =
-  | 'post'
-  | 'post_thumbnail'
-  | 'message'
-  | 'message_thumbnail'
-  | 'user'
-  | 'group'
-  | 'crew'
-  | 'poll'
-  | 'article'
-  | 'article_inline'
-  | 'announcement'
-  | 'newsletter'
-  | 'channel_upload'
-  | 'orphan';
-
-type PublicationRef = {
-  id: string;
-  title: string;
-  status: string;
-  isInline: boolean;
-};
-
-export type AssetRefs = {
-  channelUploads: ChannelUploadRef[];
-  posts: PostRef[];
-  messages: MessageRef[];
-  users: UserRef[];
-  groups: GroupRef[];
-  crews: CrewRef[];
-  polls: PollRef[];
-  articles: ArticleRef[];
-  announcements: PublicationRef[];
-  newsletters: PublicationRef[];
-  primaryType: AssetPrimaryType;
-};
-
-export function emptyAssetRefs(): AssetRefs {
-  return { channelUploads: [], posts: [], messages: [], users: [], groups: [], crews: [], polls: [], articles: [], announcements: [], newsletters: [], primaryType: 'orphan' };
-}
-
-/** Stable fingerprint of what currently owns an asset, so a delete can detect a changed reference set. */
-export function referencesToken(refs: AssetRefs): string {
-  const { primaryType, ...lists } = refs;
-  const canonical = Object.keys(lists).sort().map((key) => [key, (lists as Record<string, unknown[]>)[key].map((item) => JSON.stringify(item)).sort()]);
-  return createHash('sha256').update(JSON.stringify([primaryType, canonical])).digest('hex').slice(0, 32);
-}
-
-// ============================================================
+import { AdminImageReviewStorageService } from './admin-image-review-storage.service';
+import { AdminImageReferencesService } from './admin-image-review-references.service';
+import { AdminImageReviewActionsService } from './admin-image-review-actions.service';
+import { emptyAssetRefs, referencesToken, type AssetRefs } from './admin-image-review.types';
 
 function parseBool(v: unknown): boolean {
   if (typeof v === 'boolean') return v;
@@ -156,89 +13,28 @@ function parseBool(v: unknown): boolean {
   return ['1', 'true', 'yes', 'on'].includes(s);
 }
 
-function guessKindFromKey(key: string): PostMediaKind | null {
-  const k = (key ?? '').trim().toLowerCase();
-  if (k.endsWith('.gif')) return 'gif';
-  if (k.endsWith('.jpg') || k.endsWith('.jpeg') || k.endsWith('.png') || k.endsWith('.webp')) return 'image';
-  if (k.endsWith('.mp4') || k.endsWith('.webm') || k.endsWith('.mov') || k.endsWith('.m4v')) return 'video';
-  return null;
-}
-
-type CursorToken = { lm: string; id: string };
-
-function encodeCursor(c: CursorToken): string {
-  return Buffer.from(JSON.stringify(c), 'utf8').toString('base64url');
-}
-
-function decodeCursor(token: string | null): CursorToken | null {
-  const t = (token ?? '').trim();
-  if (!t) return null;
-  try {
-    const raw = Buffer.from(t, 'base64url').toString('utf8');
-    const parsed = JSON.parse(raw) as Partial<CursorToken>;
-    const lm = typeof parsed.lm === 'string' ? parsed.lm : '';
-    const id = typeof parsed.id === 'string' ? parsed.id : '';
-    if (!lm || !id) return null;
-    return { lm, id };
-  } catch {
-    return null;
-  }
-}
-
 @Injectable()
 export class AdminImageReviewService {
-  readonly logger = new Logger(AdminImageReviewService.name);
-  private readonly s3: S3Client | null;
-  private readonly bucket: string | null;
+  private readonly logger = new Logger(AdminImageReviewService.name);
 
   constructor(
-    readonly prisma: PrismaService,
-    readonly cfg: AppConfigService,
-    readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
-  ) {
-    const r2 = this.cfg.r2();
-    if (!r2) {
-      this.s3 = null;
-      this.bucket = null;
-      return;
-    }
-    this.bucket = r2.bucket;
-    this.s3 = new S3Client({
-      region: 'auto',
-      endpoint: `https://${r2.accountId}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: r2.accessKeyId,
-        secretAccessKey: r2.secretAccessKey,
-      },
-    });
-  }
-
-  private requireR2(): { s3: S3Client; bucket: string } {
-    if (!this.s3 || !this.bucket) throw new ServiceUnavailableException('R2 is not configured.');
-    return { s3: this.s3, bucket: this.bucket };
-  }
-
-  private bucketForKey(key: string) {
-    if (!isProtectedChannelKey(key)) return this.requireR2().bucket;
-    const bucket = this.cfg.channelMediaBucket();
-    if (!bucket) throw new ServiceUnavailableException('Private channel storage is not configured.');
-    return bucket;
-  }
-
-  private objectKeyPrefix() {
-    return this.cfg.isProd() ? '' : 'dev/';
-  }
+    private readonly prisma: PrismaService,
+    private readonly cfg: AppConfigService,
+    private readonly storage: AdminImageReviewStorageService,
+    private readonly references: AdminImageReferencesService,
+    private readonly actions: AdminImageReviewActionsService,
+  ) {}
 
   /** Snapshot every owned upload, including unused uploads and video derivatives. */
   async accountErasureKeys(userId: string): Promise<string[]> {
     if (!userId || /[/\\]/.test(userId)) throw new BadRequestException('Invalid account.');
-    const { s3, bucket } = this.requireR2();
+    const { s3, bucket } = this.storage.requireR2();
     const keys = new Set<string>();
     for (const area of ['uploads', 'avatars', 'covers', 'banners', 'article-thumbnails', 'article-media', 'announcement-images', ...(this.cfg.channelMediaBucket() ? ['channel-uploads'] : [])]) {
       let continuation: string | undefined;
       do {
-        const page = await s3.send(new ListObjectsV2Command({ Bucket: area === 'channel-uploads' ? this.bucketForKey('channel-uploads/') : bucket,
-          Prefix: `${this.objectKeyPrefix()}${area}/${userId}/`, ContinuationToken: continuation }));
+        const page = await s3.send(new ListObjectsV2Command({ Bucket: area === 'channel-uploads' ? this.storage.bucketForKey('channel-uploads/') : bucket,
+          Prefix: `${this.storage.objectKeyPrefix()}${area}/${userId}/`, ContinuationToken: continuation }));
         for (const item of page.Contents ?? []) if (item.Key) keys.add(item.Key);
         continuation = page.IsTruncated ? page.NextContinuationToken : undefined;
       } while (continuation);
@@ -249,95 +45,17 @@ export class AdminImageReviewService {
   /** Reuse the central ownership resolver; never remove another member's referenced media. */
   async eraseUnreferencedAccountMedia(keys: string[]): Promise<void> {
     if (!keys.length) return;
-    const { s3 } = this.requireR2();
+    const { s3 } = this.storage.requireR2();
     for (let start = 0; start < keys.length; start += 100) {
       const batch = keys.slice(start, start + 100);
-      const references = await this.resolveAllReferences(batch);
+      const references = await this.references.resolveAllReferences(batch);
       for (const key of batch) {
         if (references.get(key)?.primaryType !== 'orphan') continue;
         // S3 deletion is idempotent. Keep the durable receipt until every operation succeeds.
-        await s3.send(new DeleteObjectCommand({ Bucket: this.bucketForKey(key), Key: key }));
+        await s3.send(new DeleteObjectCommand({ Bucket: this.storage.bucketForKey(key), Key: key }));
         await this.prisma.mediaContentHash.deleteMany({ where: { r2Key: key } });
         await this.prisma.mediaSearchNote.deleteMany({ where: { r2Key: key } });
         await this.prisma.mediaAsset.deleteMany({ where: { r2Key: key } });
-      }
-    }
-  }
-
-  publicUrlForKey(key: string | null): string | null {
-    if (key && isProtectedChannelKey(key)) return null;
-    return publicAssetUrl({ publicBaseUrl: this.cfg.r2()?.publicBaseUrl ?? null, key });
-  }
-
-  private async syncSome(opts?: { maxPrefixes?: number; maxPagesPerPrefix?: number }) {
-    const { s3, bucket } = this.requireR2();
-    const prefix = this.objectKeyPrefix();
-
-    // ── SYNC PREFIX REGISTRY ────────────────────────────────────────────────
-    // All R2 subdirectories that can receive uploads. Add here when a new
-    // upload surface is wired so the admin index stays complete.
-    //
-    //   uploads/       — post media, group images, crew images (purpose-routed)
-    //   avatars/       — user profile avatars
-    //   covers/        — legacy (user covers / banners)
-    //   banners/       — legacy
-    //   article-thumbnails/ — article cover thumbnails
-    //   article-media/      — inline images embedded in article body
-    //   announcement-images/ — admin announcement / ad heroes
-    // ────────────────────────────────────────────────────────────────────────
-    const prefixes = [
-      `${prefix}uploads/`,
-      `${prefix}avatars/`,
-      `${prefix}covers/`,
-      `${prefix}banners/`,
-      `${prefix}article-thumbnails/`,
-      `${prefix}article-media/`,
-      `${prefix}announcement-images/`,
-      ...(this.cfg.channelMediaBucket() ? [`${prefix}channel-uploads/`] : []),
-    ].slice(0, opts?.maxPrefixes ?? 20);
-
-    for (const pfx of prefixes) {
-      let continuationToken: string | undefined = undefined;
-      let pages = 0;
-      while (pages < (opts?.maxPagesPerPrefix ?? 2)) {
-        pages += 1;
-        const res: ListObjectsV2CommandOutput = await s3.send(
-          new ListObjectsV2Command({
-            Bucket: isProtectedChannelKey(pfx) ? this.bucketForKey(pfx) : bucket,
-            Prefix: pfx,
-            ContinuationToken: continuationToken,
-            MaxKeys: 1000,
-          }),
-        );
-        continuationToken = res.NextContinuationToken ?? undefined;
-
-        const objs = res.Contents ?? [];
-        if (objs.length === 0) break;
-
-        const now = new Date();
-        for (const o of objs) {
-          const key = (o.Key ?? '').trim();
-          if (!key) continue;
-          const lastModified = o.LastModified ?? null;
-          const bytes = typeof o.Size === 'number' && Number.isFinite(o.Size) ? Math.max(0, Math.floor(o.Size)) : null;
-          const kind = guessKindFromKey(key);
-          await this.prisma.mediaAsset.upsert({
-            where: { r2Key: key },
-            create: {
-              r2Key: key,
-              r2LastModified: lastModified ?? now,
-              bytes: bytes ?? undefined,
-              kind: kind ?? undefined,
-            },
-            update: {
-              r2LastModified: lastModified ?? now,
-              bytes: bytes ?? undefined,
-              kind: kind ?? undefined,
-            },
-          });
-        }
-
-        if (!continuationToken) break;
       }
     }
   }
@@ -372,166 +90,10 @@ export class AdminImageReviewService {
    * ============================================================
    */
   async resolveAllReferences(keys: string[]): Promise<Map<string, AssetRefs>> {
-    return resolveAllReferencesOn(this, keys);
+    return this.references.resolveAllReferences(keys);
   }
-  async resolvePublicationReferences(keys: string[]) {
-    const refs = new Map(keys.map((key) => [key, {
-      announcements: [] as PublicationRef[], newsletters: [] as PublicationRef[],
-    }]));
-    if (!keys.length) return refs;
-    const [announcements, newsletters] = await Promise.all([
-      this.prisma.announcement.findMany({
-        where: { imageKey: { in: keys } },
-        select: { id: true, title: true, status: true, imageKey: true },
-      }),
-      this.prisma.newsletter.findMany({
-        where: { OR: [{ imageKey: { in: keys } }, ...keys.map((key) => ({ bodyJson: { contains: key } }))] },
-        select: { id: true, subject: true, status: true, imageKey: true, bodyJson: true },
-      }),
-    ]);
-    for (const row of announcements) {
-      if (row.imageKey) refs.get(row.imageKey)?.announcements.push({
-        id: row.id, title: row.title, status: row.status, isInline: false,
-      });
-    }
-    for (const row of newsletters) {
-      for (const key of keys) {
-        const cover = row.imageKey === key;
-        const inline = articleBodyContainsKey(row.bodyJson, key);
-        if (cover || inline) refs.get(key)!.newsletters.push({
-          id: row.id, title: row.subject, status: row.status, isInline: !cover,
-        });
-      }
-    }
-    return refs;
-  }
-
-  async list(params: {
-    limit: number;
-    cursor: string | null;
-    q?: string | null;
-    showDeleted?: boolean;
-    onlyOrphans?: boolean;
-    sync?: boolean;
-    kind?: 'all' | 'image' | 'video' | null;
-  }) {
-    const take = Math.max(1, Math.min(100, Math.floor(params.limit || 30)));
-    const showDeleted = Boolean(params.showDeleted);
-    const onlyOrphans = Boolean(params.onlyOrphans);
-    const q = (params.q ?? '').trim();
-    const sync = Boolean(params.sync);
-    const kindFilter = params.kind ?? 'all';
-
-    if (sync) {
-      await this.syncSome({ maxPagesPerPrefix: 2 });
-    }
-
-    const decoded = decodeCursor(params.cursor);
-    const cursorLm = decoded ? new Date(decoded.lm) : null;
-    const cursorId = decoded ? decoded.id : null;
-
-    const kindWhere: Prisma.MediaAssetWhereInput =
-      kindFilter === 'image' ? { kind: { in: ['image', 'gif'] } } : kindFilter === 'video' ? { kind: 'video' } : {};
-
-    const where: Prisma.MediaAssetWhereInput = {
-      ...(showDeleted ? {} : { deletedAt: null }),
-      ...(q ? { r2Key: { contains: q, mode: 'insensitive' } } : {}),
-      ...kindWhere,
-    };
-
-    const out: any[] = [];
-    let scannedThrough: { r2LastModified: Date; id: string } | null = null;
-    let scanCursor = decoded ? { lm: cursorLm as Date, id: cursorId as string } : null;
-
-    for (let pass = 0; pass < 4 && out.length < take; pass++) {
-      const page = await this.prisma.mediaAsset.findMany({
-        where: {
-          AND: [
-            where,
-            ...(scanCursor
-              ? [
-                  {
-                    OR: [
-                      { r2LastModified: { lt: scanCursor.lm } },
-                      { r2LastModified: scanCursor.lm, id: { lt: scanCursor.id } },
-                    ],
-                  } as Prisma.MediaAssetWhereInput,
-                ]
-              : []),
-          ],
-        },
-        orderBy: [{ r2LastModified: 'desc' }, { id: 'desc' }],
-        take: take + 50,
-      });
-
-      if (!page.length) break;
-
-      const keys = page.map((x) => x.r2Key);
-      const refsMap = await this.resolveAllReferences(keys);
-
-      for (const a of page) {
-        scannedThrough = { r2LastModified: a.r2LastModified ?? a.createdAt, id: a.id };
-        const refs = refsMap.get(a.r2Key) ?? emptyAssetRefs();
-        const { primaryType } = refs;
-        if (onlyOrphans && primaryType !== 'orphan') continue;
-
-        const postRef = refs.posts[0];
-        const userRef = refs.users[0];
-        const groupRef = refs.groups[0];
-        const crewRef = refs.crews[0];
-        const pollRef = refs.polls[0];
-        const articleRef = refs.articles[0];
-        const msgRef = refs.messages[0];
-        const upload = refs.channelUploads[0];
-
-        out.push({
-          id: a.id,
-          r2Key: a.r2Key,
-          kind: a.kind ?? null,
-          lastModified: (a.r2LastModified ?? a.createdAt).toISOString(),
-          publicUrl: this.publicUrlForKey(a.deletedAt ? null : a.r2Key),
-          deletedAt: a.deletedAt ? a.deletedAt.toISOString() : null,
-          belongsToSummary: primaryType,
-          // Post (backward compat fields preserved)
-          postId: postRef?.postId ?? null,
-          authorUsername: postRef?.authorUsername ?? null,
-          // User (backward compat fields preserved)
-          userId: userRef?.userId ?? null,
-          profileUsername: userRef?.username ?? null,
-          // New fields
-          groupId: groupRef?.groupId ?? msgRef?.groupId ?? upload?.groupId ?? null,
-          groupName: groupRef?.name ?? msgRef?.groupName ?? upload?.groupName ?? null,
-          groupSlug: groupRef?.slug ?? msgRef?.groupSlug ?? upload?.groupSlug ?? null,
-          channelId: msgRef?.channelId ?? upload?.channelId ?? null,
-          channelName: msgRef?.channelName ?? upload?.channelName ?? null,
-          channelPrivacy: msgRef?.channelPrivacy ?? null,
-          uploaderUsername: msgRef?.senderUsername ?? upload?.username ?? null,
-          uploaderId: msgRef?.senderId ?? upload?.userId ?? null,
-          crewId: crewRef?.crewId ?? null,
-          crewName: crewRef?.name ?? null,
-          crewSlug: crewRef?.slug ?? null,
-          pollPostId: pollRef?.postId ?? null,
-          articleId: articleRef?.articleId ?? null,
-          articleSlug: articleRef?.slug ?? null,
-          messageId: msgRef?.messageId ?? null,
-          announcementId: refs.announcements[0]?.id ?? null,
-          newsletterId: refs.newsletters[0]?.id ?? null,
-        });
-        if (out.length >= take) break;
-      }
-
-      const last = page[page.length - 1];
-      if (!last) break;
-      scanCursor = { lm: last.r2LastModified ?? last.createdAt, id: last.id };
-      if (page.length < take + 50) break;
-    }
-
-    const nextCursor =
-      out.length >= take && scannedThrough
-        ? encodeCursor({ lm: scannedThrough.r2LastModified.toISOString(), id: scannedThrough.id })
-        : null;
-
-    return { items: out, nextCursor };
+  async list(params: { limit: number; cursor: string | null; q?: string | null; showDeleted?: boolean; onlyOrphans?: boolean; sync?: boolean; kind?: 'all' | 'image' | 'video' | null }) {
+    return this.actions.list(params);
   }
 
   async getById(id: string) {
@@ -540,10 +102,10 @@ export class AdminImageReviewService {
     const a = await this.prisma.mediaAsset.findUnique({ where: { id: assetId } });
     if (!a) throw new NotFoundException('Not found.');
 
-    const refsMap = await this.resolveAllReferences([a.r2Key]);
+    const refsMap = await this.references.resolveAllReferences([a.r2Key]);
     const refs = refsMap.get(a.r2Key) ?? emptyAssetRefs();
 
-    const publicUrl = this.publicUrlForKey(a.deletedAt ? null : a.r2Key);
+    const publicUrl = this.storage.publicUrlForKey(a.deletedAt ? null : a.r2Key);
 
     return {
       asset: {
@@ -595,221 +157,7 @@ export class AdminImageReviewService {
   }
 
   async deleteById(params: { id: string; adminUserId: string; reason?: string | null; onlyOrphans?: boolean; expectedReferencesToken?: string | null }) {
-    const assetId = (params.id ?? '').trim();
-    if (!assetId) throw new NotFoundException('Not found.');
-    const reason = (params.reason ?? '').trim() || null;
-    if (!reason) throw new BadRequestException('Reason is required.');
-
-    const a = await this.prisma.mediaAsset.findUnique({ where: { id: assetId } });
-    if (!a) throw new NotFoundException('Not found.');
-    if (a.deletedAt) {
-      return { success: true, alreadyDeleted: true };
-    }
-
-    if (params.expectedReferencesToken) {
-      const current = (await this.resolveAllReferences([a.r2Key])).get(a.r2Key) ?? emptyAssetRefs();
-      if (referencesToken(current) !== params.expectedReferencesToken) {
-        throw new ConflictException({ message: 'This media\'s references changed since you reviewed it. Review it again before deleting.', error: 'references_changed' });
-      }
-    }
-
-    if (params.onlyOrphans) {
-      const refs = (await this.resolveAllReferences([a.r2Key])).get(a.r2Key)!;
-      if (refs.primaryType !== 'orphan') {
-        throw new BadRequestException('This media is now in use and is no longer an orphan. Refresh media review before deleting.');
-      }
-    }
-
-    // Recheck on deletion, not just when the review list was loaded. Bulk deletion
-    // uses this same path, so stale orphan selections cannot erase publication media.
-    const publicationRefs = (await this.resolvePublicationReferences([a.r2Key])).get(a.r2Key)!;
-    if (publicationRefs.announcements.length || publicationRefs.newsletters.length) {
-      throw new BadRequestException('This media is still used by an announcement or newsletter. Remove or replace it there first; sent newsletter images must be retained.');
-    }
-
-    const now = new Date();
-    const r2Key = a.r2Key;
-    const fullUrl = this.publicUrlForKey(r2Key);
-
-    const affected = await this.prisma.$transaction(async (tx) => {
-      // ── Tombstone the asset index row ──────────────────────────────────────
-      await tx.mediaAsset.update({
-        where: { id: a.id },
-        data: {
-          deletedAt: now,
-          deletedByAdminId: params.adminUserId,
-          deleteReason: reason,
-        },
-      });
-
-      if (isProtectedChannelKey(r2Key)) await tx.groupChannelUpload.deleteMany({ where: { OR: [{ sourceKey: r2Key }, { r2Key }] } });
-
-      // Prevent future "same file" uploads from reusing this tombstoned key.
-      await tx.mediaContentHash.deleteMany({ where: { r2Key } });
-      await tx.mediaSearchNote.deleteMany({ where: { r2Key } });
-
-      // ── PostMedia: tombstone rows where this is the main asset ─────────────
-      const postMediaDirect = await tx.postMedia.findMany({
-        where: { r2Key, source: 'upload' },
-        select: { id: true, postId: true },
-      });
-      if (postMediaDirect.length) {
-        await tx.postMedia.updateMany({
-          where: { r2Key, source: 'upload' },
-          data: { deletedAt: now, deletedByAdminId: params.adminUserId, deletedReason: reason },
-        });
-      }
-
-      // ── PostMedia: null out thumbnail where this is a poster frame ─────────
-      const { count: postMediaThumbnailCount } = await tx.postMedia.updateMany({
-        where: { thumbnailR2Key: r2Key },
-        data: { thumbnailR2Key: null },
-      });
-
-      // ── MessageMedia: hard-delete rows where this is the main upload ───────
-      // (MessageMedia has no tombstone field; the message body still exists)
-      const { count: messageMediaCount } = await tx.messageMedia.deleteMany({ where: { r2Key, source: 'upload' } });
-
-      // ── MessageMedia: null out thumbnail ───────────────────────────────────
-      const { count: messageMediaThumbnailCount } = await tx.messageMedia.updateMany({
-        where: { thumbnailR2Key: r2Key },
-        data: { thumbnailR2Key: null },
-      });
-
-      await tx.avatarVideoUpload.updateMany({
-        where: { OR: [{ sourceKey: r2Key }, { videoKey: r2Key }, { posterKey: r2Key }] },
-        data: { status: 'cancelled' },
-      });
-      // ── User avatar / banner ───────────────────────────────────────────────
-      const users = await tx.user.findMany({
-        where: { OR: [{ avatarKey: r2Key }, { avatarVideoKey: r2Key }, { bannerKey: r2Key }] },
-        select: { id: true, username: true, avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true, bannerKey: true },
-      });
-      const invalidatedUsers: Array<{ id: string; username: string | null }> = [];
-      for (const u of users) {
-        const data: Prisma.UserUpdateInput = {};
-        if (u.avatarKey === r2Key || u.avatarVideoKey === r2Key) { data.avatarKey = null; data.avatarVideoKey = null; data.avatarVideoDurationMs = null; data.avatarRevision = { increment: 1 }; data.avatarUpdatedAt = now; }
-        if (u.bannerKey === r2Key) { data.bannerKey = null; data.bannerUpdatedAt = now; }
-        if (Object.keys(data).length) {
-          await tx.user.update({ where: { id: u.id }, data });
-          invalidatedUsers.push({ id: u.id, username: u.username ?? null });
-        }
-      }
-
-      // ── CommunityGroup avatar / cover (URL, raw key, or URL containing key) ─
-      const groupUrlOrKey = [
-        ...(fullUrl ? [fullUrl] : []),
-        r2Key,
-      ];
-      const groupsHit = await tx.communityGroup.findMany({
-        where: {
-          OR: [
-            { avatarImageUrl: { in: groupUrlOrKey } },
-            { coverImageUrl: { in: groupUrlOrKey } },
-            { avatarImageUrl: { contains: r2Key } },
-            { coverImageUrl: { contains: r2Key } },
-          ],
-        },
-        select: { id: true, avatarImageUrl: true, coverImageUrl: true },
-        take: 50,
-      });
-      let groupCount = 0;
-      for (const g of groupsHit) {
-        const data: Prisma.CommunityGroupUpdateInput = {};
-        if (g.avatarImageUrl && (g.avatarImageUrl === fullUrl || g.avatarImageUrl === r2Key || g.avatarImageUrl.includes(r2Key))) {
-          data.avatarImageUrl = null;
-        }
-        if (g.coverImageUrl && (g.coverImageUrl === fullUrl || g.coverImageUrl === r2Key || g.coverImageUrl.includes(r2Key))) {
-          data.coverImageUrl = null;
-        }
-        if (Object.keys(data).length) {
-          await tx.communityGroup.update({ where: { id: g.id }, data });
-          groupCount += 1;
-        }
-      }
-
-      const crewsHit = await tx.crew.findMany({
-        where: {
-          OR: [
-            { avatarImageUrl: { in: groupUrlOrKey } },
-            { coverImageUrl: { in: groupUrlOrKey } },
-            { avatarImageUrl: { contains: r2Key } },
-            { coverImageUrl: { contains: r2Key } },
-          ],
-        },
-        select: { id: true, avatarImageUrl: true, coverImageUrl: true },
-        take: 50,
-      });
-      let crewCount = 0;
-      for (const c of crewsHit) {
-        const data: Prisma.CrewUpdateInput = {};
-        if (c.avatarImageUrl && (c.avatarImageUrl === fullUrl || c.avatarImageUrl === r2Key || c.avatarImageUrl.includes(r2Key))) {
-          data.avatarImageUrl = null;
-        }
-        if (c.coverImageUrl && (c.coverImageUrl === fullUrl || c.coverImageUrl === r2Key || c.coverImageUrl.includes(r2Key))) {
-          data.coverImageUrl = null;
-        }
-        if (Object.keys(data).length) {
-          await tx.crew.update({ where: { id: c.id }, data });
-          crewCount += 1;
-        }
-      }
-
-      // ── PostPollOption image ───────────────────────────────────────────────
-      const { count: pollOptionCount } = await tx.postPollOption.updateMany({
-        where: { imageR2Key: r2Key },
-        data: { imageR2Key: null },
-      });
-
-      // ── Article cover thumbnail ────────────────────────────────────────────
-      const { count: articleThumbCount } = await tx.article.updateMany({
-        where: { thumbnailR2Key: r2Key },
-        data: { thumbnailR2Key: null },
-      });
-
-      // ── Article TipTap body embeds (inline article-media) ──────────────────
-      const articlesWithBody = await tx.article.findMany({
-        where: { body: { contains: r2Key } },
-        select: { id: true, body: true },
-      });
-      let articleInlineCount = 0;
-      for (const art of articlesWithBody) {
-        const scrubbed = scrubKeyFromArticleBody(art.body, r2Key);
-        if (!scrubbed.changed) continue;
-        await tx.article.update({ where: { id: art.id }, data: { body: scrubbed.body } });
-        articleInlineCount += 1;
-      }
-
-      return {
-        postMediaCount: postMediaDirect.length,
-        postMediaThumbnailCount,
-        messageMediaCount,
-        messageMediaThumbnailCount,
-        userCount: users.length,
-        groupCount,
-        crewCount,
-        pollOptionCount,
-        articleCount: articleThumbCount + articleInlineCount,
-        articleThumbCount,
-        articleInlineCount,
-        invalidatedUsers,
-      };
-    });
-
-    const { invalidatedUsers, ...affectedCounts } = affected;
-    for (const u of invalidatedUsers) {
-      await this.publicProfileCache.invalidateForUser(u);
-    }
-
-    // ── Hard-delete from R2 ────────────────────────────────────────────────
-    const { s3 } = this.requireR2();
-    try {
-      await s3.send(new DeleteObjectCommand({ Bucket: this.bucketForKey(r2Key), Key: r2Key }));
-      await this.prisma.mediaAsset.update({ where: { id: a.id }, data: { r2DeletedAt: new Date() } });
-      return { success: true, alreadyDeleted: false, r2Deleted: true, ...affectedCounts };
-    } catch (e: unknown) {
-      return { success: true, alreadyDeleted: false, r2Deleted: false, error: String((e as any)?.message ?? e), ...affectedCounts };
-    }
+    return this.actions.deleteById(params);
   }
 
   /**
@@ -847,3 +195,8 @@ export class AdminImageReviewService {
     return parseBool(v);
   }
 }
+export type { AssetRefs } from './admin-image-review.types';
+export type { AssetPrimaryType } from './admin-image-review.types';
+export type { MessageRef } from './admin-image-review.types';
+export type { PostRef } from './admin-image-review.types';
+export type { UserRef } from './admin-image-review.types';

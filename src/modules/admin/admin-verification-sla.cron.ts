@@ -1,3 +1,4 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
@@ -58,7 +59,7 @@ export class AdminVerificationSlaCron {
   private async emailAdmins(count: number, oldestHours: number): Promise<void> {
     if (!this.appConfig.email()) return;
     const admins = await this.prisma.user.findMany({
-      where: { siteAdmin: true, email: { not: null }, emailVerifiedAt: { not: null }, bannedAt: null },
+      where: { siteAdmin: true, email: { not: null }, emailVerifiedAt: { not: null }, ...NOT_BANNED_USER_WHERE },
       select: { email: true },
     });
     const noun = count === 1 ? 'request has' : 'requests have';

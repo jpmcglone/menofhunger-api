@@ -5,9 +5,9 @@ export const PICKAX_API_BASE = 'https://api.pickax.com/third-party/v1';
 export class PickaxApiError extends Error {
   constructor(
     readonly status: number,
-    readonly code: string,
+    private readonly code: string,
     message: string,
-    readonly retryAfterSeconds: number | null = null,
+    private readonly retryAfterSeconds: number | null = null,
   ) {
     super(message);
   }

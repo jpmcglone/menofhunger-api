@@ -10,7 +10,7 @@
  * - onQuoteChanged: guards self-quote (actor == recipient → no notification).
  */
 
-import { PostsSideEffectsHandler } from './posts-side-effects.handler';
+import { makePostsSideEffectsHandler } from './posts-side-effects.testing';
 import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ function makeQuoteHandler(overrides: {
   const sideEffects: any = { dispatch: jest.fn() };
 
   const registry = new SideEffectsRegistry();
-  const handler = new PostsSideEffectsHandler(
+  const handler = makePostsSideEffectsHandler(
     prisma, notifications, presenceRealtime, appConfig, jobs, marvIdentity, linkMetadata, registry, sideEffects,
     { enqueueIfNeeded: jest.fn(async () => undefined) } as any,
   );

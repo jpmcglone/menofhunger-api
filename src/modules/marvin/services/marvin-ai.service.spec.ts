@@ -14,6 +14,7 @@ import {
   MARV_DEFAULT_SMART_MODEL,
 } from '../marvin-models';
 import { MARV_ADMIN_INSTRUCTIONS, MARV_SYSTEM_PROMPT, MARV_SYSTEM_PROMPT_VERSION } from '../marvin-system-prompt';
+import { extractToolImageUrls } from './marvin-ai.response';
 
 // Capture the args passed to openai.responses.create so we can assert the payload shape.
 const mockResponsesCreate = jest.fn();
@@ -432,12 +433,12 @@ describe('MarvinAIService request knobs', () => {
 describe('MarvinAIService.extractToolImageUrls', () => {
   it('reads imageUrls from a single post and a list', () => {
     expect(
-      MarvinAIService.extractToolImageUrls(
+      extractToolImageUrls(
         JSON.stringify({ imageUrls: ['https://cdn.test/a.jpg'] }),
       ),
     ).toEqual(['https://cdn.test/a.jpg']);
     expect(
-      MarvinAIService.extractToolImageUrls(
+      extractToolImageUrls(
         JSON.stringify({
           posts: [{ imageUrls: ['https://cdn.test/b.jpg'] }, { imageUrls: ['not-a-url'] }],
         }),

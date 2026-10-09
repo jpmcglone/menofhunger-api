@@ -10,6 +10,7 @@ import { XConnectionService } from "./x-connection.service";
 import type { XAuthorMetricsDto } from "../../common/dto/integrations.dto";
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 @Injectable()
 export class XAuthorMetricsService {
   constructor(
@@ -24,11 +25,11 @@ export class XAuthorMetricsService {
   ) {}
 
   async get(userId: string, postId: string): Promise<XAuthorMetricsDto | null> {
-    const post = await this.postsRead.read.findFirst({
+    const post = await this.postsRead.findFirst({
       where: {
         id: postId,
         userId,
-        deletedAt: null,
+        ...NOT_DELETED,
         visibility: "public",
         isDraft: false,
       },

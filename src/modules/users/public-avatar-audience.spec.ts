@@ -6,7 +6,7 @@ describe('public video avatar viewing', () => {
     const controller = Object.assign(Object.create(UsersPublicProfileService.prototype), {
       prisma: { user: { findUnique: jest.fn(async () => ({ verifiedStatus: viewer === 'verified' ? 'identity' : 'none' })) },
         crewMember: { findFirst: jest.fn(async () => null) }, post: { count: jest.fn(async () => 0), aggregate: jest.fn(async () => ({ _sum: { boostCount: 0 } })) }, article: { count: jest.fn(async () => 0) } },
-      postsRead: { read: { count: jest.fn(async () => 0), aggregate: jest.fn(async () => ({ _sum: { boostCount: 0 } })) } },
+      postsRead: { count: jest.fn(async () => 0), aggregate: jest.fn(async () => ({ _sum: { boostCount: 0 } })) },
       appConfig: { isProd: () => true }, posthog: { capture: jest.fn() },
       publicProfiles: { getByUsernameOrId: jest.fn(async () => ({ payload: { id: 'owner', avatarUrl: 'https://cdn.test/poster.jpg', avatarVideo } })),
         batchOrgAffiliations: jest.fn(async () => new Map()) },

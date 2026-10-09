@@ -1,10 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
-import { PrismaService } from '../prisma/prisma.service';
-import { NotificationsService } from '../notifications/notifications.service';
-import { JobsService } from '../jobs/jobs.service';
-import { JOBS } from '../jobs/jobs.constants';
-import { AppConfigService } from '../app/app-config.service';
+import { NotificationCreatorService } from "../notifications";
+import { Injectable, Logger, Inject } from "@nestjs/common";
+import { Cron } from "@nestjs/schedule";
+import { PrismaService } from "../prisma/prisma.service";
+import { JobsService } from "../jobs/jobs.service";
+import { JOBS } from "../jobs/jobs.constants";
+import { AppConfigService } from "../app/app-config.service";
+import { NOT_DELETED } from "../../common/prisma/where";
 
 @Injectable()
 export class PostsPollResultsReadyCron {
@@ -13,7 +14,8 @@ export class PostsPollResultsReadyCron {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly notifications: NotificationsService,
+    @Inject(NotificationCreatorService)
+    private readonly notifications: Pick<NotificationCreatorService, "create">,
     private readonly jobs: JobsService,
     private readonly appConfig: AppConfigService,
   ) {}
@@ -26,17 +28,22 @@ export class PostsPollResultsReadyCron {
    * We do NOT schedule one job per poll; instead we run a lightweight periodic sweep.
    * This keeps deploys/restarts simple and avoids managing a dynamic job registry.
    *
-   * Delivery goes through NotificationsService.create so each recipient gets the full
+   * Delivery goes through NotificationCreatorService.create so each recipient gets the full
    * fan-out (in-app row, undelivered counter, notifications:new, push).
    */
-  @Cron('*/1 * * * *')
+  @Cron("*/1 * * * *")
   async notifyEndedPolls() {
     if (!this.appConfig.runSchedulers()) return;
     try {
-      await this.jobs.enqueueCron(JOBS.postsPollResultsReadySweep, {}, 'cron-postsPollResultsReadySweep', {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 30_000 },
-      });
+      await this.jobs.enqueueCron(
+        JOBS.postsPollResultsReadySweep,
+        {},
+        "cron-postsPollResultsReadySweep",
+        {
+          attempts: 3,
+          backoff: { type: "exponential", delay: 30_000 },
+        },
+      );
     } catch {
       // likely duplicate jobId while previous run is active; treat as no-op
     }
@@ -53,9 +60,9 @@ export class PostsPollResultsReadyCron {
         where: {
           endsAt: { lte: now },
           resultsNotifiedAt: null,
-          post: { deletedAt: null },
+          post: NOT_DELETED,
         },
-        orderBy: [{ endsAt: 'asc' }, { id: 'asc' }],
+        orderBy: [{ endsAt: "asc" }, { id: "asc" }],
         take: 25,
         select: {
           id: true,
@@ -71,15 +78,20 @@ export class PostsPollResultsReadyCron {
         const pollId = p.id;
         const postId = p.postId;
         const authorId = p.post.userId;
-        const postBodySnippet = (p.post.body ?? '').trim().slice(0, 150) || null;
+        const postBodySnippet =
+          (p.post.body ?? "").trim().slice(0, 150) || null;
         const totalVotes = p._count.votes;
         const voteLabel =
-          totalVotes === 0 ? 'No votes' : totalVotes === 1 ? '1 vote' : `${totalVotes} votes`;
+          totalVotes === 0
+            ? "No votes"
+            : totalVotes === 1
+              ? "1 vote"
+              : `${totalVotes} votes`;
 
         // Tiered copy — author gets engagement context, voters get a simple results ping.
         let authorTitle: string;
         if (totalVotes === 0) {
-          authorTitle = 'Your poll was a dud · No votes';
+          authorTitle = "Your poll was a dud · No votes";
         } else if (totalVotes < 10) {
           authorTitle = `Your poll got a few votes · ${voteLabel}`;
         } else if (totalVotes < 40) {
@@ -98,7 +110,7 @@ export class PostsPollResultsReadyCron {
         }
 
         // Claim the poll in a transaction so concurrent sweeps don't double-notify.
-        // Notification rows are created outside via NotificationsService.create so each
+        // Notification rows are created outside via NotificationCreatorService.create so each
         // recipient gets push + notifications:new + undelivered counter increment.
         const recipientUserIds = await this.prisma.$transaction(async (tx) => {
           const livePost = await tx.post.findUnique({
@@ -117,10 +129,12 @@ export class PostsPollResultsReadyCron {
           const voters = await tx.postPollVote.findMany({
             where: { pollId },
             select: { userId: true },
-            distinct: ['userId'],
+            distinct: ["userId"],
           });
 
-          const recipients = new Set<string>([authorId, ...voters.map((v) => v.userId)].filter(Boolean));
+          const recipients = new Set<string>(
+            [authorId, ...voters.map((v) => v.userId)].filter(Boolean),
+          );
           return [...recipients];
         });
 
@@ -131,13 +145,11 @@ export class PostsPollResultsReadyCron {
             // self-skip (it returns early when actorUserId === recipientUserId).
             await this.notifications.create({
               recipientUserId: uid,
-              kind: 'poll_results_ready',
+              kind: "poll_results_ready",
               ...(isAuthor ? {} : { actorUserId: authorId }),
               subjectPostId: postId,
-              title: isAuthor
-                ? authorTitle
-                : voterTitle,
-              body: postBodySnippet ?? 'Tap to see the final results.',
+              title: isAuthor ? authorTitle : voterTitle,
+              body: postBodySnippet ?? "Tap to see the final results.",
             });
           } catch (err) {
             this.logger.warn(
@@ -148,9 +160,13 @@ export class PostsPollResultsReadyCron {
       }
 
       const ms = Date.now() - startedAt;
-      this.logger.log(`Poll results-ready sweep: processed=${polls.length} (${ms}ms)`);
+      this.logger.log(
+        `Poll results-ready sweep: processed=${polls.length} (${ms}ms)`,
+      );
     } catch (err) {
-      this.logger.warn(`Poll results-ready sweep failed: ${(err as Error).message}`);
+      this.logger.warn(
+        `Poll results-ready sweep failed: ${(err as Error).message}`,
+      );
     } finally {
       this.running = false;
     }

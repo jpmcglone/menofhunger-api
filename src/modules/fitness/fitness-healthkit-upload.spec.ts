@@ -1,4 +1,4 @@
-import { HEALTHKIT_UPLOAD_LIMITS, uploadHealthKitSchema } from './fitness.controller';
+import { HEALTHKIT_UPLOAD_LIMITS, uploadHealthKitSchema } from './fitness.schemas';
 
 describe('HealthKit upload caps', () => {
   it('rejects a payload larger than the iOS sync window', () => {

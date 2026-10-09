@@ -1,70 +1,34 @@
+import { NotificationEngagementWriterService } from "../notifications";
+import { NotificationCreatorService } from "../notifications/notification-creator.service";
+import { NotificationInviteWriterService } from "../notifications/notification-invite-writer.service";
+import { POST_LIST_INCLUDE } from '../../common/prisma-includes/post.include';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
 import { ContentScreenService } from '../moderation-screen/content-screen.service';
-import { Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common';
-import { BOARD_THREAD_PREVIEW_INCLUDE } from '../../common/prisma-includes/post.include';
-import type { Prisma } from '@prisma/client';
+import { Inject, Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common';
 import type { CommunityGroupJoinPolicy, PostVisibility } from '@prisma/client';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { toPostDto } from '../../common/dto/post.dto';
 import { toUserDto } from '../../common/dto/user.dto';
-import { parseMentionsFromBody } from '../../common/mentions/mention-regex';
-import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 import { AppConfigService } from '../app/app-config.service';
-import { JOBS } from '../jobs/jobs.constants';
 import { JobsService } from '../jobs/jobs.service';
 import { PostsTopicsClassifyService } from './posts-topics-classify.service';
 import { LinkMetadataService } from '../link-metadata/link-metadata.service';
-import { MarvinAddressingService, isAddressedToMarv } from '../marvin/services/marvin-addressing.service';
+import { MarvinAddressingService } from '../marvin/services/marvin-addressing.service';
 import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
-import { NotificationsService } from '../notifications/notifications.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { FANOUT_CONCURRENCY, runInBatches } from '../side-effects/batch';
-import { chunk } from '../../common/arrays/chunk';
-import {
-  FANOUT_CHUNK_SIZE,
-  FANOUT_CHUNK_THRESHOLD,
-  type SideEffectPayloads,
-} from '../side-effects/side-effects.constants';
+import { type SideEffectPayloads } from '../side-effects/side-effects.constants';
 import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
 import { SideEffectsService } from '../side-effects/side-effects.service';
-import { resolveMentionUsernames } from './posts-mentions.helpers';
-import { notDeletedWhere } from './posts-query-builders';
 import { listCrewmateUserIds } from '../viewer/crew-membership.queries';
-
-/** Thread participant role for reply notifications. */
-const REPLY_TITLE = {
-  root_author: 'replied to your post',
-  reply_author: 'replied to your comment',
-  mentioned_in_root: "replied to a post you're mentioned in",
-  mentioned_in_reply: "replied to a comment you're mentioned in",
-} as const;
-
-/** Same roles, worded for Board threads so the row and push name the Board. */
-const BOARD_REPLY_TITLE: Record<keyof typeof REPLY_TITLE, string> = {
-  root_author: 'commented on your Board post',
-  reply_author: 'replied to your Board comment',
-  mentioned_in_root: "commented on a Board post you're mentioned in",
-  mentioned_in_reply: "replied to a Board comment you're mentioned in",
-};
-
-type ReplyRole = keyof typeof REPLY_TITLE;
-
-type ThreadPostForRoles = {
-  id: string;
-  parentId: string | null;
-  userId: string;
-  mentions: { userId: string }[];
-};
-
-type PostWithRelations = Prisma.PostGetPayload<{
-  include: {
-    user: { select: typeof USER_LIST_SELECT };
-    media: true;
-    mentions: { include: { user: { select: typeof MENTION_USER_SELECT } } };
-    poll: { include: { options: true } };
-  };
-}>;
+import { listActiveGroupMemberIds, listActiveGroupMemberPreferences } from '../viewer/group-membership.queries';
+import { REPLY_TITLE, BOARD_REPLY_TITLE, type ReplyRole, type ThreadPostForRoles, type PostWithRelations } from './posts-side-effects.constants';
+import { extractLinks } from '../link-metadata/link-metadata-extract';
+import { PostsCreatedEffectsService } from './posts-created-effects.service';
+import { PostsEngagementEffectsService } from './posts-engagement-effects.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 /**
  * Everything that happens *because* a post was created or deleted, run off the request path on
@@ -78,11 +42,13 @@ type PostWithRelations = Prisma.PostGetPayload<{
  */
 @Injectable()
 export class PostsSideEffectsHandler implements OnModuleInit {
-  private readonly logger = new Logger(PostsSideEffectsHandler.name);
+  readonly logger = new Logger(PostsSideEffectsHandler.name);
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly notifications: NotificationsService,
+    @Inject(NotificationEngagementWriterService) private readonly notificationEngagementWriterService: Pick< NotificationEngagementWriterService, "upsertRepostNotification" >,
+    @Inject(NotificationCreatorService) private readonly notificationCreatorService: Pick< NotificationCreatorService, "create" >,
+    @Inject(NotificationInviteWriterService) private readonly notificationInviteWriterService: Pick< NotificationInviteWriterService, "createGroupPostBadgeNotifications" >,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly appConfig: AppConfigService,
     private readonly jobs: JobsService,
@@ -91,6 +57,8 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     private readonly registry: SideEffectsRegistry,
     private readonly sideEffects: SideEffectsService,
     private readonly topicsClassify: PostsTopicsClassifyService,
+    private readonly engagementEffects: PostsEngagementEffectsService,
+    private readonly createdEffects: PostsCreatedEffectsService,
     @Optional() private readonly marvAddressing?: MarvinAddressingService,
     @Optional() private readonly embeddings?: EmbeddingsService,
     @Optional() private readonly contentScreen?: ContentScreenService,
@@ -119,153 +87,26 @@ export class PostsSideEffectsHandler implements OnModuleInit {
 
   // ─── post.engagement.changed ──────────────────────────────────────────
 
-  /**
-   * Reconcile the author's boost/repost notification with the current engagement state.
-   *
-   * The un-boost / un-repost direction deletes rather than writes, which makes the pair
-   * naturally idempotent: whichever job runs last wins, and a retry converges on the same
-   * result as the first attempt.
-   */
-  private async onEngagementChanged(payload: SideEffectPayloads['post.engagement.changed']): Promise<void> {
-    const { kind, active, postId, recipientUserId, actorUserId } = payload;
-    if (!postId || !recipientUserId || !actorUserId) return;
-
-    if (!active) {
-      await (kind === 'boost'
-        ? this.notifications.deleteBoostNotification(recipientUserId, actorUserId, postId)
-        : this.notifications.deleteRepostNotification(recipientUserId, actorUserId, postId));
-      return;
-    }
-
-    if (kind === 'repost') {
-      await this.notifications.upsertRepostNotification({
-        recipientUserId,
-        actorUserId,
-        subjectPostId: postId,
-        actorPostId: payload.actorPostId ?? undefined,
-      });
-      return;
-    }
-
-    // Re-read the body so a retry carries the post's current text, not a request-time snapshot.
-    const post = await this.prisma.post.findFirst({
-      where: { id: postId, deletedAt: null },
-      select: { body: true, kind: true },
-    });
-    if (!post) return;
-
-    await this.notifications.upsertBoostNotification({
-      recipientUserId,
-      actorUserId,
-      subjectPostId: postId,
-      bodySnippet: (post.body ?? '').trim().slice(0, 150) || null,
-      subjectPostKind: post.kind,
-    });
+  async onEngagementChanged(payload: SideEffectPayloads['post.engagement.changed']) : Promise<void> {
+    return this.engagementEffects.onEngagementChanged(payload);
   }
 
   // ─── post.quote.changed ───────────────────────────────────────────────
 
-  /**
-   * When a post's quoted link changes, reconcile the 'repost' notification on both the old
-   * and new quoted targets, then re-emit `posts:liveUpdated` so open viewers update quote info.
-   *
-   * Idempotent: deleteRepost + upsertRepost both converge on retries.
-   */
-  private async onQuoteChanged(payload: SideEffectPayloads['post.quote.changed']): Promise<void> {
-    const { postId, actorUserId, prevQuotedPostId, nextQuotedPostId } = payload;
-    if (!postId || !actorUserId) return;
-
-    // Fetch the editing post body for the new-target notification snippet.
-    const editingPost = await this.prisma.post.findFirst({
-      where: { id: postId, deletedAt: null },
-      select: { body: true },
-    });
-
-    // Delete the quote notification on the old target (if any and non-self).
-    if (prevQuotedPostId) {
-      const prevOwner = await this.prisma.post.findFirst({
-        where: { id: prevQuotedPostId },
-        select: { userId: true },
-      });
-      if (prevOwner && prevOwner.userId !== actorUserId) {
-        // Uses the same notification row as a regular repost; keyed by
-        // (recipientUserId, actorUserId, subjectPostId=quoted, kind='repost').
-        await this.notifications.deleteRepostNotification(prevOwner.userId, actorUserId, prevQuotedPostId);
-      }
-    }
-
-    // Upsert a new quote notification on the new target (if any and non-self).
-    if (nextQuotedPostId && editingPost) {
-      const nextTarget = await this.prisma.post.findFirst({
-        where: { id: nextQuotedPostId, deletedAt: null },
-        select: { userId: true },
-      });
-      if (nextTarget && nextTarget.userId !== actorUserId) {
-        await this.notifications.upsertRepostNotification({
-          recipientUserId: nextTarget.userId,
-          actorUserId,
-          subjectPostId: nextQuotedPostId,
-          actorPostId: postId,
-          title: 'quoted your post',
-        });
-      }
-    }
-
-    // Best-effort realtime emits so open viewers see the updated quote counts.
-    const now = new Date().toISOString();
-    for (const pid of [prevQuotedPostId, nextQuotedPostId].filter(Boolean) as string[]) {
-      try {
-        this.presenceRealtime.emitPostsLiveUpdated(pid, {
-          postId: pid,
-          version: now,
-          reason: 'quote_count_changed',
-          patch: {},
-        });
-      } catch { /* best-effort */ }
-    }
-
-    // Re-emit on the editing post so its viewers pick up the new body.
-    if (editingPost) {
-      try {
-        this.presenceRealtime.emitPostsLiveUpdated(postId, {
-          postId,
-          version: now,
-          reason: 'post_edited',
-          patch: { body: editingPost.body ?? '' },
-        });
-      } catch { /* best-effort */ }
-    }
+  async onQuoteChanged(payload: SideEffectPayloads['post.quote.changed']) : Promise<void> {
+    return this.engagementEffects.onQuoteChanged(payload);
   }
 
   // ─── post.deleted ─────────────────────────────────────────────────────
 
-  /**
-   * Drop every notification that pointed at this post. Deleting a post should never fail
-   * because notification cleanup did, so this stays off the request path.
-   */
-  private async onPostDeleted(payload: SideEffectPayloads['post.deleted']): Promise<void> {
-    const postId = (payload.postId ?? '').trim();
-    if (!postId) return;
-    await Promise.allSettled([
-      this.notifications.deleteBySubjectPostId(postId),
-      this.notifications.deleteByActorPostId(postId),
-    ]);
+  async onPostDeleted(payload: SideEffectPayloads['post.deleted']) : Promise<void> {
+    return this.engagementEffects.onPostDeleted(payload);
   }
 
   // ─── media.searchNote.recorded ────────────────────────────────────────
 
-  /**
-   * Marv described a photo he was already viewing. Keyword search reads the note directly; here the
-   * post also gets Jev topics when it has none (public only) and a first embedding when it has no vector.
-   */
-  private async onSearchNoteRecorded(payload: SideEffectPayloads['media.searchNote.recorded']): Promise<void> {
-    const postId = (payload.postId ?? '').trim();
-    const r2Key = (payload.r2Key ?? '').trim();
-    if (!postId || !r2Key) return;
-    const note = await this.prisma.mediaSearchNote.findUnique({ where: { r2Key }, select: { note: true } });
-    if (!note) return;
-    await this.topicsClassify.classifyFromImageNote(postId, note.note);
-    await this.embeddings?.indexPostIfMissing(postId);
+  async onSearchNoteRecorded(payload: SideEffectPayloads['media.searchNote.recorded']) : Promise<void> {
+    return this.engagementEffects.onSearchNoteRecorded(payload);
   }
 
   // ─── post.created ─────────────────────────────────────────────────────
@@ -276,14 +117,8 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     if (!postId || !actorUserId) return;
 
     const post = (await this.prisma.post.findFirst({
-      where: { id: postId, deletedAt: null },
-      include: {
-        user: { select: USER_LIST_SELECT },
-        media: { orderBy: { position: 'asc' } },
-        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
-        poll: { include: { options: { orderBy: { position: 'asc' } } } },
-        boardThread: BOARD_THREAD_PREVIEW_INCLUDE,
-      },
+      where: { id: postId, ...NOT_DELETED },
+      include: POST_LIST_INCLUDE,
     })) as PostWithRelations | null;
 
     // Deleted between the write and this job — there is nothing left to notify about.
@@ -328,123 +163,28 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     if (!mentionRecipients) await this.emitTierScopedGroupNewPost(post);
   }
 
-  private async loadParentAuthorUserId(parentId: string | null): Promise<string | null> {
-    if (!parentId) return null;
-    const parent = await this.prisma.post.findFirst({
-      where: { id: parentId },
-      select: { userId: true },
-    });
-    return parent?.userId ?? null;
+  async loadParentAuthorUserId(parentId: string | null) : Promise<string | null> {
+    return this.createdEffects.loadParentAuthorUserId(parentId);
   }
 
-  /**
-   * The thread tree used to assign reply roles. Re-read here rather than snapshotted, so this
-   * reflects any posts added or deleted since the reply was written.
-   */
-  private async loadThreadPostsForRoles(post: PostWithRelations): Promise<ThreadPostForRoles[]> {
-    if (!post.parentId) return [];
-    const rootId = post.rootId ?? post.parentId;
-    return await this.prisma.post.findMany({
-      where: { OR: [{ id: rootId }, { rootId }], ...notDeletedWhere() },
-      select: { id: true, parentId: true, userId: true, mentions: { select: { userId: true } } },
-    });
+  async loadThreadPostsForRoles(post: PostWithRelations) : Promise<ThreadPostForRoles[]> {
+    return this.createdEffects.loadThreadPostsForRoles(post);
   }
 
-  /**
-   * Only @mentions written in the body earn a `mention` notification (and outrank a `comment`
-   * notification for the same person). Mentions inherited from thread participants do not, so
-   * we re-parse the body instead of reading the post's mention rows.
-   */
-  private async loadBodyMentionIds(body: string): Promise<string[]> {
-    const usernames = parseMentionsFromBody(body);
-    if (usernames.length === 0) return [];
-    const ids = await resolveMentionUsernames(this.prisma, usernames);
-    return [...new Set(ids)];
+  async loadBodyMentionIds(body: string) : Promise<string[]> {
+    return this.createdEffects.loadBodyMentionIds(body);
   }
 
-  private async loadQuotedInfo(
-    quotedPostId: string | null,
-  ): Promise<{ quotedAuthorId: string; quotedPostId: string } | null> {
-    if (!quotedPostId) return null;
-    const quoted = await this.prisma.post.findFirst({
-      where: { id: quotedPostId, deletedAt: null },
-      select: { id: true, userId: true },
-    });
-    if (!quoted) return null;
-    return { quotedAuthorId: quoted.userId, quotedPostId: quoted.id };
+  async loadQuotedInfo(quotedPostId: string | null) : Promise<{ quotedAuthorId: string; quotedPostId: string } | null> {
+    return this.createdEffects.loadQuotedInfo(quotedPostId);
   }
 
-  /**
-   * Tier-scoped `groups:newPost` emit for non-public group posts.
-   *
-   * The public and verified cases are emitted synchronously from `createPost` because it needs no extra query
-   * and members should see the post appear immediately. This branch needs a full member+tier
-   * scan to build the audience, which is exactly the kind of work that does not belong on a
-   * request.
-   */
-  private async emitTierScopedGroupNewPost(post: PostWithRelations): Promise<void> {
-    const groupId = post.communityGroupId ?? null;
-    const visibility = post.visibility as string;
-    if (post.parentId || !groupId || (visibility === 'public' || visibility === 'verifiedOnly')) return;
-
-    const tierScoped = visibility === 'premiumOnly' || visibility === 'verifiedOnly';
-    if (!tierScoped) return;
-
-    try {
-      const members = await this.prisma.communityGroupMember.findMany({
-        where: { groupId, status: 'active' },
-        select: { userId: true, user: { select: { premium: true, premiumPlus: true, verifiedStatus: true } } },
-      });
-      const eligible = members
-        .filter((m) => {
-          if (visibility === 'premiumOnly') return m.user.premium || m.user.premiumPlus;
-          return (m.user.verifiedStatus && m.user.verifiedStatus !== 'none') || m.user.premium || m.user.premiumPlus;
-        })
-        .map((m) => m.userId);
-      if (eligible.length === 0) return;
-
-      const groupPostDto = toPostDto(post, this.appConfig.r2()?.publicBaseUrl ?? null, {
-        viewerHasBoosted: false,
-        includeInternal: false,
-      });
-      this.presenceRealtime.emitGroupNewPost(
-        groupId,
-        { groupId, post: groupPostDto },
-        { eligibleMemberUserIds: eligible },
-      );
-    } catch (err) {
-      this.logger.warn(
-        `[groups] Failed tier-scoped groups:newPost for post ${post.id}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+  async emitTierScopedGroupNewPost(post: PostWithRelations) : Promise<void> {
+    return this.createdEffects.emitTierScopedGroupNewPost(post);
   }
 
-  /**
-   * Compute thread participant roles by walking the parent chain in memory.
-   *
-   * `threadPosts` is the full thread tree (root + descendants) fetched in one query. Walking in
-   * memory avoids one DB round trip per ancestor, which dominated deep-thread latency.
-   */
-  private computeThreadRolesFromPosts(
-    threadPosts: ThreadPostForRoles[],
-    parentId: string,
-  ): Map<string, ReplyRole> {
-    const map = new Map<string, ReplyRole>();
-    const byId = new Map(threadPosts.map((p) => [p.id, p]));
-    let currentId: string | null = parentId;
-    while (currentId) {
-      const post = byId.get(currentId);
-      if (!post) break;
-      const isRoot = !post.parentId;
-      const authorRole: ReplyRole = isRoot ? 'root_author' : 'reply_author';
-      const mentionRole: ReplyRole = isRoot ? 'mentioned_in_root' : 'mentioned_in_reply';
-      if (!map.has(post.userId)) map.set(post.userId, authorRole);
-      for (const m of post.mentions) {
-        if (!map.has(m.userId)) map.set(m.userId, mentionRole);
-      }
-      currentId = post.parentId;
-    }
-    return map;
+  computeThreadRolesFromPosts(threadPosts: ThreadPostForRoles[], parentId: string) : Map<string, ReplyRole> {
+    return this.createdEffects.computeThreadRolesFromPosts(threadPosts, parentId);
   }
 
   /**
@@ -514,14 +254,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       if (missingIds.length === 0) return;
 
       try {
-        const members = await this.prisma.communityGroupMember.findMany({
-          where: {
-            groupId: postCommunityGroupId,
-            userId: { in: missingIds },
-            status: 'active',
-          },
-          select: { userId: true, notificationPreference: true },
-        });
+        const members = await listActiveGroupMemberPreferences(this.prisma, postCommunityGroupId, missingIds);
         for (const uid of missingIds) checkedGroupNotificationMemberIds.add(uid);
         for (const member of members) {
           activeGroupNotificationMemberIds.add(member.userId);
@@ -551,8 +284,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     try {
       // Quote repost notification: notify the quoted post's author (skip self-quotes).
       if (!args.mentionsOnly && quotedInfo && quotedInfo.quotedAuthorId !== userId && (await canNotifyForGroupPost(quotedInfo.quotedAuthorId))) {
-        await this.notifications
-          .upsertRepostNotification({
+        await this.notificationEngagementWriterService.upsertRepostNotification({
             recipientUserId: quotedInfo.quotedAuthorId,
             actorUserId: userId,
             subjectPostId: quotedInfo.quotedPostId,
@@ -581,8 +313,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
               : replyTitles.reply_author;
 
         if (parentAuthorUserId && !bodyMentionSet.has(parentAuthorUserId) && (await canNotifyForGroupPost(parentAuthorUserId))) {
-          await this.notifications
-            .create({
+          await this.notificationCreatorService.create({
               recipientUserId: parentAuthorUserId,
               kind: 'comment',
               actorUserId: userId,
@@ -605,8 +336,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
           threadRecipients.push({ uid, role });
         }
         await runInBatches(threadRecipients, FANOUT_CONCURRENCY, async ({ uid, role }) => {
-          await this.notifications
-            .create({
+          await this.notificationCreatorService.create({
               recipientUserId: uid,
               kind: 'comment',
               actorUserId: userId,
@@ -659,8 +389,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
         } else {
           mentionTitle = 'mentioned you in a reply to a post';
         }
-        await this.notifications
-          .create({
+        await this.notificationCreatorService.create({
             recipientUserId: uid,
             kind: 'mention',
             actorUserId: userId,
@@ -685,20 +414,15 @@ export class PostsSideEffectsHandler implements OnModuleInit {
       // Badge-only notifications for all active group members when a top-level post is created in a group.
       if (!parentId && postCommunityGroupId) {
         try {
-          const [groupMembers, groupRecord] = await Promise.all([
-            this.prisma.communityGroupMember.findMany({
-              where: { groupId: postCommunityGroupId, status: 'active', userId: { not: userId } },
-              select: { userId: true },
-            }),
+          const [memberIds, groupRecord] = await Promise.all([
+            listActiveGroupMemberIds(this.prisma, postCommunityGroupId, { excludeUserId: userId }),
             this.prisma.communityGroup.findUnique({
               where: { id: postCommunityGroupId },
               select: { name: true },
             }),
           ]);
-          const memberIds = groupMembers.map((m) => m.userId);
           if (memberIds.length > 0) {
-            await this.notifications
-              .createGroupPostBadgeNotifications({
+            await this.notificationInviteWriterService.createGroupPostBadgeNotifications({
                 actorUserId: userId,
                 postId: post.id,
                 groupId: postCommunityGroupId,
@@ -833,16 +557,14 @@ export class PostsSideEffectsHandler implements OnModuleInit {
               where: {
                 kind: 'checkin',
                 checkinDayKey,
-                deletedAt: null,
+                ...NOT_DELETED,
                 visibility: { not: 'onlyMe' },
               },
             }),
             this.prisma.user.findUnique({
               where: { id: userId },
               select: {
-                id: true,
-                username: true,
-                name: true,
+                ...USER_BRIEF_SELECT,
                 avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
                 avatarUpdatedAt: true,
               },
@@ -914,7 +636,7 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     // Pre-warm link-metadata cache for any external URLs in the post body.
     // Runs outside the main try/catch so a scrape failure never affects the
     // side-effect pipeline. The 5-min backfill cron is the safety net.
-    const bodyUrls = this.linkMetadata.extractLinks(post.body ?? '');
+    const bodyUrls = extractLinks(post.body ?? '');
     if (bodyUrls.length > 0) {
       await this.linkMetadata.backfillForUrls(bodyUrls).catch((err) => {
         this.logger.debug(`[link-metadata] pre-warm failed for post ${post.id}: ${(err as Error).message}`);
@@ -922,245 +644,19 @@ export class PostsSideEffectsHandler implements OnModuleInit {
     }
   }
 
-  /**
-   * Fan out `followed_post` / `checkin_post` notifications.
-   *
-   * Small sets are written here with bounded concurrency. Large ones are split into
-   * `notification.fanout.chunk` child jobs — this is the piece that means an account with
-   * 50,000 followers doesn't hold one worker (and a slice of the Prisma pool) for minutes,
-   * and that a failure part-way through only retries the affected slice.
-   */
-  private async fanOutFollowerPostNotifications(args: {
-    recipientUserIds: string[];
-    kind: 'followed_post' | 'checkin_post';
-    actorUserId: string;
-    postId: string;
-    bodySnippet: string;
-  }): Promise<void> {
-    const { recipientUserIds, kind, actorUserId, postId, bodySnippet } = args;
-    if (recipientUserIds.length === 0) return;
-
-    if (recipientUserIds.length > FANOUT_CHUNK_THRESHOLD) {
-      for (const slice of chunk(recipientUserIds, FANOUT_CHUNK_SIZE)) {
-        this.sideEffects.dispatch('notification.fanout.chunk', {
-          kind,
-          recipientUserIds: slice,
-          actorUserId,
-          actorPostId: postId,
-          subjectPostId: postId,
-          subjectUserId: actorUserId,
-          subjectArticleId: null,
-          subjectGroupId: null,
-          title: null,
-          body: bodySnippet || null,
-        });
-      }
-      return;
-    }
-
-    await runInBatches(recipientUserIds, FANOUT_CONCURRENCY, async (recipientUserId) => {
-      await this.notifications
-        .create({
-          recipientUserId,
-          kind,
-          actorUserId,
-          actorPostId: postId,
-          subjectPostId: postId,
-          subjectUserId: actorUserId,
-          body: bodySnippet || undefined,
-        })
-        .catch((err) => {
-          this.logger.warn(
-            `[notifications] Failed to create followed-post notification: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        });
-    });
+  async fanOutFollowerPostNotifications(args: { recipientUserIds: string[]; kind: 'followed_post' | 'checkin_post'; actorUserId: string; postId: string; bodySnippet: string }) : Promise<void> {
+    return this.createdEffects.fanOutFollowerPostNotifications(args);
   }
 
-  /**
-   * Delete any pending checkin_reminder notification for the user now that they have checked in.
-   * Decrements the undelivered badge count for any unread (not yet delivered) reminders removed.
-   */
-  private async clearCheckinReminder(userId: string): Promise<void> {
-    const existing = await this.prisma.notification.findMany({
-      where: { kind: 'checkin_reminder', recipientUserId: userId },
-      select: { id: true, deliveredAt: true },
-    });
-    if (existing.length === 0) return;
-
-    await this.prisma.notification.deleteMany({
-      where: { kind: 'checkin_reminder', recipientUserId: userId },
-    });
-
-    const unreadCount = existing.filter((n) => n.deliveredAt === null).length;
-    if (unreadCount > 0) {
-      await this.prisma.user.update({
-        where: { id: userId },
-        data: { undeliveredNotificationCount: { decrement: unreadCount } },
-      });
-    }
-
-    const undeliveredCount = await this.prisma.notification
-      .count({ where: { recipientUserId: userId, deliveredAt: null } })
-      .catch(() => 0);
-    this.presenceRealtime.emitNotificationsUpdated(userId, { undeliveredCount });
-    this.presenceRealtime.emitNotificationsDeleted(userId, { notificationIds: existing.map((n) => n.id) });
+  async clearCheckinReminder(userId: string) : Promise<void> {
+    return this.createdEffects.clearCheckinReminder(userId);
   }
 
-  /**
-   * Detect @marv in the post body and hand off to the Marv queue.
-   *
-   * Fully decoupled — posts don't know about MarvinModule. Detection runs against the
-   * configured Marv username so the queueing surface stays dumb and the processor handles all
-   * gating (premium, credits, rate limits, the AI call).
-   *
-   * Summon Marv only when this post body explicitly tags his configured username.
-   * Reply ancestry and participant mentions never substitute for a body mention.
-   */
-  private async maybeEnqueueMarvReply(args: {
-    post: PostWithRelations;
-    actorUserId: string;
-    bodySnippet: string;
-    visibility: PostVisibility;
-    requestedMarvMode: 'fast' | 'regular' | 'smart' | null;
-    addedMentionIds?: string[];
-  }): Promise<void> {
-    const { post, actorUserId, bodySnippet, visibility, requestedMarvMode } = args;
-    try {
-      const marvCfg = this.appConfig.marvBot();
-      if (!marvCfg.enabled) {
-        this.logger.log(`[marv] mention-detect post=${post.id} skip reason=marv_disabled`);
-        return;
-      }
-
-      const marvUsernameLower = marvCfg.username.trim().toLowerCase();
-      const bodyMentions = parseMentionsFromBody(post.body ?? '').map((u) => u.trim().toLowerCase());
-      const bodyMentionUsernamesLower = new Set(bodyMentions);
-      let resolvedMarvId = this.marvIdentity.cachedMarvUserId() ?? marvCfg.userId ?? null;
-      const mentionsMarv = bodyMentionUsernamesLower.has(marvUsernameLower);
-
-      if (post.kind === 'board') {
-        resolvedMarvId ??= await this.marvIdentity.getMarvUserId().catch(() => null);
-        const resolvedMention = post.mentions?.some(mention => mention.user.id === resolvedMarvId);
-        if (!mentionsMarv || !resolvedMarvId || !resolvedMention ||
-            (args.addedMentionIds && !args.addedMentionIds.includes(resolvedMarvId))) return;
-      }
-
-      let addressedByJev = false;
-      if (!mentionsMarv) {
-        addressedByJev = post.kind !== 'board' && (await this.isUntaggedAddressToMarv(post, actorUserId, resolvedMarvId));
-        if (!addressedByJev) {
-          this.logger.log(`[marv] mention-detect post=${post.id} skip reason=no_mention`);
-          return;
-        }
-      }
-
-      const actorIsMarv = Boolean(resolvedMarvId && actorUserId === resolvedMarvId);
-      if (actorIsMarv) {
-        this.logger.log(`[marv] mention-detect post=${post.id} skip reason=actor_is_marv`);
-        return;
-      }
-
-      const rootPostId = post.rootId ?? post.id;
-      const postGroupId = post.communityGroupId ?? null;
-
-      // If this post is inside a community group, check whether Marv is an active member.
-      // If he isn't, send a one-time informational notification instead of a reply.
-      if (postGroupId) {
-        const marvId = resolvedMarvId ?? (await this.marvIdentity.getMarvUserId());
-        if (marvId) {
-          const marvMembership = await this.prisma.communityGroupMember.findUnique({
-            where: { groupId_userId: { groupId: postGroupId, userId: marvId } },
-            select: { status: true },
-          });
-          if (marvMembership?.status !== 'active') {
-            this.logger.log(`[marv] mention-detect post=${post.id} skip reason=marv_not_in_group groupId=${postGroupId}`);
-            await this.notifications
-              .upsertMarvNotInGroupNotification({
-                recipientUserId: actorUserId,
-                marvUserId: marvId,
-                postId: post.id,
-                groupId: postGroupId,
-              })
-              .catch(() => undefined);
-            return;
-          }
-        }
-      }
-
-      this.logger.log(
-        `[marv] mention-detect post=${post.id} HIT enqueueing root=${rootPostId} actor=${actorUserId} requestedMode=${requestedMarvMode ?? 'null'}`,
-      );
-      await this.jobs
-        .enqueue(
-          JOBS.marvinReplyPublic,
-          {
-            postId: post.id,
-            rootPostId,
-            requestingUserId: actorUserId,
-            requestedMode: requestedMarvMode,
-            bodySnippet,
-            visibility,
-            ...(addressedByJev ? { addressedBy: 'jev' as const } : {}),
-          },
-          {
-            // Stable job id per post so a retried side-effect job doesn't enqueue Marv twice.
-            jobId: `marv-public-${post.id}`,
-            removeOnComplete: true,
-            removeOnFail: false,
-            attempts: 3,
-            backoff: { type: 'exponential' as const, delay: 5000 },
-          },
-        )
-        .then(() => {
-          this.logger.log(`[marv] mention-detect post=${post.id} enqueued ok`);
-        })
-        .catch((err) => {
-          this.logger.warn(
-            `[marv] Failed to enqueue public reply job for post=${post.id}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        });
-    } catch (err) {
-      this.logger.warn(
-        `[marv] mention-detection during side-effects failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+  async maybeEnqueueMarvReply(args: { post: PostWithRelations; actorUserId: string; bodySnippet: string; visibility: PostVisibility; requestedMarvMode: 'fast' | 'regular' | 'smart' | null; addedMentionIds?: string[] }) : Promise<void> {
+    return this.createdEffects.maybeEnqueueMarvReply(args);
   }
 
-  /**
-   * An untagged post still summons Marv when Jev is confident the author is speaking to him: a reply
-   * to one of his posts, or his name without an @. Anything unsure, slow, or unavailable stays unsummoned.
-   */
-  private async isUntaggedAddressToMarv(post: PostWithRelations, actorUserId: string, marvId: string | null): Promise<boolean> {
-    const addressing = this.marvAddressing;
-    if (!addressing?.available() || !post.body?.trim()) return false;
-    if (actorUserId === marvId) return false;
-
-    const parent = post.parentId
-      ? await this.prisma.post.findFirst({
-          where: { id: post.parentId, deletedAt: null },
-          select: { body: true, userId: true, user: { select: { username: true, name: true } } },
-        })
-      : null;
-    const parentIsMarv = Boolean(parent && marvId && parent.userId === marvId);
-    if (!MarvinAddressingService.isCandidate(post.body, parentIsMarv)) return false;
-
-    // A person named Marv in this conversation: the parent's author, or someone @-tagged here.
-    const otherMarvs = [
-      ...(parent?.user && !parentIsMarv ? [parent.user] : []),
-      ...(post.mentions ?? []).filter((m) => m.user.id !== marvId).map((m) => m.user),
-    ]
-      .filter((u) => MarvinAddressingService.namedLikeMarv(u))
-      .map((u) => u.username ?? '');
-
-    const probability = await addressing.addressedToMarvProbability({
-      text: post.body,
-      otherMarvs,
-      parent: parent
-        ? { text: parent.body ?? '', authorIsMarv: parentIsMarv, authorIsSpeaker: parent.userId === actorUserId }
-        : null,
-    });
-    this.logger.log(`[marv] addressing post=${post.id} parentIsMarv=${parentIsMarv} p=${probability ?? 'n/a'}`);
-    return isAddressedToMarv(probability, otherMarvs);
+  async isUntaggedAddressToMarv(post: PostWithRelations, actorUserId: string, marvId: string | null) : Promise<boolean> {
+    return this.createdEffects.isUntaggedAddressToMarv(post, actorUserId, marvId);
   }
 }

@@ -1,14 +1,18 @@
-import {ForbiddenException, Injectable} from "@nestjs/common";
-import {Prisma} from "@prisma/client";
-import type {PostVisibility} from "@prisma/client";
-import {PrismaService} from "../prisma/prisma.service";
-import {ViewerContextService} from "../viewer/viewer-context.service";
-import {POSTS_RANKING} from "./posts-ranking.config";
-import {mediaOnlyWhere, notDeletedWhere} from "./posts-query-builders";
-import {feedPostInclude, type PopularFeedResult} from "./posts-feed.types";
-import {PostsViewerEnrichmentService} from "./posts-viewer-enrichment.service";
-import {PostsFeedAccessService} from "./posts-feed-access.service";
-import {PostsFeedPopularService} from "./posts-feed-popular.service";
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
+import { ForbiddenException, Injectable } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
+import type { PostVisibility } from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { ViewerContextService } from "../viewer/viewer-context.service";
+import { POSTS_RANKING } from "./posts-ranking.config";
+import { mediaOnlyWhere, notDeletedWhere } from "./posts-query-builders";
+import { feedPostInclude, type PopularFeedResult } from "./posts-feed.types";
+import { PostsViewerEnrichmentService } from "./posts-viewer-enrichment.service";
+import { PostsFeedAccessService } from "./posts-feed-access.service";
+import { PostsFeedPopularService } from "./posts-feed-popular.service";
+import { toPage } from '../../common/pagination/page';
+import { createdAtIdBefore } from '../../common/pagination/created-at-id-cursor';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 @Injectable()
 export class PostsFeedFeaturedService {
@@ -74,13 +78,13 @@ export class PostsFeedFeaturedService {
       );
       const rows = (await this.prisma.post.findMany({
         where: {
-          deletedAt: null,
+          ...NOT_DELETED,
           communityGroupId: null,
           boardOnly: false,
           trendingScore: { gt: 0 },
           parentId: null,
           createdAt: { gte: featuredMinCreatedAt },
-          user: { bannedAt: null },
+          user: NOT_BANNED_USER_WHERE,
           ...(viewerUserId ? { userId: { not: viewerUserId } } : {}),
           ...(authorUserIds?.length ? { userId: { in: authorUserIds } } : {}),
           ...(params.mediaOnly ? mediaOnlyWhere() : {}),
@@ -91,17 +95,7 @@ export class PostsFeedFeaturedService {
             {
               AND: [
                 { trendingScore: cursorScore } as Prisma.PostWhereInput,
-                {
-                  OR: [
-                    { createdAt: { lt: cursorCreatedAt } },
-                    {
-                      AND: [
-                        { createdAt: cursorCreatedAt },
-                        { id: { lt: cursorId } },
-                      ],
-                    },
-                  ],
-                },
+                createdAtIdBefore({ createdAt: cursorCreatedAt, id: cursorId }),
               ],
             },
           ],
@@ -135,10 +129,10 @@ export class PostsFeedFeaturedService {
         picked.push(r);
       }
 
-      const sliceRows = picked.slice(0, limit);
+      const { items: sliceRows, nextCursor } = toPage(picked, limit, (r) =>
+        this.access.encodePopularCursor({ score: r.trendingScore, createdAt: r.createdAt.toISOString(), id: r.id }),
+      );
       const ids = sliceRows.map((r) => r.id);
-      const boundaryRow =
-        sliceRows.length > 0 ? sliceRows[sliceRows.length - 1] : null;
 
       const posts = ids.length
         ? await this.prisma.post.findMany({
@@ -150,15 +144,6 @@ export class PostsFeedFeaturedService {
       const ordered = ids
         .map((id) => byId.get(id))
         .filter((p): p is (typeof posts)[number] => Boolean(p));
-
-      const nextCursor =
-        picked.length > limit && boundaryRow
-          ? this.access.encodePopularCursor({
-              score: boundaryRow.trendingScore,
-              createdAt: boundaryRow.createdAt.toISOString(),
-              id: boundaryRow.id,
-            })
-          : null;
 
       const scoreByPostId = new Map<string, number>(
         sliceRows.map((r) => [r.id, r.trendingScore]),
@@ -182,13 +167,13 @@ export class PostsFeedFeaturedService {
 
     const topRows = (await this.prisma.post.findMany({
       where: {
-        deletedAt: null,
+        ...NOT_DELETED,
         communityGroupId: null,
         boardOnly: false,
         trendingScore: { gt: 0 },
         parentId: null,
         createdAt: { gte: featuredMinCreatedAt },
-        user: { bannedAt: null },
+        user: NOT_BANNED_USER_WHERE,
         ...(viewerUserId ? { userId: { not: viewerUserId } } : {}),
         ...(authorUserIds?.length ? { userId: { in: authorUserIds } } : {}),
         ...(params.mediaOnly ? mediaOnlyWhere() : {}),

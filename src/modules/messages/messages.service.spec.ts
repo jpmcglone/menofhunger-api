@@ -1,6 +1,20 @@
-import { MessagesService, messageMediaCreateData } from './messages.service';
-import { MessagesController } from './messages.controller';
-import { VerifiedGuard } from '../auth/verified.guard';
+import { ViewerBlockSetsService } from "../viewer/viewer-block-sets.service";
+import { MessagesSupportService } from "./messages-support.service";
+import { MessagesQueryService } from "./messages-query.service";
+import { MessagesBotDmService } from "./messages-bot-dm.service";
+import { MessagesWriteService } from "./messages-write.service";
+import { MessagesConversationStateService } from "./messages-conversation-state.service";
+import { MessagesReactionsEditsService } from "./messages-reactions-edits.service";
+import {
+  makeMessagesTestApi,
+  messageMediaCreateData,
+} from "./messages.testing";
+import { MessagesCallsService } from "./messages-calls.service";
+import { MessagesRealtimeService } from "./messages-realtime.service";
+import { MessagesBotDeliveryService } from "./messages-bot-delivery.service";
+import { MessagesMembershipService } from "./messages-membership.service";
+import { MessagesController } from "./messages.controller";
+import { VerifiedGuard } from "../auth/verified.guard";
 
 function makeService(overrides?: {
   prisma?: any;
@@ -18,16 +32,25 @@ function makeService(overrides?: {
       $queryRaw: jest.fn(async () => []),
     } as any);
 
-  const appConfig = overrides?.appConfig ?? ({ r2: jest.fn(() => null) } as any);
+  prisma.$transaction ??= jest.fn(async (run: (tx: any) => Promise<unknown>) =>
+    run(prisma),
+  );
+
+  const appConfig =
+    overrides?.appConfig ?? ({ r2: jest.fn(() => null) } as any);
   const presenceRealtime =
     overrides?.presenceRealtime ??
     ({
       emitMessagesUpdated: jest.fn(),
     } as any);
   const events = overrides?.events ?? ({} as any);
-  const redis = { getJson: jest.fn(async () => null), setJson: jest.fn(async () => undefined), del: jest.fn(async () => 0) } as any;
+  const redis = {
+    getJson: jest.fn(async () => null),
+    setJson: jest.fn(async () => undefined),
+    del: jest.fn(async () => 0),
+  } as any;
   const posthog = { capture: jest.fn() } as any;
-  const jobs = { enqueue: jest.fn(async () => ({} as any)) } as any;
+  const jobs = { enqueue: jest.fn(async () => ({}) as any) } as any;
   const marvIdentity = {
     cachedMarvUserId: jest.fn(() => null),
     getMarvUserId: jest.fn(async () => null),
@@ -38,147 +61,235 @@ function makeService(overrides?: {
     getByConversationId: jest.fn(async () => null),
     getManyByConversationIds: jest.fn(async () => new Map()),
   } as any;
-  const svc = new MessagesService(prisma, appConfig, presenceRealtime, events, redis, posthog, jobs, marvIdentity, sideEffects, callSessions);
-  return { svc, prisma };
+  const support = new MessagesSupportService(
+    prisma,
+    appConfig,
+    presenceRealtime,
+    redis,
+    marvIdentity,
+    sideEffects,
+  );
+  const query = new MessagesQueryService(
+    prisma,
+    appConfig,
+    callSessions,
+    support,
+  );
+  const write = new MessagesWriteService(
+    prisma,
+    appConfig,
+    presenceRealtime,
+    events,
+    posthog,
+    jobs,
+    marvIdentity,
+    sideEffects,
+    support,
+  );
+  const svc = makeMessagesTestApi(
+    support,
+    query,
+    write,
+    new MessagesConversationStateService(
+      prisma,
+      appConfig,
+      presenceRealtime,
+      events,
+      redis,
+      support,
+      new ViewerBlockSetsService(prisma, redis),
+    ),
+    new MessagesReactionsEditsService(
+      prisma,
+      appConfig,
+      presenceRealtime,
+      events,
+      support,
+    ),
+    new MessagesCallsService(
+      prisma,
+      appConfig,
+      presenceRealtime,
+      events,
+      support,
+    ),
+    new MessagesRealtimeService(prisma, appConfig, presenceRealtime),
+    new MessagesBotDeliveryService(
+      new MessagesBotDmService(prisma, support),
+      write,
+    ),
+    new MessagesMembershipService(support),
+  );
+  return { svc, prisma, marvIdentity };
 }
 
-describe('MessagesService — Marv group block (env-less identity)', () => {
-  it('lookupConversation returns null for a group lookup that includes Marv, even when MARV_USER_ID env is unset', async () => {
+describe("MessagesService — Marv group block (env-less identity)", () => {
+  it("lookupConversation returns null for a group lookup that includes Marv, even when MARV_USER_ID env is unset", async () => {
     // Reproduces the bug where the env-only `marvCfg.userId` gate silently no-ops:
     // user has Marv as a real bot user in the DB but never pinned `MARV_USER_ID`.
     const { svc } = makeService({
       prisma: {
         userBlock: { findMany: jest.fn(async () => []) },
-        messageConversation: { findFirst: jest.fn(), findMany: jest.fn(async () => []) },
+        messageConversation: {
+          findFirst: jest.fn(),
+          findMany: jest.fn(async () => []),
+        },
       } as any,
       appConfig: {
         // Env says "no MARV_USER_ID configured".
-        marvBot: jest.fn(() => ({ enabled: true, userId: null, username: 'marv' })),
+        marvBot: jest.fn(() => ({
+          enabled: true,
+          userId: null,
+          username: "marv",
+        })),
         r2: jest.fn(() => null),
       } as any,
     });
     // But the live identity service has resolved Marv via username lookup.
     const marvIdentity = {
-      cachedMarvUserId: jest.fn(() => 'marv-id-from-cache'),
-      getMarvUserId: jest.fn(async () => 'marv-id-from-cache'),
+      cachedMarvUserId: jest.fn(() => "marv-id-from-cache"),
+      getMarvUserId: jest.fn(async () => "marv-id-from-cache"),
     };
-    (svc as unknown as { marvIdentity: typeof marvIdentity }).marvIdentity = marvIdentity;
-    (svc as unknown as { support: { marvIdentity: typeof marvIdentity } }).support.marvIdentity = marvIdentity;
+    (svc as unknown as { marvIdentity: typeof marvIdentity }).marvIdentity =
+      marvIdentity;
+    (
+      svc as unknown as { support: { marvIdentity: typeof marvIdentity } }
+    ).support.marvIdentity = marvIdentity;
 
     const result = await (svc as any).lookupConversation({
-      userId: 'u1',
-      recipientUserIds: ['marv-id-from-cache', 'other-id'],
+      userId: "u1",
+      recipientUserIds: ["marv-id-from-cache", "other-id"],
     });
     expect(result).toEqual({ conversationId: null });
   });
 
-  it('createConversation throws when a group contains Marv resolved via the identity cache', async () => {
+  it("createConversation throws when a group contains Marv resolved via the identity cache", async () => {
     const { svc } = makeService({
       prisma: {
         userBlock: { findMany: jest.fn(async () => []) },
         user: {
-          findUnique: jest.fn(async () => ({ premium: true, premiumPlus: false, verifiedStatus: 'manual' })),
+          findUnique: jest.fn(async () => ({
+            premium: true,
+            premiumPlus: false,
+            verifiedStatus: "manual",
+          })),
           findMany: jest.fn(async () => []),
         },
       } as any,
       appConfig: {
-        marvBot: jest.fn(() => ({ enabled: true, userId: null, username: 'marv' })),
+        marvBot: jest.fn(() => ({
+          enabled: true,
+          userId: null,
+          username: "marv",
+        })),
         r2: jest.fn(() => null),
       } as any,
     });
     const marvIdentity = {
-      cachedMarvUserId: jest.fn(() => 'marv-id-from-cache'),
-      getMarvUserId: jest.fn(async () => 'marv-id-from-cache'),
+      cachedMarvUserId: jest.fn(() => "marv-id-from-cache"),
+      getMarvUserId: jest.fn(async () => "marv-id-from-cache"),
     };
-    (svc as unknown as { marvIdentity: typeof marvIdentity }).marvIdentity = marvIdentity;
-    (svc as unknown as { support: { marvIdentity: typeof marvIdentity } }).support.marvIdentity = marvIdentity;
+    (svc as unknown as { marvIdentity: typeof marvIdentity }).marvIdentity =
+      marvIdentity;
+    (
+      svc as unknown as { support: { marvIdentity: typeof marvIdentity } }
+    ).support.marvIdentity = marvIdentity;
 
     await expect(
       (svc as any).createConversation({
-        userId: 'u1',
-        recipientUserIds: ['marv-id-from-cache', 'other-id'],
-        body: 'hi',
+        userId: "u1",
+        recipientUserIds: ["marv-id-from-cache", "other-id"],
+        body: "hi",
       }),
     ).rejects.toThrow(/group chat/);
   });
 });
 
-describe('MessagesService unread count batching', () => {
-  it('getUnreadCounts uses a single batched query and sums by tab', async () => {
+describe("MessagesService unread count batching", () => {
+  it("getUnreadCounts uses a single batched query and sums by tab", async () => {
     const { svc, prisma } = makeService({
       prisma: {
         userBlock: { findMany: jest.fn(async () => []) },
         messageParticipant: {
           findMany: jest.fn(async () => [
-            { conversationId: 'c1', status: 'accepted', lastReadAt: new Date('2026-01-01T00:00:00.000Z') },
-            { conversationId: 'c2', status: 'pending', lastReadAt: null },
+            {
+              conversationId: "c1",
+              status: "accepted",
+              lastReadAt: new Date("2026-01-01T00:00:00.000Z"),
+            },
+            { conversationId: "c2", status: "pending", lastReadAt: null },
           ]),
         },
         $queryRaw: jest.fn(async () => [
-          { conversationId: 'c1', count: 3 },
-          { conversationId: 'c2', count: 7 },
+          { conversationId: "c1", count: 3 },
+          { conversationId: "c2", count: 7 },
         ]),
       } as any,
     });
 
-    const res = await (svc as any).support.getUnreadCounts('u1');
+    const res = await (svc as any).support.getUnreadCounts("u1");
     expect(res).toEqual({ primary: 3, requests: 7 });
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
   });
 
-  it('listConversations does not call per-conversation message.count', async () => {
-    const userId = 'u1';
+  it("listConversations does not call per-conversation message.count", async () => {
+    const userId = "u1";
     const { svc, prisma } = makeService({
       prisma: {
         userBlock: { findMany: jest.fn(async () => []) },
         message: { count: jest.fn(async () => 999) },
         $queryRaw: jest.fn(async () => [
-          { conversationId: 'c1', count: 2 },
-          { conversationId: 'c2', count: 0 },
+          { conversationId: "c1", count: 2 },
+          { conversationId: "c2", count: 0 },
         ]),
         messageConversation: {
           findMany: jest.fn(async () => [
             {
-              id: 'c1',
-              type: 'direct',
+              id: "c1",
+              type: "direct",
               title: null,
-              createdAt: new Date('2026-01-01T00:00:00.000Z'),
-              updatedAt: new Date('2026-01-02T00:00:00.000Z'),
-              lastMessageAt: new Date('2026-01-02T00:00:00.000Z'),
-              lastMessage: { id: 'm1', body: 'hi', createdAt: new Date('2026-01-02T00:00:00.000Z'), senderId: 'u2' },
+              createdAt: new Date("2026-01-01T00:00:00.000Z"),
+              updatedAt: new Date("2026-01-02T00:00:00.000Z"),
+              lastMessageAt: new Date("2026-01-02T00:00:00.000Z"),
+              lastMessage: {
+                id: "m1",
+                body: "hi",
+                createdAt: new Date("2026-01-02T00:00:00.000Z"),
+                senderId: "u2",
+              },
               participants: [
                 {
                   userId,
-                  status: 'accepted',
-                  role: 'member',
-                  acceptedAt: new Date('2026-01-01T00:00:00.000Z'),
-                  lastReadAt: new Date('2026-01-01T00:00:00.000Z'),
+                  status: "accepted",
+                  role: "member",
+                  acceptedAt: new Date("2026-01-01T00:00:00.000Z"),
+                  lastReadAt: new Date("2026-01-01T00:00:00.000Z"),
                   user: {
                     id: userId,
-                    username: 'me',
-                    name: 'Me',
+                    username: "me",
+                    name: "Me",
                     premium: false,
                     premiumPlus: false,
                     isOrganization: false,
-                    verifiedStatus: 'none',
+                    verifiedStatus: "none",
                     avatarKey: null,
                     avatarUpdatedAt: null,
                   },
                 },
                 {
-                  userId: 'u2',
-                  status: 'accepted',
-                  role: 'member',
-                  acceptedAt: new Date('2026-01-01T00:00:00.000Z'),
-                  lastReadAt: new Date('2026-01-01T00:00:00.000Z'),
+                  userId: "u2",
+                  status: "accepted",
+                  role: "member",
+                  acceptedAt: new Date("2026-01-01T00:00:00.000Z"),
+                  lastReadAt: new Date("2026-01-01T00:00:00.000Z"),
                   user: {
-                    id: 'u2',
-                    username: 'other',
-                    name: 'Other',
+                    id: "u2",
+                    username: "other",
+                    name: "Other",
                     premium: false,
                     premiumPlus: false,
                     isOrganization: false,
-                    verifiedStatus: 'none',
+                    verifiedStatus: "none",
                     avatarKey: null,
                     avatarUpdatedAt: null,
                   },
@@ -186,28 +297,28 @@ describe('MessagesService unread count batching', () => {
               ],
             },
             {
-              id: 'c2',
-              type: 'direct',
+              id: "c2",
+              type: "direct",
               title: null,
-              createdAt: new Date('2026-01-01T00:00:00.000Z'),
-              updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+              createdAt: new Date("2026-01-01T00:00:00.000Z"),
+              updatedAt: new Date("2026-01-02T00:00:00.000Z"),
               lastMessageAt: null,
               lastMessage: null,
               participants: [
                 {
                   userId,
-                  status: 'accepted',
-                  role: 'member',
-                  acceptedAt: new Date('2026-01-01T00:00:00.000Z'),
+                  status: "accepted",
+                  role: "member",
+                  acceptedAt: new Date("2026-01-01T00:00:00.000Z"),
                   lastReadAt: null,
                   user: {
                     id: userId,
-                    username: 'me',
-                    name: 'Me',
+                    username: "me",
+                    name: "Me",
                     premium: false,
                     premiumPlus: false,
                     isOrganization: false,
-                    verifiedStatus: 'none',
+                    verifiedStatus: "none",
                     avatarKey: null,
                     avatarUpdatedAt: null,
                   },
@@ -219,10 +330,17 @@ describe('MessagesService unread count batching', () => {
       } as any,
     });
 
-    const res = await svc.listConversations({ userId, tab: 'primary', limit: 30, cursor: null });
-    expect(res.conversations.map((c) => ({ id: c.id, unreadCount: c.unreadCount }))).toEqual([
-      { id: 'c1', unreadCount: 2 },
-      { id: 'c2', unreadCount: 0 },
+    const res = await svc.listConversations({
+      userId,
+      tab: "primary",
+      limit: 30,
+      cursor: null,
+    });
+    expect(
+      res.conversations.map((c) => ({ id: c.id, unreadCount: c.unreadCount })),
+    ).toEqual([
+      { id: "c1", unreadCount: 2 },
+      { id: "c2", unreadCount: 0 },
     ]);
 
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
@@ -230,8 +348,8 @@ describe('MessagesService unread count batching', () => {
   });
 });
 
-describe('MessagesService – block/unblock emit', () => {
-  it('emits users:me-updated with reason block_changed on blockUser', async () => {
+describe("MessagesService – block/unblock emit", () => {
+  it("emits users:me-updated with reason block_changed on blockUser", async () => {
     const emitUsersMeRefresh = jest.fn();
     const { svc } = makeService({
       prisma: {
@@ -247,11 +365,11 @@ describe('MessagesService – block/unblock emit', () => {
       } as any,
     });
 
-    await svc.blockUser({ userId: 'u1', targetUserId: 'u2' });
-    expect(emitUsersMeRefresh).toHaveBeenCalledWith('u1', 'block_changed');
+    await svc.blockUser({ userId: "u1", targetUserId: "u2" });
+    expect(emitUsersMeRefresh).toHaveBeenCalledWith("u1", "block_changed");
   });
 
-  it('emits users:me-updated with reason block_changed on unblockUser', async () => {
+  it("emits users:me-updated with reason block_changed on unblockUser", async () => {
     const emitUsersMeRefresh = jest.fn();
     const { svc } = makeService({
       prisma: {
@@ -264,13 +382,14 @@ describe('MessagesService – block/unblock emit', () => {
       } as any,
     });
 
-    await svc.unblockUser({ userId: 'u1', targetUserId: 'u2' });
-    expect(emitUsersMeRefresh).toHaveBeenCalledWith('u1', 'block_changed');
+    await svc.unblockUser({ userId: "u1", targetUserId: "u2" });
+    expect(emitUsersMeRefresh).toHaveBeenCalledWith("u1", "block_changed");
   });
 });
 
-describe('MessagesService.createConversation — mutual-follow DM gate', () => {
-  const MUTUAL_FOLLOW_ERROR = 'You can only message people who follow you back. Upgrade to Premium to message any member.';
+describe("MessagesService.createConversation — mutual-follow DM gate", () => {
+  const MUTUAL_FOLLOW_ERROR =
+    "You can only message people who follow you back. Upgrade to Premium to message any member.";
 
   function makeForDm(opts: {
     senderPremium: boolean;
@@ -280,21 +399,21 @@ describe('MessagesService.createConversation — mutual-follow DM gate', () => {
     const sender = {
       premium: opts.senderPremium,
       premiumPlus: false,
-      verifiedStatus: 'identity',
+      verifiedStatus: "identity",
       bannedAt: null,
     };
-    const recipient = { id: 'u2', verifiedStatus: 'identity', bannedAt: null };
+    const recipient = { id: "u2", verifiedStatus: "identity", bannedAt: null };
 
     // follow.findMany is called up to 3 times:
     //   1. senderFollowing: { followerId: 'u1', followingId: { in: ['u2'] } }
     //   2. senderFollowers: { followingId: 'u1', followerId: { in: ['u2'] } }  (in Promise.all with 1)
     //   3. followerSet: { followingId: 'u1', followerId: { in: ['u2'] } }       (premium path only)
     const followFindMany = jest.fn(async (q: any) => {
-      if (q.where?.followerId === 'u1') {
-        return opts.senderFollowingRecipient ? [{ followingId: 'u2' }] : [];
+      if (q.where?.followerId === "u1") {
+        return opts.senderFollowingRecipient ? [{ followingId: "u2" }] : [];
       }
-      if (q.where?.followingId === 'u1') {
-        return opts.senderFollowedByRecipient ? [{ followerId: 'u2' }] : [];
+      if (q.where?.followingId === "u1") {
+        return opts.senderFollowedByRecipient ? [{ followerId: "u2" }] : [];
       }
       return [];
     });
@@ -307,70 +426,120 @@ describe('MessagesService.createConversation — mutual-follow DM gate', () => {
       },
       messageConversation: {
         findFirst: jest.fn(async () => null),
-        create: jest.fn(async () => ({ id: 'conv-1' })),
+        create: jest.fn(async () => ({ id: "conv-1" })),
       },
       messageParticipant: {
         createMany: jest.fn(async () => ({ count: 2 })),
         findMany: jest.fn(async () => [
-          { userId: 'u1', role: 'owner', status: 'accepted', acceptedAt: new Date(), lastReadAt: null },
+          {
+            userId: "u1",
+            role: "owner",
+            status: "accepted",
+            acceptedAt: new Date(),
+            lastReadAt: null,
+          },
         ]),
       },
       message: {
         create: jest.fn(async () => ({
-          id: 'msg-1',
-          body: 'hi',
-          conversationId: 'conv-1',
-          senderId: 'u1',
+          id: "msg-1",
+          body: "hi",
+          conversationId: "conv-1",
+          senderId: "u1",
           createdAt: new Date(),
           media: [],
           sender: {
-            id: 'u1', username: 'alice', name: 'Alice', premium: opts.senderPremium, premiumPlus: false,
-            isOrganization: false, verifiedStatus: 'identity',
-            avatarKey: null, avatarUpdatedAt: null,
+            id: "u1",
+            username: "alice",
+            name: "Alice",
+            premium: opts.senderPremium,
+            premiumPlus: false,
+            isOrganization: false,
+            verifiedStatus: "identity",
+            avatarKey: null,
+            avatarUpdatedAt: null,
           },
         })),
         count: jest.fn(async () => 0),
       },
       follow: { findMany: followFindMany },
-      $transaction: jest.fn(async (fn: any) => fn({
-        messageConversation: { create: jest.fn(async () => ({ id: 'conv-1' })) },
-        messageParticipant: { createMany: jest.fn(async () => ({ count: 2 })) },
-      })),
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          messageConversation: {
+            create: jest.fn(async () => ({ id: "conv-1" })),
+          },
+          messageParticipant: {
+            createMany: jest.fn(async () => ({ count: 2 })),
+          },
+        }),
+      ),
     };
 
     const { svc } = makeService({ prisma });
     return { svc, prisma };
   }
 
-  it('blocks verified non-mutual from starting a DM', async () => {
-    const { svc } = makeForDm({ senderPremium: false, senderFollowingRecipient: false, senderFollowedByRecipient: false });
+  it("blocks verified non-mutual from starting a DM", async () => {
+    const { svc } = makeForDm({
+      senderPremium: false,
+      senderFollowingRecipient: false,
+      senderFollowedByRecipient: false,
+    });
     await expect(
-      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
+      (svc as any).createConversation({
+        userId: "u1",
+        recipientUserIds: ["u2"],
+        body: "hi",
+      }),
     ).rejects.toThrow(MUTUAL_FOLLOW_ERROR);
   });
 
-  it('blocks verified one-way-follower (sender follows but is not followed back)', async () => {
-    const { svc } = makeForDm({ senderPremium: false, senderFollowingRecipient: true, senderFollowedByRecipient: false });
+  it("blocks verified one-way-follower (sender follows but is not followed back)", async () => {
+    const { svc } = makeForDm({
+      senderPremium: false,
+      senderFollowingRecipient: true,
+      senderFollowedByRecipient: false,
+    });
     await expect(
-      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
+      (svc as any).createConversation({
+        userId: "u1",
+        recipientUserIds: ["u2"],
+        body: "hi",
+      }),
     ).rejects.toThrow(MUTUAL_FOLLOW_ERROR);
   });
 
-  it('allows verified mutual to start a DM (does not throw mutual-follow gate error)', async () => {
-    const { svc } = makeForDm({ senderPremium: false, senderFollowingRecipient: true, senderFollowedByRecipient: true });
+  it("allows verified mutual to start a DM (does not throw mutual-follow gate error)", async () => {
+    const { svc } = makeForDm({
+      senderPremium: false,
+      senderFollowingRecipient: true,
+      senderFollowedByRecipient: true,
+    });
     await expect(
-      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
+      (svc as any).createConversation({
+        userId: "u1",
+        recipientUserIds: ["u2"],
+        body: "hi",
+      }),
     ).rejects.not.toThrow(MUTUAL_FOLLOW_ERROR);
   });
 
-  it('allows premium sender to DM a non-mutual verified user (does not throw mutual-follow gate error)', async () => {
-    const { svc } = makeForDm({ senderPremium: true, senderFollowingRecipient: false, senderFollowedByRecipient: false });
+  it("allows premium sender to DM a non-mutual verified user (does not throw mutual-follow gate error)", async () => {
+    const { svc } = makeForDm({
+      senderPremium: true,
+      senderFollowingRecipient: false,
+      senderFollowedByRecipient: false,
+    });
     await expect(
-      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
+      (svc as any).createConversation({
+        userId: "u1",
+        recipientUserIds: ["u2"],
+        body: "hi",
+      }),
     ).rejects.not.toThrow(MUTUAL_FOLLOW_ERROR);
   });
 });
-describe('MessagesService.createConversation — admin bypass', () => {
+describe("MessagesService.createConversation — admin bypass", () => {
   function makeForAdminDm(opts: {
     senderIsAdmin: boolean;
     senderVerified?: boolean;
@@ -381,13 +550,13 @@ describe('MessagesService.createConversation — admin bypass', () => {
     const sender = {
       premium: opts.senderPremium ?? false,
       premiumPlus: false,
-      verifiedStatus: (opts.senderVerified ?? false) ? 'identity' : 'none',
+      verifiedStatus: (opts.senderVerified ?? false) ? "identity" : "none",
       bannedAt: null,
       siteAdmin: opts.senderIsAdmin,
     };
     const recipient = {
-      id: 'u2',
-      verifiedStatus: opts.recipientUnverified ? 'none' : 'identity',
+      id: "u2",
+      verifiedStatus: opts.recipientUnverified ? "none" : "identity",
       bannedAt: opts.recipientBanned ? new Date() : null,
     };
 
@@ -404,7 +573,7 @@ describe('MessagesService.createConversation — admin bypass', () => {
       $transaction: jest.fn(async (fn: any) =>
         fn({
           messageConversation: {
-            create: jest.fn(async () => ({ id: 'conv-1' })),
+            create: jest.fn(async () => ({ id: "conv-1" })),
             update: jest.fn(async () => ({})),
           },
           messageParticipant: {
@@ -415,17 +584,23 @@ describe('MessagesService.createConversation — admin bypass', () => {
           },
           message: {
             create: jest.fn(async () => ({
-              id: 'msg-1',
-              body: 'hi',
-              conversationId: 'conv-1',
-              senderId: 'u1',
+              id: "msg-1",
+              body: "hi",
+              conversationId: "conv-1",
+              senderId: "u1",
               replyTo: null,
               createdAt: now,
               media: [],
               sender: {
-                id: 'u1', username: 'admin', name: 'Admin', premium: false, premiumPlus: false,
-                isOrganization: false, verifiedStatus: 'none',
-                avatarKey: null, avatarUpdatedAt: null,
+                id: "u1",
+                username: "admin",
+                name: "Admin",
+                premium: false,
+                premiumPlus: false,
+                isOrganization: false,
+                verifiedStatus: "none",
+                avatarKey: null,
+                avatarUpdatedAt: null,
               },
             })),
           },
@@ -433,59 +608,101 @@ describe('MessagesService.createConversation — admin bypass', () => {
       ),
     };
 
-    const presenceRealtime: any = { emitMessageCreated: jest.fn(), emitUnreadCounts: jest.fn() };
+    const presenceRealtime: any = {
+      emitMessageCreated: jest.fn(),
+      emitUnreadCounts: jest.fn(),
+    };
     const events: any = { emitMessagePushRequested: jest.fn() };
 
     const { svc } = makeService({ prisma, presenceRealtime, events });
     return { svc, capturedCreateMany };
   }
 
-  it('admin can open a thread with an unverified recipient', async () => {
-    const { svc } = makeForAdminDm({ senderIsAdmin: true, recipientUnverified: true });
+  it("admin can open a thread with an unverified recipient", async () => {
+    const { svc } = makeForAdminDm({
+      senderIsAdmin: true,
+      recipientUnverified: true,
+    });
     await expect(
-      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
-    ).resolves.toMatchObject({ conversationId: 'conv-1' });
+      (svc as any).createConversation({
+        userId: "u1",
+        recipientUserIds: ["u2"],
+        body: "hi",
+      }),
+    ).resolves.toMatchObject({ conversationId: "conv-1" });
   });
 
-  it('admin-created recipient row has status accepted and a non-null acceptedAt', async () => {
-    const { svc, capturedCreateMany } = makeForAdminDm({ senderIsAdmin: true, recipientUnverified: true });
-    await (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' });
-    const recipientRow = capturedCreateMany.data?.find((r: any) => r.userId === 'u2');
-    expect(recipientRow?.status).toBe('accepted');
+  it("admin-created recipient row has status accepted and a non-null acceptedAt", async () => {
+    const { svc, capturedCreateMany } = makeForAdminDm({
+      senderIsAdmin: true,
+      recipientUnverified: true,
+    });
+    await (svc as any).createConversation({
+      userId: "u1",
+      recipientUserIds: ["u2"],
+      body: "hi",
+    });
+    const recipientRow = capturedCreateMany.data?.find(
+      (r: any) => r.userId === "u2",
+    );
+    expect(recipientRow?.status).toBe("accepted");
     expect(recipientRow?.acceptedAt).not.toBeNull();
   });
 
-  it('unverified non-admin sender cannot start a new conversation', async () => {
-    const { svc } = makeForAdminDm({ senderIsAdmin: false, senderVerified: false, senderPremium: false });
+  it("unverified non-admin sender cannot start a new conversation", async () => {
+    const { svc } = makeForAdminDm({
+      senderIsAdmin: false,
+      senderVerified: false,
+      senderPremium: false,
+    });
     await expect(
-      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
-    ).rejects.toThrow('Verify to use chat.');
+      (svc as any).createConversation({
+        userId: "u1",
+        recipientUserIds: ["u2"],
+        body: "hi",
+      }),
+    ).rejects.toThrow("Verify to use chat.");
   });
 
-  it('verified non-admin cannot message an unverified recipient', async () => {
-    const { svc } = makeForAdminDm({ senderIsAdmin: false, senderVerified: true, recipientUnverified: true });
+  it("verified non-admin cannot message an unverified recipient", async () => {
+    const { svc } = makeForAdminDm({
+      senderIsAdmin: false,
+      senderVerified: true,
+      recipientUnverified: true,
+    });
     await expect(
-      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
-    ).rejects.toThrow('You can only start chats with verified members.');
+      (svc as any).createConversation({
+        userId: "u1",
+        recipientUserIds: ["u2"],
+        body: "hi",
+      }),
+    ).rejects.toThrow("You can only start chats with verified members.");
   });
 
-  it('admin still cannot message a banned user', async () => {
-    const { svc } = makeForAdminDm({ senderIsAdmin: true, recipientBanned: true });
+  it("admin still cannot message a banned user", async () => {
+    const { svc } = makeForAdminDm({
+      senderIsAdmin: true,
+      recipientBanned: true,
+    });
     await expect(
-      (svc as any).createConversation({ userId: 'u1', recipientUserIds: ['u2'], body: 'hi' }),
-    ).rejects.toThrow('Cannot message a banned user.');
+      (svc as any).createConversation({
+        userId: "u1",
+        recipientUserIds: ["u2"],
+        body: "hi",
+      }),
+    ).rejects.toThrow("Cannot message a banned user.");
   });
 });
 
-describe('messageMediaCreateData', () => {
-  it('maps upload video fields for nested create so send DTOs include media', () => {
+describe("messageMediaCreateData", () => {
+  it("maps upload video fields for nested create so send DTOs include media", () => {
     expect(
       messageMediaCreateData([
         {
-          source: 'upload',
-          kind: 'video',
-          r2Key: 'uploads/u1/videos/a.mp4',
-          thumbnailR2Key: 'uploads/u1/thumbnails/a.jpg',
+          source: "upload",
+          kind: "video",
+          r2Key: "uploads/u1/videos/a.mp4",
+          thumbnailR2Key: "uploads/u1/thumbnails/a.jpg",
           width: 1920,
           height: 1080,
           durationSeconds: 4,
@@ -494,10 +711,10 @@ describe('messageMediaCreateData', () => {
       ]),
     ).toEqual([
       {
-        source: 'upload',
-        kind: 'video',
-        r2Key: 'uploads/u1/videos/a.mp4',
-        thumbnailR2Key: 'uploads/u1/thumbnails/a.jpg',
+        source: "upload",
+        kind: "video",
+        r2Key: "uploads/u1/videos/a.mp4",
+        thumbnailR2Key: "uploads/u1/thumbnails/a.jpg",
         width: 1920,
         height: 1080,
         durationSeconds: 4,
@@ -507,63 +724,70 @@ describe('messageMediaCreateData', () => {
   });
 });
 
-describe('MessagesService.attachCallVoicemail', () => {
+describe("MessagesService.attachCallVoicemail", () => {
   const video = {
-    source: 'upload' as const,
-    kind: 'video' as const,
-    r2Key: 'uploads/alice/voicemail/a.mp4',
-    thumbnailR2Key: 'uploads/alice/thumbnails/a.jpg',
+    source: "upload" as const,
+    kind: "video" as const,
+    r2Key: "uploads/alice/voicemail/a.mp4",
+    thumbnailR2Key: "uploads/alice/thumbnails/a.jpg",
     width: 720,
     height: 1280,
     durationSeconds: 8,
     alt: null,
   };
 
-  function makeVoicemailService(message: any, extras?: { events?: any; presenceRealtime?: any }) {
-    const presenceRealtime = extras?.presenceRealtime ?? { emitMessageEdited: jest.fn() };
+  function makeVoicemailService(
+    message: any,
+    extras?: { events?: any; presenceRealtime?: any },
+  ) {
+    const presenceRealtime = extras?.presenceRealtime ?? {
+      emitMessageEdited: jest.fn(),
+    };
     const events = extras?.events ?? { emitMessagePushRequested: jest.fn() };
     const conversation = {
-      id: 'c1',
-      type: 'direct',
+      id: "c1",
+      type: "direct",
       participants: [
-        { userId: 'alice', status: 'accepted' },
-        { userId: 'bob', status: 'accepted' },
+        { userId: "alice", status: "accepted" },
+        { userId: "bob", status: "accepted" },
       ],
     };
     const updated = {
       id: message.id,
-      createdAt: new Date('2026-01-01T00:00:00.000Z'),
-      body: 'Missed video call · Left a message',
-      conversationId: 'c1',
-      senderId: 'alice',
-      kind: 'call',
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      body: "Missed video call · Left a message",
+      conversationId: "c1",
+      senderId: "alice",
+      kind: "call",
       callMeta: message.callMeta,
       deletedForAll: false,
       editedAt: null,
       replyTo: null,
       deletions: [],
       reactions: [],
-      media: [{
-        id: 'mm1',
-        kind: 'video',
-        source: 'upload',
-        r2Key: video.r2Key,
-        thumbnailR2Key: video.thumbnailR2Key,
-        url: null,
-        mp4Url: null,
-        width: 720,
-        height: 1280,
-        durationSeconds: 8,
-        alt: null,
-      }],
+      media: [
+        {
+          id: "mm1",
+          kind: "video",
+          source: "upload",
+          r2Key: video.r2Key,
+          thumbnailR2Key: video.thumbnailR2Key,
+          url: null,
+          mp4Url: null,
+          width: 720,
+          height: 1280,
+          durationSeconds: 8,
+          alt: null,
+        },
+      ],
       sender: {
-        id: 'alice',
-        username: 'alice',
-        name: 'Alice',
+        id: "alice",
+        username: "alice",
+        name: "Alice",
         premium: false,
         premiumPlus: false,
         isOrganization: false,
-        verifiedStatus: 'manual',
+        verifiedStatus: "manual",
         avatarKey: null,
         avatarUpdatedAt: null,
         isBot: false,
@@ -576,67 +800,93 @@ describe('MessagesService.attachCallVoicemail', () => {
         findFirst: jest.fn(async () => message),
         update: jest.fn(async () => updated),
       },
-      messageMedia: { create: jest.fn(async () => ({ id: 'mm1' })) },
-      $transaction: jest.fn(async (fn: any) => fn({
-        messageMedia: { create: jest.fn(async () => ({ id: 'mm1' })) },
-        message: { update: jest.fn(async () => updated) },
-      })),
+      messageMedia: { create: jest.fn(async () => ({ id: "mm1" })) },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          messageMedia: { create: jest.fn(async () => ({ id: "mm1" })) },
+          message: { update: jest.fn(async () => updated) },
+        }),
+      ),
     };
     return makeService({ prisma, presenceRealtime, events });
   }
 
   const missedCall = {
-    id: 'm1',
-    conversationId: 'c1',
-    senderId: 'alice',
-    kind: 'call',
-    callMeta: { callId: 'call1', type: 'video', outcome: 'missed', durationSeconds: null, peakParticipantCount: 1 },
+    id: "m1",
+    conversationId: "c1",
+    senderId: "alice",
+    kind: "call",
+    callMeta: {
+      callId: "call1",
+      type: "video",
+      outcome: "missed",
+      durationSeconds: null,
+      peakParticipantCount: 1,
+    },
     media: [],
   };
 
-  it('attaches video to a missed call the viewer started', async () => {
+  it("attaches video to a missed call the viewer started", async () => {
     const { svc, prisma } = makeVoicemailService(missedCall);
     const dto = await svc.attachCallVoicemail({
-      userId: 'alice',
-      conversationId: 'c1',
-      messageId: 'm1',
+      userId: "alice",
+      conversationId: "c1",
+      messageId: "m1",
       media: video,
     });
     expect(prisma.$transaction).toHaveBeenCalled();
-    expect(dto.body).toBe('Missed video call · Left a message');
+    expect(dto.body).toBe("Missed video call · Left a message");
   });
 
-  it('rejects a call that was not missed', async () => {
+  it("rejects a call that was not missed", async () => {
     const { svc } = makeVoicemailService({
       ...missedCall,
-      callMeta: { ...missedCall.callMeta, outcome: 'ended' },
+      callMeta: { ...missedCall.callMeta, outcome: "ended" },
     });
     await expect(
-      svc.attachCallVoicemail({ userId: 'alice', conversationId: 'c1', messageId: 'm1', media: video }),
-    ).rejects.toThrow('missed call');
+      svc.attachCallVoicemail({
+        userId: "alice",
+        conversationId: "c1",
+        messageId: "m1",
+        media: video,
+      }),
+    ).rejects.toThrow("missed call");
   });
 
-  it('rejects a non-caller', async () => {
+  it("rejects a non-caller", async () => {
     const { svc } = makeVoicemailService(missedCall);
     await expect(
-      svc.attachCallVoicemail({ userId: 'bob', conversationId: 'c1', messageId: 'm1', media: video }),
-    ).rejects.toThrow('Only the caller');
+      svc.attachCallVoicemail({
+        userId: "bob",
+        conversationId: "c1",
+        messageId: "m1",
+        media: video,
+      }),
+    ).rejects.toThrow("Only the caller");
   });
 
-  it('rejects a second attach', async () => {
-    const { svc } = makeVoicemailService({ ...missedCall, media: [{ id: 'already' }] });
+  it("rejects a second attach", async () => {
+    const { svc } = makeVoicemailService({
+      ...missedCall,
+      media: [{ id: "already" }],
+    });
     await expect(
-      svc.attachCallVoicemail({ userId: 'alice', conversationId: 'c1', messageId: 'm1', media: video }),
-    ).rejects.toThrow('already has a video message');
+      svc.attachCallVoicemail({
+        userId: "alice",
+        conversationId: "c1",
+        messageId: "m1",
+        media: video,
+      }),
+    ).rejects.toThrow("already has a video message");
   });
 });
 
-describe('MessagesService — delete conversation then talk again', () => {
+describe("MessagesService — delete conversation then talk again", () => {
   const restoredConversation = {
-    id: 'c1',
-    type: 'direct',
-    directKey: 'u1:u2',
-    createdByUserId: 'u1',
+    id: "c1",
+    type: "direct",
+    directKey: "u1:u2",
+    createdByUserId: "u1",
     title: null,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -645,12 +895,28 @@ describe('MessagesService — delete conversation then talk again', () => {
     lastMessage: null,
     crewWall: null,
     participants: [
-      { userId: 'u1', status: 'accepted', role: 'owner', acceptedAt: new Date(), lastReadAt: new Date(), mutedAt: null, user: { id: 'u1' } },
-      { userId: 'u2', status: 'accepted', role: 'member', acceptedAt: new Date(), lastReadAt: new Date(), mutedAt: null, user: { id: 'u2' } },
+      {
+        userId: "u1",
+        status: "accepted",
+        role: "owner",
+        acceptedAt: new Date(),
+        lastReadAt: new Date(),
+        mutedAt: null,
+        user: { id: "u1" },
+      },
+      {
+        userId: "u2",
+        status: "accepted",
+        role: "member",
+        acceptedAt: new Date(),
+        lastReadAt: new Date(),
+        mutedAt: null,
+        user: { id: "u2" },
+      },
     ],
   };
 
-  it('getConversation restores a viewer who left a direct thread', async () => {
+  it("getConversation restores a viewer who left a direct thread", async () => {
     const findFirst = jest
       .fn()
       .mockResolvedValueOnce(null)
@@ -662,62 +928,71 @@ describe('MessagesService — delete conversation then talk again', () => {
         messageConversation: {
           findFirst,
           findUnique: jest.fn(async () => ({
-            type: 'direct',
-            directKey: 'u1:u2',
-            createdByUserId: 'u1',
+            type: "direct",
+            directKey: "u1:u2",
+            createdByUserId: "u1",
           })),
         },
         messageParticipant: {
-          findMany: jest.fn(async () => [{ userId: 'u2' }]),
+          findMany: jest.fn(async () => [{ userId: "u2" }]),
           createMany,
         },
-        message: { count: jest.fn(async () => 0), findMany: jest.fn(async () => []) },
+        message: {
+          count: jest.fn(async () => 0),
+          findMany: jest.fn(async () => []),
+        },
       } as any,
     });
 
-    const result = await (svc as any).support.getConversationOrThrow({ userId: 'u1', conversationId: 'c1' });
+    const result = await (svc as any).support.getConversationOrThrow({
+      userId: "u1",
+      conversationId: "c1",
+    });
     expect(createMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: [
           expect.objectContaining({
-            conversationId: 'c1',
-            userId: 'u1',
-            role: 'owner',
-            status: 'accepted',
+            conversationId: "c1",
+            userId: "u1",
+            role: "owner",
+            status: "accepted",
           }),
         ],
       }),
     );
-    expect(result.id).toBe('c1');
+    expect(result.id).toBe("c1");
     expect(prisma.messageConversation.findFirst).toHaveBeenCalledTimes(2);
   });
 
-  it('getConversation does not restore a blocked pair', async () => {
+  it("getConversation does not restore a blocked pair", async () => {
     const createMany = jest.fn(async () => ({ count: 1 }));
     const { svc } = makeService({
       prisma: {
         userBlock: {
-          findMany: jest.fn(async () => [{ blockerId: 'u1', blockedId: 'u2' }]),
+          findMany: jest.fn(async () => [{ blockerId: "u1", blockedId: "u2" }]),
         },
         messageConversation: {
           findFirst: jest.fn(async () => null),
           findUnique: jest.fn(async () => ({
-            type: 'direct',
-            directKey: 'u1:u2',
-            createdByUserId: 'u1',
+            type: "direct",
+            directKey: "u1:u2",
+            createdByUserId: "u1",
           })),
         },
         messageParticipant: { findMany: jest.fn(async () => []), createMany },
       } as any,
     });
 
-    await expect((svc as any).support.getConversationOrThrow({ userId: 'u1', conversationId: 'c1' })).rejects.toThrow(
-      'Conversation not found.',
-    );
+    await expect(
+      (svc as any).support.getConversationOrThrow({
+        userId: "u1",
+        conversationId: "c1",
+      }),
+    ).rejects.toThrow("Conversation not found.");
     expect(createMany).not.toHaveBeenCalled();
   });
 
-  it('getConversation does not restore a group the viewer left', async () => {
+  it("getConversation does not restore a group the viewer left", async () => {
     const createMany = jest.fn(async () => ({ count: 1 }));
     const { svc } = makeService({
       prisma: {
@@ -725,59 +1000,87 @@ describe('MessagesService — delete conversation then talk again', () => {
         messageConversation: {
           findFirst: jest.fn(async () => null),
           findUnique: jest.fn(async () => ({
-            type: 'group',
+            type: "group",
             directKey: null,
-            createdByUserId: 'u1',
+            createdByUserId: "u1",
           })),
         },
         messageParticipant: { findMany: jest.fn(async () => []), createMany },
       } as any,
     });
 
-    await expect((svc as any).support.getConversationOrThrow({ userId: 'u1', conversationId: 'g1' })).rejects.toThrow(
-      'Conversation not found.',
-    );
+    await expect(
+      (svc as any).support.getConversationOrThrow({
+        userId: "u1",
+        conversationId: "g1",
+      }),
+    ).rejects.toThrow("Conversation not found.");
     expect(createMany).not.toHaveBeenCalled();
   });
 });
 
-describe('MessagesController — VerifiedGuard invariant', () => {
-  it('MessagesController does NOT carry VerifiedGuard (unverified users must be able to read/reply in admin-initiated threads)', () => {
-    const classGuards = (Reflect.getMetadata('__guards__', MessagesController) as unknown[] | undefined) ?? [];
+describe("MessagesController — VerifiedGuard invariant", () => {
+  it("MessagesController does NOT carry VerifiedGuard (unverified users must be able to read/reply in admin-initiated threads)", () => {
+    const classGuards =
+      (Reflect.getMetadata("__guards__", MessagesController) as
+        | unknown[]
+        | undefined) ?? [];
     expect(classGuards).not.toContain(VerifiedGuard);
   });
 });
 
-
-describe('Marv message consent belongs to the requesting human', () => {
+describe("Marv message consent belongs to the requesting human", () => {
   function makeSendService() {
     const prisma: any = {
-      user: { findUnique: jest.fn(async () => ({ bannedAt: null, verifiedStatus: 'manual' })) },
+      user: {
+        findUnique: jest.fn(async () => ({
+          bannedAt: null,
+          verifiedStatus: "manual",
+        })),
+      },
       userBlock: { findMany: jest.fn(async () => []) },
-      marvinUserSettings: { findUnique: jest.fn(async () => null), upsert: jest.fn(async () => ({})) },
-      $transaction: jest.fn(async () => { throw new Error('write boundary'); }),
+      marvinUserSettings: {
+        findUnique: jest.fn(async () => null),
+        upsert: jest.fn(async () => ({})),
+      },
+      $transaction: jest.fn(async () => {
+        throw new Error("write boundary");
+      }),
     };
-    const { svc } = makeService({ prisma });
-    jest.spyOn((svc as any).support, 'getConversationOrThrow').mockResolvedValue({
-      type: 'direct', directKey: 'human:marv', participants: [
-        { userId: 'human', status: 'accepted' }, { userId: 'marv', status: 'accepted' },
-      ],
-    });
-    (svc as any).marvIdentity.getMarvUserId.mockResolvedValue('marv');
+    const { svc, marvIdentity } = makeService({ prisma });
+    jest
+      .spyOn((svc as any).support, "getConversationOrThrow")
+      .mockResolvedValue({
+        type: "direct",
+        directKey: "human:marv",
+        participants: [
+          { userId: "human", status: "accepted" },
+          { userId: "marv", status: "accepted" },
+        ],
+      });
+    marvIdentity.getMarvUserId.mockResolvedValue("marv");
     return { svc, prisma };
   }
 
-  it('allows a Marv answer to reach persistence without bot consent', async () => {
+  it("allows a Marv answer to reach persistence without bot consent", async () => {
     const { svc, prisma } = makeSendService();
-    await expect(svc.sendMessage({ userId: 'marv', conversationId: 'c1', body: 'Here is your answer.' })).rejects.toThrow('write boundary');
+    await expect(
+      svc.sendMessage({
+        userId: "marv",
+        conversationId: "c1",
+        body: "Here is your answer.",
+      }),
+    ).rejects.toThrow("write boundary");
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(prisma.marvinUserSettings.findUnique).not.toHaveBeenCalled();
   });
 
-  it('asks a human for permission before a message reaches Marv', async () => {
+  it("asks a human for permission before a message reaches Marv", async () => {
     const { svc, prisma } = makeSendService();
-    await expect(svc.sendMessage({ userId: 'human', conversationId: 'c1', body: 'Hello' })).rejects.toMatchObject({
-      response: { error: 'ai_consent_required' },
+    await expect(
+      svc.sendMessage({ userId: "human", conversationId: "c1", body: "Hello" }),
+    ).rejects.toMatchObject({
+      response: { error: "ai_consent_required" },
     });
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(prisma.marvinUserSettings.upsert).not.toHaveBeenCalled();

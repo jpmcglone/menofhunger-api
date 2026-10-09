@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { viewerCanSeeMembers } from '../auth/member-visibility';
+import { viewerCanSeeMembers } from '../auth/auth-public-api';
 
 /** Narrow, typed single-user reads for controllers that must not touch Prisma directly. */
 @Injectable()

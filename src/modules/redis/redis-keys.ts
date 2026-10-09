@@ -1,3 +1,4 @@
+import { clampLimit } from '../../common/pagination/page';
 import * as crypto from 'node:crypto';
 
 function clean(s: string | null | undefined): string {
@@ -13,15 +14,15 @@ export function stableJsonHash(value: unknown): string {
   // Avoids pulling in a dependency; supports plain objects/arrays/strings/numbers/booleans/null.
   // Note: inputs should be plain/acyclic; cycles are stringified as "[Circular]" to avoid throwing.
   const seen = new WeakSet<object>();
-  const stable = (v: any): any => {
+  const stable = (v: unknown): unknown => {
     if (v == null) return v;
     if (typeof v !== 'object') return v;
     if (seen.has(v)) return '[Circular]';
     seen.add(v);
     if (Array.isArray(v)) return v.map(stable);
     const keys = Object.keys(v).sort();
-    const out: Record<string, any> = {};
-    for (const k of keys) out[k] = stable(v[k]);
+    const out: Record<string, unknown> = {};
+    for (const k of keys) out[k] = stable((v as Record<string, unknown>)[k]);
     return out;
   };
   const json = JSON.stringify(stable(value));
@@ -75,13 +76,13 @@ export const RedisKeys = {
 
   // Checkin leaderboard caches
   checkinLeaderboard(limit: number): string {
-    return `checkin:leaderboard:${Math.max(1, Math.min(50, Math.floor(limit || 25)))}`;
+    return `checkin:leaderboard:${clampLimit(limit, { default: 25, max: 50 })}`;
   },
   checkinBestStreakLeaderboard(limit: number): string {
-    return `checkin:leaderboard:best:${Math.max(1, Math.min(50, Math.floor(limit || 25)))}`;
+    return `checkin:leaderboard:best:${clampLimit(limit, { default: 25, max: 50 })}`;
   },
   checkinWeeklyLeaderboard(limit: number, weekStartIso: string): string {
-    return `checkin:leaderboard:weekly:${Math.max(1, Math.min(50, Math.floor(limit || 25)))}:${clean(weekStartIso)}`;
+    return `checkin:leaderboard:weekly:${clampLimit(limit, { default: 25, max: 50 })}:${clean(weekStartIso)}`;
   },
 
   // Public profile cache (payload is versioned internally)
@@ -119,6 +120,10 @@ export const RedisKeys = {
   },
   forYouRankedPage1Lock(userId: string, paramsHash: string, feedVer: number): string {
     return `lock:posts:forYou:ranked:user:${clean(userId)}:v${feedVer}:${clean(paramsHash)}`;
+  },
+  /** Anonymous public links page (`GET /users/:username/links`). */
+  linksPage(username: string): string {
+    return `cache:linksPage:${encodeURIComponent(cleanLower(username))}`;
   },
   anonPostsUser(username: string, paramsHash: string, feedVer: number): string {
     return `cache:posts:user:${encodeURIComponent(cleanLower(username))}:v${feedVer}:${clean(paramsHash)}`;
@@ -202,7 +207,7 @@ export const RedisKeys = {
   // Checkin leaderboard viewer rank cache (per viewer per limit per scope)
   checkinLeaderboardViewerRank(userId: string, limit: number, scope?: string): string {
     const scopeSuffix = scope && scope !== 'active' ? `:${clean(scope)}` : '';
-    return `checkin:leaderboard:rank:${clean(userId)}:${Math.max(1, Math.min(50, Math.floor(limit || 25)))}${scopeSuffix}`;
+    return `checkin:leaderboard:rank:${clean(userId)}:${clampLimit(limit, { default: 25, max: 50 })}${scopeSuffix}`;
   },
 
   // Viewer block sets cache (rarely changes; invalidated on block/unblock)
@@ -243,11 +248,11 @@ export const RedisKeys = {
     return `daily:websters:wotd:${clean(dayKey)}:${includeDefinition ? 'def' : 'nodef'}`;
   },
   giphyTrending(limit: number): string {
-    return `giphy:trending:${Math.max(1, Math.min(50, Math.floor(limit || 24)))}`;
+    return `giphy:trending:${clampLimit(limit, { default: 24, max: 50 })}`;
   },
   giphySearch(q: string, limit: number): string {
     const qn = cleanLower(q).slice(0, 120);
-    const lim = Math.max(1, Math.min(50, Math.floor(limit || 24)));
+    const lim = clampLimit(limit, { default: 24, max: 50 });
     const qh = crypto.createHash('sha1').update(qn).digest('hex').slice(0, 12);
     return `giphy:search:${qh}:${lim}`;
   },

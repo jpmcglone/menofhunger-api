@@ -74,3 +74,17 @@ export const X_REFERENCE_PRICES = {
   mediaMetadata: 5_000,
   manageContent: 5_000,
 } as const;
+
+export interface IntegrationSpendPolicy {
+  /** Zero is a kill switch. All limits must come from validated configuration. */
+  companyMonthlyMicros: number;
+  companyDailyMicros: number;
+  providerMonthlyMicros: number;
+  /** Funded reserve/acquisition amount, never a count of hypothetical members. */
+  sharedMonthlyMicros: number;
+  priceVersion: string;
+  enabled: boolean;
+  removalHeadroomMicros?: number;
+  actionLifetimeMicros?: number;
+  actionLifetimeRequests?: number;
+}

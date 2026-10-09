@@ -1,12 +1,10 @@
 import { Controller, Get, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
 import { OptionalCurrentUserId } from '../users/users.decorator';
 import { setReadCache } from '../../common/http-cache';
 import { HashtagsService } from './hashtags.service';
-import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
-
-const trendingSchema = cursorPageQuerySchema();
+import { trendingSchema } from './hashtags.schemas';
 
 @UseGuards(OptionalAuthGuard)
 @Controller('hashtags')

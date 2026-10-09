@@ -5,9 +5,7 @@ import { sharedTools } from '../mcp/mcp-tools';
 import { getSessionCookie } from '../../common/session-cookie';
 import { AdminGuard, type AdminRequest } from './admin.guard';
 import { AdminAssistantService } from './admin-assistant.service';
-
-const messageSchema = z.object({ id: z.string().uuid(), message: z.string().trim().min(1).max(6000) }).strict();
-const decisionSchema = z.object({ decision: z.enum(['confirm', 'cancel']) }).strict();
+import { messageSchema, decisionSchema } from './admin-assistant.schemas';
 
 @UseGuards(AdminGuard)
 @Controller('admin/assistant')

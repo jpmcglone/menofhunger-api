@@ -2,12 +2,12 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
 function readFromRepo(relativePath: string): string {
-  return readFileSync(resolve(process.cwd(), relativePath), 'utf8');
+  return readFileSync(resolve(process.cwd(), relativePath), 'utf8').replace(/"/g, "'").replace(/\s+/g, ' ');
 }
 
 describe('PostsController media feed guardrails', () => {
   it('routes For You media through For You instead of chronological media fallback', () => {
-    const src = readFromRepo('src/modules/posts/posts-list.query.ts');
+    const src = readFromRepo('src/modules/posts/posts-list-query.service.ts');
     expect(src).toContain("const mediaChronological = mediaOnly && !groupScoped && sortKind !== 'forYou' && sortKind !== 'popular';");
   });
 
@@ -25,7 +25,7 @@ describe('PostsController media feed guardrails', () => {
   });
 
   it('caches authed For You first page with a stampede lock', () => {
-    const src = readFromRepo('src/modules/posts/posts-list.query.ts');
+    const src = readFromRepo('src/modules/posts/posts-list-query.service.ts');
     expect(src).toContain('authForYouFirstPageCache');
     expect(src).toContain('getOrSetJsonWithLock');
     expect(src).toContain('authPostsListLock');
@@ -36,8 +36,8 @@ describe('PostsController media feed guardrails', () => {
   });
 
   it('skips For You page-1 cache and applies refresh jitter on refresh=1', () => {
-    const controller = readFromRepo('src/modules/posts/posts-list.query.ts');
-    const feed = readFromRepo('src/modules/posts/posts-feed-for-you.service.ts');
+    const controller = readFromRepo('src/modules/posts/posts-list-query.service.ts');
+    const feed = `${readFromRepo('src/modules/posts/posts-feed-for-you.service.ts')} ${readFromRepo('src/modules/posts/posts-feed-for-you-scoring.ts')}`;
     expect(controller).toContain('refresh: queryBoolean().optional()');
     expect(controller).toContain('refresh: wantsForYouRefresh');
     expect(feed).toContain('params.refresh');

@@ -1,4 +1,4 @@
-import { XCrosspostService } from "./x-crosspost.service";
+import { makeXCrosspostService } from "./x-crosspost.testing";
 import { X_REFERENCE_PRICES } from "./integration-budget.policy";
 
 import { PostsReadService } from '../posts-read/posts-read.service';
@@ -75,7 +75,7 @@ describe("durable X Article publishing", () => {
       }),
       accessTokenFor: async () => "token",
     };
-    const service = new XCrosspostService(prisma as any,
+    const service = makeXCrosspostService(prisma as any,
       {} as any,
       { settle: jest.fn(), recordShared: jest.fn() } as any,
       config as any,

@@ -1,8 +1,10 @@
+import { isUniqueViolation } from '../../../common/prisma/errors';
 import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+
 import { AppConfigService } from '../../app/app-config.service';
 import { ChannelAccessService } from '../../group-channels/channel-access.service';
 import { ChannelAttentionService } from '../../group-channels/channel-attention.service';
+import { ChannelMessageReadService } from '../../group-channels/channel-message-read.service';
 import { ChannelMessagesService } from '../../group-channels/channel-messages.service';
 import { ChannelMarvScopeService, type ChannelMarvEvidence, type ChannelMarvGrant, type ChannelMarvRequest } from '../../group-channels/channel-marv-scope.service';
 import { PresenceRealtimeService } from '../../presence/presence-realtime.service';
@@ -36,7 +38,7 @@ export class MarvinChannelReplyProcessor {
   private readonly logger = new Logger(MarvinChannelReplyProcessor.name);
   constructor(private readonly prisma: PrismaService, private readonly config: AppConfigService,
     private readonly scope: ChannelMarvScopeService, private readonly access: ChannelAccessService,
-    private readonly messages: ChannelMessagesService, private readonly attention: ChannelAttentionService,
+    private readonly messages: ChannelMessagesService, private readonly reads: ChannelMessageReadService, private readonly attention: ChannelAttentionService,
     private readonly effects: SideEffectsService, private readonly credits: MarvinCreditService,
     private readonly routing: MarvinRoutingService, private readonly ai: MarvinAIService,
     private readonly usage: MarvinUsageService, private readonly platform: MarvinPlatformContextService,
@@ -81,7 +83,7 @@ export class MarvinChannelReplyProcessor {
     if (alreadySent) return;
     const claim = `marvin-channel-${input.messageId}`;
     try { await this.prisma.marvinIdempotencyKey.create({ data: { key: claim } }); }
-    catch (error) { if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return; throw error; }
+    catch (error) { if (isUniqueViolation(error)) return; throw error; }
     const controller = new AbortController();
     let checking = false;
     const heartbeat = setInterval(() => {
@@ -181,7 +183,7 @@ export class MarvinChannelReplyProcessor {
       }
       delivered = true; held = 0;
       this.effects.dispatch('channel.message.changed', { ...input, messageId: delivery.id, edited: false });
-      await this.messages.broadcast(input.groupId, input.channelId, delivery.id);
+      await this.reads.broadcast(input.groupId, input.channelId, delivery.id);
       await this.usage.recordEvent({ userId: input.requesterId, source: 'private_session', sourceId: authorized.channel.conversationId,
         requestedMode: requested, effectiveMode: routed.mode, creditsSpent: actual, inputTokens: result.inputTokens,
         outputTokens: result.outputTokens, cachedInputTokens: result.cachedInputTokens, reasoningTokens: result.reasoningTokens,

@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { NOT_DELETED } from '../../common/prisma/where';
 
 export type ForYouScannedRow = {
   id: string;
@@ -214,7 +215,7 @@ export async function loadForYouNetworkCandidates(params: {
                 : { communityGroupId: { not: null } },
               {
                 communityGroup: {
-                  is: { deletedAt: null, joinPolicy: "open" },
+                  is: { ...NOT_DELETED, joinPolicy: "open" },
                 },
               },
               { createdAt: { gte: groupSince } },

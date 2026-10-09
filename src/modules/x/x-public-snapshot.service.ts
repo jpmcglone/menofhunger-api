@@ -1,10 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { z } from "zod";
 import { PrismaService } from "../prisma/prisma.service";
-import type {
-  XProfilePreviewDto,
-  XAuthorMetricsDto,
-} from "../../common/dto/integrations.dto";
+import type { XProfilePreviewDto, XAuthorMetricsDto } from "../../common/dto/integrations.dto";
 
 const count = z.number().int().nonnegative().safe();
 const dates = {

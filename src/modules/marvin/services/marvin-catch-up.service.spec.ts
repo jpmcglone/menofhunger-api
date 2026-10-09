@@ -1,5 +1,6 @@
 import { AI_CONSENT_VERSION } from './ai-consent';
 import { ForbiddenException, HttpException } from '@nestjs/common';
+import { MarvinCatchUpCacheService } from './marvin-catch-up-cache.service';
 import { MarvinCatchUpService } from './marvin-catch-up.service';
 import { InsufficientMarvCreditsError } from './marvin-credit.service';
 import { MarvinThreadContextService } from './marvin-thread-context.service';
@@ -261,6 +262,7 @@ function makeService(opts?: {
   const service = new MarvinCatchUpService(
     prisma, appConfig, cache, posts, context, routing, ai, credits, usage,
     threadSummary, tools, linkMetadata,
+    new MarvinCatchUpCacheService(appConfig, cache, context, posts, prisma),
   );
   return { service, prisma, appConfig, cache, posts, context, routing, ai, credits, usage, threadSummary, tools, linkMetadata };
 }

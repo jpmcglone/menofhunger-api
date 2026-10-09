@@ -1,29 +1,31 @@
-import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import type { AvatarVideoDto } from '../../common/dto/avatar-video.dto';
+import { NOT_BANNED_USER_WHERE } from "../../common/prisma-selects/user.where";
+import { toAvatarVideoDto } from "../../common/dto/avatar-video.dto";
+import type { AvatarVideoDto } from "../../common/dto/avatar-video.dto";
 import {
   BadRequestException,
   ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
-} from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import type { Crew, CrewMember, CrewMemberRole } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-import { AppConfigService } from '../app/app-config.service';
-import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { SideEffectsService } from '../side-effects/side-effects.service';
-import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
-import { publicAssetUrl } from '../../common/assets/public-asset-url';
+} from "@nestjs/common";
+import { Prisma } from "@prisma/client";
+import type { Crew, CrewMember, CrewMemberRole } from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { AppConfigService } from "../app/app-config.service";
+import { PresenceRealtimeService } from "../presence/presence-realtime.service";
+import { SideEffectsService } from "../side-effects/side-effects.service";
+import { USER_LIST_SELECT } from "../../common/prisma-selects/user.select";
+import { publicAssetUrl } from "../../common/assets/public-asset-url";
 import {
   CREW_MEMBER_CAP,
   toCrewPrivateDto,
   toCrewPublicDto,
   type CrewPrivateDto,
   type CrewPublicDto,
-} from '../../common/dto/crew.dto';
-import { ensureUniqueCrewSlug } from './crew.utils';
-import { slugifyCrewHandle } from '../../common/text/slugify';
+} from "../../common/dto/crew.dto";
+import { ensureUniqueCrewSlug } from "./crew.utils";
+import { slugifyCrewHandle } from "../../common/text/slugify";
+import { NOT_DELETED } from "../../common/prisma/where";
 
 type UserRow = Prisma.UserGetPayload<{ select: typeof USER_LIST_SELECT }>;
 type MemberRow = CrewMember & { user: UserRow };
@@ -37,8 +39,11 @@ type OpenMemberEntry = {
   premiumPlus: boolean;
   isOrganization: boolean;
   verifiedStatus: string;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
-  avatarKey?: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
+  avatarKey?: string | null;
+  avatarVideoKey?: string | null;
+  avatarVideoDurationMs?: number | null;
   avatarUpdatedAt?: Date | null;
 };
 type CrewWithRelations = Crew & {
@@ -69,10 +74,10 @@ export class CrewService {
       where: { id: userId },
       select: { verifiedStatus: true, bannedAt: true },
     });
-    if (!u) throw new NotFoundException('User not found.');
-    if (u.bannedAt) throw new ForbiddenException('Account is suspended.');
-    if (!u.verifiedStatus || u.verifiedStatus === 'none') {
-      throw new ForbiddenException('Verify to use Crews.');
+    if (!u) throw new NotFoundException("User not found.");
+    if (u.bannedAt) throw new ForbiddenException("Account is suspended.");
+    if (!u.verifiedStatus || u.verifiedStatus === "none") {
+      throw new ForbiddenException("Verify to use Crews.");
     }
   }
 
@@ -81,14 +86,15 @@ export class CrewService {
       where: { crewId_userId: { crewId, userId } },
       include: { user: { select: USER_LIST_SELECT } },
     });
-    if (!mem) throw new ForbiddenException('You are not a member of this crew.');
+    if (!mem)
+      throw new ForbiddenException("You are not a member of this crew.");
     return mem as MemberRow;
   }
 
   async assertCrewOwner(crewId: string, userId: string): Promise<void> {
     const mem = await this.assertCrewMember(crewId, userId);
-    if (mem.role !== 'owner') {
-      throw new ForbiddenException('Only the crew owner can do that.');
+    if (mem.role !== "owner") {
+      throw new ForbiddenException("Only the crew owner can do that.");
     }
   }
 
@@ -114,7 +120,7 @@ export class CrewService {
       where: { crewId: mine.id, userId: viewerUserId },
       select: { role: true },
     });
-    if (viewerMember?.role !== 'owner') return;
+    if (viewerMember?.role !== "owner") return;
 
     await this.prisma.$transaction(
       order.map((userId, index) =>
@@ -150,11 +156,11 @@ export class CrewService {
       unreadChatCount: number;
     } | null;
   }> {
-    const s = (params.slug ?? '').trim().toLowerCase();
-    if (!s) throw new NotFoundException('Crew not found.');
+    const s = (params.slug ?? "").trim().toLowerCase();
+    if (!s) throw new NotFoundException("Crew not found.");
 
     const active = await this.prisma.crew.findFirst({
-      where: { slug: s, deletedAt: null },
+      where: { slug: s, ...NOT_DELETED },
       include: {
         owner: { select: USER_LIST_SELECT },
         members: { include: { user: { select: USER_LIST_SELECT } } },
@@ -172,17 +178,19 @@ export class CrewService {
     }
 
     // Fall back to slug history for a 301-style redirect hint.
-    const history = await this.prisma.crewSlugHistory.findUnique({ where: { slug: s } });
-    if (!history) throw new NotFoundException('Crew not found.');
+    const history = await this.prisma.crewSlugHistory.findUnique({
+      where: { slug: s },
+    });
+    if (!history) throw new NotFoundException("Crew not found.");
 
     const target = await this.prisma.crew.findFirst({
-      where: { id: history.crewId, deletedAt: null },
+      where: { id: history.crewId, ...NOT_DELETED },
       include: {
         owner: { select: USER_LIST_SELECT },
         members: { include: { user: { select: USER_LIST_SELECT } } },
       },
     });
-    if (!target) throw new NotFoundException('Crew not found.');
+    if (!target) throw new NotFoundException("Crew not found.");
     return {
       crew: this.toPublicDto(target as CrewWithRelations),
       redirectedFromSlug: s,
@@ -207,8 +215,8 @@ export class CrewService {
     if (!mem) return null;
 
     // Count messages on the chat conversation since the viewer's last read,
-    // mirroring MessagesService.getUnreadCount (kept inline here to avoid a
-    // CrewService → MessagesService dep just for one count).
+    // mirroring MessagesConversationStateService.getUnreadSummary (kept inline here to avoid a
+    // CrewService → MessagesWriteService dep just for one count).
     const participant = await this.prisma.messageParticipant.findUnique({
       where: {
         conversationId_userId: {
@@ -261,7 +269,7 @@ export class CrewService {
     const mem = await this.prisma.crewMember.findUnique({
       where: { userId: params.viewerUserId },
     });
-    if (!mem) throw new NotFoundException('You are not in a crew.');
+    if (!mem) throw new NotFoundException("You are not in a crew.");
     return this.updateCrew({
       viewerUserId: params.viewerUserId,
       isSiteAdmin: false,
@@ -295,16 +303,20 @@ export class CrewService {
     coverImageUrl?: string | null;
     designatedSuccessorUserId?: string | null;
   }): Promise<CrewPrivateDto> {
-    const crew = await this.prisma.crew.findUnique({ where: { id: params.crewId } });
-    if (!crew || crew.deletedAt) throw new NotFoundException('Crew not found.');
+    const crew = await this.prisma.crew.findUnique({
+      where: { id: params.crewId },
+    });
+    if (!crew || crew.deletedAt) throw new NotFoundException("Crew not found.");
 
     const viewerMembership = await this.prisma.crewMember.findUnique({
-      where: { crewId_userId: { crewId: crew.id, userId: params.viewerUserId } },
+      where: {
+        crewId_userId: { crewId: crew.id, userId: params.viewerUserId },
+      },
       select: { role: true },
     });
-    const isOwner = viewerMembership?.role === 'owner';
+    const isOwner = viewerMembership?.role === "owner";
     if (!isOwner && !params.isSiteAdmin) {
-      throw new ForbiddenException('Only the crew owner can do that.');
+      throw new ForbiddenException("Only the crew owner can do that.");
     }
     if (isOwner) {
       // Owners must still be verified; admin edits bypass to keep moderation
@@ -316,13 +328,13 @@ export class CrewService {
     let slugRotation: { oldSlug: string; newSlug: string } | null = null;
 
     if (params.name !== undefined) {
-      const next = (params.name ?? '').trim();
+      const next = (params.name ?? "").trim();
       const normalizedNext = next.length === 0 ? null : next;
       const prev = crew.name;
       data.name = normalizedNext;
       // If the name changed meaningfully, regen the slug (and record the old one).
-      const prevSlugBase = slugifyCrewHandle(prev ?? 'crew');
-      const nextSlugBase = slugifyCrewHandle(normalizedNext ?? 'crew');
+      const prevSlugBase = slugifyCrewHandle(prev ?? "crew");
+      const nextSlugBase = slugifyCrewHandle(normalizedNext ?? "crew");
       if (nextSlugBase !== prevSlugBase) {
         const nextSlug = await ensureUniqueCrewSlug(this.prisma, nextSlugBase, {
           excludeCrewId: crew.id,
@@ -334,23 +346,23 @@ export class CrewService {
       }
     }
     if (params.tagline !== undefined) {
-      const v = (params.tagline ?? '').trim();
+      const v = (params.tagline ?? "").trim();
       data.tagline = v.length === 0 ? null : v.slice(0, 160);
     }
     if (params.bio !== undefined) {
-      const v = (params.bio ?? '').trim();
+      const v = (params.bio ?? "").trim();
       data.bio = v.length === 0 ? null : v;
     }
     if (params.avatarImageUrl !== undefined) {
-      const v = (params.avatarImageUrl ?? '').trim();
+      const v = (params.avatarImageUrl ?? "").trim();
       data.avatarImageUrl = v.length === 0 ? null : v;
     }
     if (params.coverImageUrl !== undefined) {
-      const v = (params.coverImageUrl ?? '').trim();
+      const v = (params.coverImageUrl ?? "").trim();
       data.coverImageUrl = v.length === 0 ? null : v;
     }
     if (params.designatedSuccessorUserId !== undefined) {
-      const nextSuccessor = (params.designatedSuccessorUserId ?? '').trim();
+      const nextSuccessor = (params.designatedSuccessorUserId ?? "").trim();
       if (!nextSuccessor) {
         data.designatedSuccessor = { disconnect: true };
       } else {
@@ -358,8 +370,10 @@ export class CrewService {
           where: { crewId_userId: { crewId: crew.id, userId: nextSuccessor } },
           select: { userId: true, role: true },
         });
-        if (!target || target.role === 'owner') {
-          throw new BadRequestException('Designated successor must be a non-owner crew member.');
+        if (!target || target.role === "owner") {
+          throw new BadRequestException(
+            "Designated successor must be a non-owner crew member.",
+          );
         }
         data.designatedSuccessor = { connect: { id: nextSuccessor } };
       }
@@ -379,7 +393,7 @@ export class CrewService {
     // DTO is shaped as if the owner is viewing — admins editing a crew they
     // don't belong to receive the same private snapshot so the dialog can show
     // pending invites + successor without re-fetching from a second endpoint.
-    const dto = await this.toMyCrewDto(updated, params.viewerUserId, 'owner');
+    const dto = await this.toMyCrewDto(updated, params.viewerUserId, "owner");
     const memberIds = updated.members.map((m) => m.userId);
     this.presenceRealtime.emitCrewUpdated(memberIds, { crew: dto });
     return dto;
@@ -391,9 +405,9 @@ export class CrewService {
       where: { userId: params.viewerUserId },
     });
     if (!mem) return;
-    if (mem.role === 'owner') {
+    if (mem.role === "owner") {
       throw new BadRequestException(
-        'Transfer ownership before leaving, or disband the crew.',
+        "Transfer ownership before leaving, or disband the crew.",
       );
     }
     const crewId = mem.crewId;
@@ -406,7 +420,7 @@ export class CrewService {
         data: {
           memberCount: { decrement: 1 },
           // Clear successor if the leaving user was designated.
-          ...(mem.role === 'member'
+          ...(mem.role === "member"
             ? {
                 designatedSuccessor: {
                   disconnect: true,
@@ -417,7 +431,10 @@ export class CrewService {
       });
       // Remove from wall conversation so they stop getting wall events.
       await tx.messageParticipant.deleteMany({
-        where: { conversation: { crewWall: { id: crewId } }, userId: params.viewerUserId },
+        where: {
+          conversation: { crewWall: { id: crewId } },
+          userId: params.viewerUserId,
+        },
       });
     });
     const remaining = await this.prisma.crewMember.findMany({
@@ -426,15 +443,15 @@ export class CrewService {
     });
     this.presenceRealtime.emitCrewMembersChanged(
       [...remaining.map((m) => m.userId), params.viewerUserId],
-      { crewId, kind: 'left', userId: params.viewerUserId },
+      { crewId, kind: "left", userId: params.viewerUserId },
     );
 
     // Notifies the remaining members and tidies now-misleading "X joined your crew" rows.
-    this.sideEffects.dispatch('crew.member.removed', {
+    this.sideEffects.dispatch("crew.member.removed", {
       crewId,
       actorUserId: params.viewerUserId,
       subjectUserId: params.viewerUserId,
-      reason: 'left',
+      reason: "left",
     });
   }
 
@@ -449,14 +466,19 @@ export class CrewService {
     }
     await this.assertCrewOwner(params.crewId, params.viewerUserId);
     const target = await this.prisma.crewMember.findUnique({
-      where: { crewId_userId: { crewId: params.crewId, userId: params.userId } },
+      where: {
+        crewId_userId: { crewId: params.crewId, userId: params.userId },
+      },
     });
-    if (!target) throw new NotFoundException('Member not found.');
-    if (target.role === 'owner') throw new ForbiddenException('Cannot remove the owner.');
+    if (!target) throw new NotFoundException("Member not found.");
+    if (target.role === "owner")
+      throw new ForbiddenException("Cannot remove the owner.");
 
     await this.prisma.$transaction(async (tx) => {
       await tx.crewMember.delete({
-        where: { crewId_userId: { crewId: params.crewId, userId: params.userId } },
+        where: {
+          crewId_userId: { crewId: params.crewId, userId: params.userId },
+        },
       });
       await tx.crew.update({
         where: { id: params.crewId },
@@ -478,14 +500,14 @@ export class CrewService {
     });
     this.presenceRealtime.emitCrewMembersChanged(
       [...remaining.map((m) => m.userId), params.userId],
-      { crewId: params.crewId, kind: 'kicked', userId: params.userId },
+      { crewId: params.crewId, kind: "kicked", userId: params.userId },
     );
 
-    this.sideEffects.dispatch('crew.member.removed', {
+    this.sideEffects.dispatch("crew.member.removed", {
       crewId: params.crewId,
       actorUserId: params.viewerUserId,
       subjectUserId: params.userId,
-      reason: 'kicked',
+      reason: "kicked",
     });
   }
 
@@ -499,12 +521,18 @@ export class CrewService {
    * in `CrewInvitesService.acceptInvite` when a solo crew member accepts an
    * invite to another crew.
    */
-  async disbandCrewTx(tx: Prisma.TransactionClient, crewId: string): Promise<void> {
-    await tx.crew.update({ where: { id: crewId }, data: { deletedAt: new Date() } });
+  async disbandCrewTx(
+    tx: Prisma.TransactionClient,
+    crewId: string,
+  ): Promise<void> {
+    await tx.crew.update({
+      where: { id: crewId },
+      data: { deletedAt: new Date() },
+    });
     await tx.crewMember.deleteMany({ where: { crewId } });
     await tx.crewInvite.updateMany({
-      where: { crewId, status: 'pending' },
-      data: { status: 'cancelled', respondedAt: new Date() },
+      where: { crewId, status: "pending" },
+      data: { status: "cancelled", respondedAt: new Date() },
     });
   }
 
@@ -525,7 +553,7 @@ export class CrewService {
       { crewId },
     );
 
-    this.sideEffects.dispatch('crew.disbanded', {
+    this.sideEffects.dispatch("crew.disbanded", {
       crewId,
       actorUserId: crew.ownerUserId,
       memberUserIds: allMembers.map((m) => m.userId),
@@ -537,9 +565,9 @@ export class CrewService {
     const mem = await this.prisma.crewMember.findUnique({
       where: { userId: params.viewerUserId },
     });
-    if (!mem) throw new NotFoundException('You are not in a crew.');
-    if (mem.role !== 'owner') {
-      throw new ForbiddenException('Only the crew owner can disband the crew.');
+    if (!mem) throw new NotFoundException("You are not in a crew.");
+    if (mem.role !== "owner") {
+      throw new ForbiddenException("Only the crew owner can disband the crew.");
     }
     const crewId = mem.crewId;
     const allMembers = await this.prisma.crewMember.findMany({
@@ -552,7 +580,7 @@ export class CrewService {
       { crewId },
     );
 
-    this.sideEffects.dispatch('crew.disbanded', {
+    this.sideEffects.dispatch("crew.disbanded", {
       crewId,
       actorUserId: params.viewerUserId,
       memberUserIds: allMembers.map((m) => m.userId),
@@ -561,7 +589,9 @@ export class CrewService {
 
   // ---------- dto helpers ----------
 
-  private async loadCrewWithRelations(crewId: string): Promise<CrewWithRelations | null> {
+  private async loadCrewWithRelations(
+    crewId: string,
+  ): Promise<CrewWithRelations | null> {
     const c = await this.prisma.crew.findUnique({
       where: { id: crewId },
       include: {
@@ -572,9 +602,11 @@ export class CrewService {
     return (c as CrewWithRelations | null) ?? null;
   }
 
-  private async loadCrewWithRelationsOrThrow(crewId: string): Promise<CrewWithRelations> {
+  private async loadCrewWithRelationsOrThrow(
+    crewId: string,
+  ): Promise<CrewWithRelations> {
     const c = await this.loadCrewWithRelations(crewId);
-    if (!c) throw new NotFoundException('Crew not found.');
+    if (!c) throw new NotFoundException("Crew not found.");
     return c;
   }
 
@@ -595,7 +627,7 @@ export class CrewService {
   ): Promise<CrewPrivateDto> {
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const pendingInviteCount = await this.prisma.crewInvite.count({
-      where: { crewId: crew.id, status: 'pending' },
+      where: { crewId: crew.id, status: "pending" },
     });
     return toCrewPrivateDto({
       crew,
@@ -608,7 +640,10 @@ export class CrewService {
   }
 
   /** Exported for invites service. */
-  async toPrivateDtoForMember(crewId: string, viewerUserId: string): Promise<CrewPrivateDto> {
+  async toPrivateDtoForMember(
+    crewId: string,
+    viewerUserId: string,
+  ): Promise<CrewPrivateDto> {
     const mem = await this.assertCrewMember(crewId, viewerUserId);
     const crew = await this.loadCrewWithRelationsOrThrow(crewId);
     return this.toMyCrewDto(crew, viewerUserId, mem.role);
@@ -635,7 +670,7 @@ export class CrewService {
         select: { crewId: true, crew: { select: { memberCount: true } } },
       });
       if (membership && membership.crew.memberCount > 1) {
-        throw new BadRequestException('You are already in a crew.');
+        throw new BadRequestException("You are already in a crew.");
       }
     }
 
@@ -669,8 +704,8 @@ export class CrewService {
       where: {
         id: { not: params.viewerUserId },
         openToCrewAt: { not: null },
-        verifiedStatus: { not: 'none' },
-        bannedAt: null,
+        verifiedStatus: { not: "none" },
+        ...NOT_BANNED_USER_WHERE,
         isBot: false,
       },
       select: {
@@ -686,13 +721,16 @@ export class CrewService {
     return candidates
       .filter((c) => {
         // Allow solo-crew founders (they can be recruited away).
-        if (c.crewMembership && c.crewMembership.crew.memberCount > 1) return false;
+        if (c.crewMembership && c.crewMembership.crew.memberCount > 1)
+          return false;
         return true;
       })
       .map((c) => ({
-        sharedInterests: (c.interests ?? []).filter((i) => viewerInterests.has(i)),
+        sharedInterests: (c.interests ?? []).filter((i) =>
+          viewerInterests.has(i),
+        ),
         openToCrewAt: c.openToCrewAt!,
-        user: c as unknown as OpenMemberEntry,
+        user: c,
       }))
       .sort((a, b) => {
         const byArena = b.sharedInterests.length - a.sharedInterests.length;
@@ -713,7 +751,8 @@ export class CrewService {
             publicBaseUrl,
             key: user.avatarKey ?? null,
             updatedAt: user.avatarUpdatedAt ?? null,
-          }), avatarVideo: toAvatarVideoDto(user, publicBaseUrl),
+          }),
+          avatarVideo: toAvatarVideoDto(user, publicBaseUrl),
         } as OpenMemberEntry,
         sharedInterests,
       }));

@@ -1,16 +1,8 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import type { OutboundDelivery } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AppConfigService } from "../app/app-config.service";
-import {
-  OutboundService,
-  OutboundAttentionError,
-} from "../outbound/outbound.service";
+import { OutboundService, OutboundAttentionError } from "../outbound/outbound.service";
 import { XConnectionService } from "./x-connection.service";
 import { XUsageService } from "./x-usage.service";
 import { xContainsLink } from "../../common/crosspost/crosspost-eligibility";
@@ -20,15 +12,12 @@ import { XPublicSnapshotService } from "./x-public-snapshot.service";
 import { RedisService } from "../redis/redis.service";
 import { PresenceRealtimeService } from "../presence/presence-realtime.service";
 import { readLimitedResponse } from "../../common/http/read-limited-response";
-import {
-  prepareXPlan,
-  xPublishingInput,
-  xSourceHash,
-} from "./x-publishing-plan";
+import { prepareXPlan, xPublishingInput, xSourceHash } from "./x-publishing-plan";
 import type { XPublishingWorkspaceDto } from "../../common/dto/integrations.dto";
 
 import { PostsReadService } from '../posts-read/posts-read.service';
 import { PostsWriteService } from '../posts-read/posts-write.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 @Injectable()
 export class XPublishingService {
   constructor(
@@ -47,11 +36,11 @@ export class XPublishingService {
   ) {}
 
   private async source(userId: string, postId: string) {
-    const post = await this.postsRead.read.findFirst({
+    const post = await this.postsRead.findFirst({
       where: {
         id: postId,
         userId,
-        deletedAt: null,
+        ...NOT_DELETED,
         isDraft: false,
         scheduledAt: null,
         visibility: "public",
@@ -427,10 +416,7 @@ export class XPublishingService {
       }
       await guard();
       const xUrl = `https://x.com/i/status/${delivered[0]}`;
-      await this.postsWrite.write.updateMany({
-        where: { id: row.resourceId },
-        data: { xUrl, xError: null },
-      });
+      await this.postsWrite.recordCrosspostResult(row.resourceId, 'x', { url: xUrl, error: null });
       await this.prisma.xCrosspost.update({
         where: { id: copy.id },
         data: { lastError: null },
@@ -459,10 +445,7 @@ export class XPublishingService {
         where: { id: copy.id },
         data: { lastError: message },
       });
-      await this.postsWrite.write.updateMany({
-        where: { id: row.resourceId },
-        data: { xError: message },
-      });
+      await this.postsWrite.recordCrosspostResult(row.resourceId, 'x', { error: message });
       throw new OutboundAttentionError(message);
     }
   }

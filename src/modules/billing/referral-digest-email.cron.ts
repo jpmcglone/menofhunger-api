@@ -1,3 +1,4 @@
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
@@ -32,9 +33,7 @@ export class ReferralDigestEmailCron {
         createdAt: { gte: since },
       },
       select: {
-        id: true,
-        username: true,
-        name: true,
+        ...USER_BRIEF_SELECT,
         recruitedById: true,
       },
     });
@@ -53,7 +52,7 @@ export class ReferralDigestEmailCron {
     const recruiterIds = [...byRecruiter.keys()];
     const recruiters = await this.prisma.user.findMany({
       where: { id: { in: recruiterIds } },
-      select: { id: true, username: true, name: true, email: true },
+      select: { ...USER_BRIEF_SELECT, email: true },
     });
 
     const baseUrl = safeBaseUrl(this.appConfig.frontendBaseUrl());

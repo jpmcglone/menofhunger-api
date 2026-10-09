@@ -1,10 +1,9 @@
 import { Controller, Delete, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
 import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
-import { AuthGuard } from '../auth/auth.guard';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { AuthGuard } from '../auth/auth-public-api';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { setReadCache } from '../../common/http-cache';
@@ -14,21 +13,7 @@ import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { RedisKeys, stableJsonHash } from '../redis/redis-keys';
 import { CacheService } from '../redis/cache.service';
 import { CacheTtl } from '../redis/cache-ttl';
-import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
-
-const listTopicsSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-});
-
-const listTopicPostsSchema = cursorPageQuerySchema();
-
-const listFollowedSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-});
-
-const listCategoriesSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-});
+import { listTopicsSchema, listTopicPostsSchema, listFollowedSchema, listCategoriesSchema } from './topics.schemas';
 
 @UseGuards(OptionalAuthGuard)
 @ApiTags('Other')

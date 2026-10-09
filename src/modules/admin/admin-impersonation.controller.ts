@@ -1,13 +1,9 @@
 import { Body, Controller, Post, Req, Res, UnauthorizedException, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { z } from 'zod';
 import { AdminGuard, type AdminRequest } from './admin.guard';
-import { ImpersonationService } from '../auth/impersonation.service';
-
-const startSchema = z.object({
-  username: z.string().min(1).max(64),
-});
+import { ImpersonationService } from '../auth/auth-public-api';
+import { startSchema } from './admin-impersonation.schemas';
 
 /**
  * Admin impersonation ("log in as another user").

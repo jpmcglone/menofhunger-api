@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { clampLimit } from '../../common/pagination/page';
 import { Cron } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -6,6 +7,8 @@ import { inferTopicsFromText } from '../../common/topics/topic-utils';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { AppConfigService } from '../app/app-config.service';
+import { createdAtIdBefore } from '../../common/pagination/created-at-id-cursor';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 type BackfillPostRow = {
   id: string;
@@ -68,7 +71,7 @@ export class PostsTopicsBackfillCron {
       const wipeExisting = Boolean(opts?.wipeExisting);
       // Wipe rebuilds every row — always drain. Empty-topic fills drain when asked.
       const runUntilEmpty = Boolean(opts?.runUntilEmpty) || wipeExisting;
-      const lookbackDays = Math.max(1, Math.min(10_000, Math.floor(opts?.lookbackDays ?? 3650)));
+      const lookbackDays = clampLimit(opts?.lookbackDays, { default: 3650, max: 10_000 });
       const batchSize = Math.max(10, Math.min(5_000, Math.floor(opts?.batchSize ?? 200)));
       const minCreatedAt = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
       const maxBatches = runUntilEmpty ? 50 : 1;
@@ -78,17 +81,12 @@ export class PostsTopicsBackfillCron {
 
       for (let batch = 0; batch < maxBatches; batch++) {
         const cursorWhere: Prisma.PostWhereInput = cursor
-          ? {
-              OR: [
-                { createdAt: { lt: cursor.createdAt } },
-                { AND: [{ createdAt: cursor.createdAt }, { id: { lt: cursor.id } }] },
-              ],
-            }
+          ? createdAtIdBefore({ createdAt: cursor.createdAt, id: cursor.id })
           : {};
 
         const rows: BackfillPostRow[] = await this.prisma.post.findMany({
           where: {
-            deletedAt: null,
+            ...NOT_DELETED,
             createdAt: { gte: minCreatedAt },
             ...(wipeExisting ? {} : { topics: { equals: [] }, topicsClassifiedAt: null }),
             ...cursorWhere,

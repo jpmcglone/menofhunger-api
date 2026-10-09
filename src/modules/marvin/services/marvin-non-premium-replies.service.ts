@@ -1,5 +1,6 @@
+import { isUniqueViolation } from '../../../common/prisma/errors';
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma, type MarvinCannedReplyReason } from '@prisma/client';
+import { type MarvinCannedReplyReason } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
 /**
@@ -59,7 +60,7 @@ export class MarvinNonPremiumRepliesService {
       });
       return true;
     } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      if (isUniqueViolation(err)) {
         return false;
       }
       throw err;

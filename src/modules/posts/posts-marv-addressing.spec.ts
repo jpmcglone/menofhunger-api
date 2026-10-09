@@ -1,4 +1,4 @@
-import { PostsSideEffectsHandler } from './posts-side-effects.handler';
+import { makePostsSideEffectsHandler } from './posts-side-effects.testing';
 import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
 import { MarvinAddressingService } from '../marvin/services/marvin-addressing.service';
 
@@ -12,7 +12,7 @@ function setup(opts: { probability?: number | null; available?: boolean; parent?
     communityGroupMember: { findUnique: jest.fn(async () => null) },
   };
   const jobs: any = { enqueue: jest.fn(async () => undefined) };
-  const handler = new PostsSideEffectsHandler(
+  const handler = makePostsSideEffectsHandler(
     prisma,
     {} as any,
     { emitPostsTyping: jest.fn() } as any,
@@ -26,7 +26,7 @@ function setup(opts: { probability?: number | null; available?: boolean; parent?
     addressing,
   );
   const run = (post: Record<string, unknown>, actorUserId = 'alice') =>
-    (handler as any).maybeEnqueueMarvReply({
+    (handler as any).createdEffects.maybeEnqueueMarvReply({
       post: { id: 'p-1', kind: 'regular', rootId: 'r-1', communityGroupId: null, mentions: [], parentId: 'p-0', ...post },
       actorUserId,
       bodySnippet: '',

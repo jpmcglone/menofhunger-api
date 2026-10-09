@@ -1,79 +1,9 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
-import { AuthGuard } from '../auth/auth.guard';
+import { AuthGuard } from '../auth/auth-public-api';
 import { CurrentUserId } from '../users/users.decorator';
 import { ScheduledPostsService } from './scheduled-posts.service';
 import type { PostVisibility } from '@prisma/client';
-import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
-
-const mediaUploadSchema = z.object({
-  source: z.literal('upload'),
-  kind: z.enum(['image', 'gif', 'video']),
-  r2Key: z.string().min(1),
-  thumbnailR2Key: z.string().min(1).optional(),
-  width: z.coerce.number().int().min(1).max(20000).optional(),
-  height: z.coerce.number().int().min(1).max(20000).optional(),
-  durationSeconds: z.coerce.number().int().min(0).max(3600).optional(),
-  alt: z.string().trim().max(500).nullish(),
-});
-
-const mediaGiphySchema = z.object({
-  source: z.literal('giphy'),
-  kind: z.literal('gif'),
-  url: z.string().url(),
-  mp4Url: z.string().url().optional(),
-  width: z.coerce.number().int().min(1).max(20000).optional(),
-  height: z.coerce.number().int().min(1).max(20000).optional(),
-  alt: z.string().trim().max(500).nullish(),
-});
-
-const mediaExistingSchema = z.object({
-  source: z.literal('existing'),
-  id: z.string().min(1),
-  alt: z.string().trim().max(500).nullish(),
-});
-
-// Create only accepts upload + giphy (new media).
-const mediaCreateSchema = z.discriminatedUnion('source', [mediaUploadSchema, mediaGiphySchema]);
-// Update also accepts 'existing' references (unchanged media from the holding row).
-const mediaUpdateSchema = z.discriminatedUnion('source', [mediaExistingSchema, mediaUploadSchema, mediaGiphySchema]);
-
-const pollOptionSchema = z.object({ text: z.string().trim().min(1).max(80) });
-
-const pollSchema = z.object({
-  options: z.array(pollOptionSchema).min(2).max(4),
-  durationHours: z.number().int().min(1).max(168),
-});
-
-const crosspostSchema = z.object({ pickax: z.enum(['link', 'native']).optional(), x: z.literal('native').optional() }).strict();
-const createSchema = z.object({
-  crosspost: crosspostSchema.optional(),
-  body: z.string().trim().max(1000).default(''),
-  visibility: z.enum(['public', 'verifiedOnly', 'premiumOnly']),
-  scheduled_at: z
-    .string()
-    .datetime()
-    .transform((v) => new Date(v)),
-  media: z.array(mediaCreateSchema).max(4).optional(),
-  poll: pollSchema.nullish(),
-  community_group_id: z.string().trim().nullish(),
-});
-
-const updateSchema = z.object({
-  crosspost: crosspostSchema.optional(),
-  body: z.string().trim().max(1000).optional(),
-  visibility: z.enum(['public', 'verifiedOnly', 'premiumOnly']).optional(),
-  scheduled_at: z
-    .string()
-    .datetime()
-    .transform((v) => new Date(v))
-    .optional(),
-  media: z.array(mediaUpdateSchema).max(4).nullish(),
-  poll: pollSchema.nullish(),
-  community_group_id: z.string().trim().nullish(),
-});
-
-const listSchema = cursorPageQuerySchema();
+import { createSchema, updateSchema, listSchema } from './scheduled-posts.schemas';
 
 @UseGuards(AuthGuard)
 @Controller('posts/scheduled')

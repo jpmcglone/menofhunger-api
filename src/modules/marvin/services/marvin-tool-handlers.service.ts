@@ -1,10 +1,8 @@
-import { findGroupMemberStatus } from '../../viewer/group-membership.queries';
-import type { Prisma } from '@prisma/client';
+import { NOT_BANNED_USER_WHERE } from '../../../common/prisma-selects/user.where';
 import { MarvinPersonalService } from './marvin-personal.service';
 import { MarvinParticipationService } from './marvin-participation.service';
 import crypto from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
-import { z } from 'zod';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CacheService } from '../../redis/cache.service';
 import type { MarvAIToolCallContext } from './marvin-ai.service';
@@ -13,96 +11,17 @@ import { MarvinContextCardService } from './marvin-context-card.service';
 import { ScriptureService } from '../../scripture/scripture.service';
 import { JobsService } from '../../jobs/jobs.service';
 import { JOBS } from '../../jobs/jobs.constants';
-import { marvPublicProfilePostWhere, marvToolGroupAccessOr } from './marvin-post-access';
+import { marvPublicProfilePostWhere } from './marvin-post-access';
 import { parseMentionsFromBody } from '../../../common/mentions/mention-regex';
 import { AppConfigService } from '../../app/app-config.service';
-import { resolveMarvVisionUrl } from './marvin-vision-media';
 
 import { PostsReadService } from '../../posts-read/posts-read.service';
 import { MarvinPlatformContextService } from './marvin-platform-context.service';
-const RECENT_MESSAGES_DEFAULT = 10;
-const RECENT_MESSAGES_MAX = 30;
-const SIMILAR_MEMBERS_DEFAULT = 5;
-const SIMILAR_MEMBERS_MAX = 8;
-const SIMILAR_CANDIDATE_LIMIT = 60;
-const CARD_SNIPPET_MAX = 280;
-const PREFETCH_MEMBER_CARD_MAX = 8;
-
-const handleSchema = z
-  .string()
-  .min(1)
-  .max(50)
-  .transform((s) => s.trim().replace(/^@/, ''));
-/** Empty / placeholders mean the general lodge — models often send those instead of leaving the field off. */
-const optionalLodgeHandleSchema = z.preprocess((value) => {
-  if (value == null) return undefined;
-  if (typeof value !== 'string') return value;
-  const trimmed = value.trim().replace(/^@/, '');
-  if (
-    !trimmed
-    || /^(all|feed|everyone|anybody|anyone|lodge|omit|none|null|empty|undefined|n\/a|-)$/i.test(trimmed)
-  ) {
-    return undefined;
-  }
-  return trimmed;
-}, handleSchema.optional());
-const getUserBasicInfoSchema = z.object({ username: handleSchema });
-const getUserContextCardSchema = z.object({ username: handleSchema });
-const findMembersByNameSchema = z.object({
-  name: z.string().trim().min(2).max(80),
-  limit: z.coerce.number().int().min(1).max(8).optional(),
-});
-const getPostSchema = z.object({ postId: z.string().min(1).max(50) });
-const PUBLIC_POSTS_DEFAULT = 5;
-const PUBLIC_POSTS_MAX = 8;
-const listPublicPostsSchema = z.object({
-  username: optionalLodgeHandleSchema,
-  limit: z.coerce.number().int().min(1).max(PUBLIC_POSTS_MAX).optional(),
-});
-const listLimitSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(PUBLIC_POSTS_MAX).optional(),
-});
-const searchGroupChannelsSchema = z.object({
-  query: z.string().trim().min(1).max(200),
-});
-const getPostThreadRecentMessagesSchema = z.object({
-  rootPostId: z.string().min(1).max(50),
-  limit: z.coerce.number().int().min(1).max(RECENT_MESSAGES_MAX).optional(),
-});
-const getPostThreadSummarySchema = z.object({ rootPostId: z.string().min(1).max(50) });
-const getMyRecentChatMessagesSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(RECENT_MESSAGES_MAX).optional(),
-});
-const fetchUrlContentSchema = z.object({ url: z.string().min(1).max(2_000) });
-const getBiblePassageSchema = z.object({ reference: z.string().min(1).max(120) });
-const findSimilarMembersSchema = z.object({
-  query: z.string().trim().min(1).max(120).optional(),
-  limit: z.coerce.number().int().min(1).max(SIMILAR_MEMBERS_MAX).optional(),
-});
-
-const STOPWORDS = new Set([
-  'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'is', 'are',
-  'was', 'were', 'be', 'been', 'i', 'me', 'my', 'we', 'our', 'you', 'your', 'he', 'she', 'they',
-  'them', 'his', 'her', 'their', 'this', 'that', 'from', 'as', 'by', 'about', 'into', 'who',
-]);
-
-// Per-tool TTLs (seconds). Tuned so the model's tool loop sees consistent data across
-// rounds, and a hot thread/user doesn't repeatedly hit Postgres while several premium
-// users mention @marv inside a few minutes.
-const TTL_USER_BASIC = 300; // 5 min — premium/verified rarely flip
-const TTL_USER_CARD = 300; // 5 min — cards refresh on new public activity, not every tool call
-const TTL_POST = 30; // 30s — body edits should reflect quickly
-const TTL_PUBLIC_POSTS = 30; // 30s — the public lodge moves quickly
-const TTL_THREAD_RECENT = 30; // 30s — replies arrive frequently
-const TTL_THREAD_SUMMARY = 300; // 5 min — only updated by summarize job
-const TTL_CHAT_RECENT = 15; // 15s — keep tight, the user's own chat
-const TTL_URL_CONTENT = 3_600; // 1 hour — page content is stable enough
-const TTL_SIMILAR = 300; // 5 min — membership/interest churn is slow
-const TTL_NAME_SEARCH = 60; // 1 min — name lookups should pick up new members quickly
-const TTL_NEGATIVE = 60; // 1 min — dedupe "user_not_found"/"no_summary"/"fetch_failed" misses
-
-const MAX_URL_CONTENT_CHARS = 6_000; // Keeps the tool output inside the 8KB AI-layer cap
-const URL_FETCH_TIMEOUT_MS = 10_000;
+import { PREFETCH_MEMBER_CARD_MAX, getUserBasicInfoSchema, getUserContextCardSchema, getPostSchema, PUBLIC_POSTS_DEFAULT, listPublicPostsSchema, listLimitSchema, searchGroupChannelsSchema, fetchUrlContentSchema, getBiblePassageSchema, TTL_USER_BASIC, TTL_USER_CARD, TTL_POST, TTL_PUBLIC_POSTS, TTL_URL_CONTENT, TTL_NEGATIVE, MAX_URL_CONTENT_CHARS, URL_FETCH_TIMEOUT_MS } from './marvin-tool-handlers.schemas';
+import { marvPostSelect, compactMarvPost } from './marvin-tool-format';
+import { MarvinChatContextToolsService } from './marvin-tool-chat-context.service';
+import { MarvinMemberToolsService } from './marvin-member-tools.service';
+import { NOT_DELETED } from '../../../common/prisma/where';
 
 /**
  * Local tool handlers Marv calls back into via OpenAI Responses tool calls.
@@ -141,6 +60,8 @@ export class MarvinToolHandlersService {
     private readonly participation: MarvinParticipationService,
     private readonly postsRead: PostsReadService,
     private readonly platform: MarvinPlatformContextService,
+    private readonly memberTools: MarvinMemberToolsService,
+    private readonly chatContext: MarvinChatContextToolsService,
   ) {}
 
   async dispatch(name: string, args: unknown, ctx: MarvAIToolCallContext): Promise<string> {
@@ -354,17 +275,6 @@ export class MarvinToolHandlersService {
     return await this.lookupMemberCards(usernames);
   }
 
-  private async permittedPostWhere(ctx: MarvAIToolCallContext): Promise<Prisma.PostWhereInput> {
-    const viewer = await this.prisma.user.findUnique({ where: { id: ctx.requesterUserId }, select: { verifiedStatus: true, premium: true, premiumPlus: true, siteAdmin: true } });
-    const visibility: Array<'public' | 'verifiedOnly' | 'premiumOnly'> = ['public'];
-    if (viewer && viewer.verifiedStatus !== 'none') visibility.push('verifiedOnly');
-    if (viewer?.premium || viewer?.premiumPlus) visibility.push('premiumOnly');
-    const root = ctx.rootPostId ? await this.postsRead.read.findUnique({ where: { id: ctx.rootPostId }, select: { communityGroupId: true } }) : null;
-    const member = root?.communityGroupId ? await findGroupMemberStatus(this.prisma, root.communityGroupId, ctx.requesterUserId) : null;
-    const permittedGroupId = member?.status === 'active' || viewer?.siteAdmin ? root?.communityGroupId : null;
-    return { deletedAt: null, visibility: { in: visibility }, OR: marvToolGroupAccessOr(ctx.rootPostId, permittedGroupId) };
-  }
-
   private async getPost(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {
     const parsed = getPostSchema.safeParse(rawArgs);
     if (!parsed.success) return { error: 'invalid_args' };
@@ -374,10 +284,10 @@ export class MarvinToolHandlersService {
       key: `marv:tool:post:${parsed.data.postId}:root:${scope}`,
       ttlSeconds: TTL_POST,
       compute: async () => {
-        const post = await this.postsRead.read.findFirst({
+        const post = await this.postsRead.findFirst({
           where: {
             id: parsed.data.postId,
-            ...await this.permittedPostWhere(ctx),
+            ...await this.chatContext.permittedPostWhere(ctx),
           },
           select: marvPostSelect(),
         });
@@ -404,20 +314,20 @@ export class MarvinToolHandlersService {
       compute: async () => {
         const userFilter = {
           user: {
-            bannedAt: null,
+            ...NOT_BANNED_USER_WHERE,
             ...(username ? { username: { equals: username, mode: 'insensitive' as const } } : {}),
           },
         };
         if (username) {
           const exists = await this.prisma.user.findFirst({
-            where: { username: { equals: username, mode: 'insensitive' }, bannedAt: null },
+            where: { username: { equals: username, mode: 'insensitive' }, ...NOT_BANNED_USER_WHERE },
             select: { id: true },
           });
           if (!exists) return { error: 'user_not_found', posts: [], note: 'No member found with that username.' };
         }
-        const rows = await this.postsRead.read.findMany({
+        const rows = await this.postsRead.findMany({
           where: {
-            deletedAt: null,
+            ...NOT_DELETED,
             visibility: 'public',
             parentId: null,
             ...marvPublicProfilePostWhere(),
@@ -492,198 +402,16 @@ export class MarvinToolHandlersService {
     return this.appConfig.r2()?.publicBaseUrl ?? null;
   }
 
-  private async getPostThreadRecentMessages(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {
-    const parsed = getPostThreadRecentMessagesSchema.safeParse(rawArgs);
-    if (!parsed.success) return { error: 'invalid_args' };
-    const requestedRoot = parsed.data.rootPostId;
-    if (ctx.rootPostId && requestedRoot !== ctx.rootPostId) {
-      // Don't let the model pivot to a different thread mid-call.
-      return { error: 'thread_not_in_scope' };
-    }
-    const limit = Math.min(RECENT_MESSAGES_MAX, parsed.data.limit ?? RECENT_MESSAGES_DEFAULT);
-    const scope = (ctx.rootPostId ?? '').trim() || '-';
-    return await this.cache.getOrSetJson<unknown>({
-      enabled: false,
-      key: `marv:tool:thread-recent:${requestedRoot}:${limit}:root:${scope}`,
-      ttlSeconds: TTL_THREAD_RECENT,
-      compute: async () => {
-        const root = await this.postsRead.read.findFirst({
-          where: {
-            id: requestedRoot,
-            ...await this.permittedPostWhere(ctx),
-          },
-          select: {
-            id: true,
-            body: true,
-            createdAt: true,
-            user: { select: { username: true, name: true, isBot: true } },
-            media: {
-              where: { deletedAt: null },
-              select: { kind: true },
-              orderBy: { position: 'asc' },
-              take: 8,
-            },
-            poll: {
-              select: {
-                totalVoteCount: true,
-                options: { select: { text: true, voteCount: true }, orderBy: { position: 'asc' } },
-              },
-            },
-          },
-        });
-        if (!root) return { error: 'thread_not_found' };
-        const replies = await this.postsRead.read.findMany({
-          where: {
-            rootId: requestedRoot,
-            ...await this.permittedPostWhere(ctx),
-          },
-          select: {
-            id: true,
-            body: true,
-            createdAt: true,
-            parentId: true,
-            user: { select: { username: true, name: true, isBot: true } },
-            media: {
-              where: { deletedAt: null },
-              select: { kind: true },
-              orderBy: { position: 'asc' },
-              take: 8,
-            },
-            poll: {
-              select: {
-                totalVoteCount: true,
-                options: { select: { text: true, voteCount: true }, orderBy: { position: 'asc' } },
-              },
-            },
-          },
-          orderBy: [{ createdAt: 'desc' }],
-          take: limit,
-        });
-        // Return oldest → newest for natural reading order.
-        const orderedReplies = replies.slice().reverse();
-        return {
-          root: {
-            id: root.id,
-            body: (root.body ?? '').slice(0, 1_500),
-            createdAt: root.createdAt.toISOString(),
-            author: {
-              username: root.user.username,
-              displayName: root.user.name,
-              isBot: root.user.isBot,
-            },
-            media: (root.media ?? []).map((m) => m.kind),
-            poll: compactPoll(root.poll),
-          },
-          replies: orderedReplies.map((p) => ({
-            id: p.id,
-            body: (p.body ?? '').slice(0, 600),
-            createdAt: p.createdAt.toISOString(),
-            parentId: p.parentId,
-            author: {
-              username: p.user.username,
-              displayName: p.user.name,
-              isBot: p.user.isBot,
-            },
-            media: (p.media ?? []).map((m) => m.kind),
-            poll: compactPoll(p.poll),
-          })),
-        };
-      },
-    });
+  async getPostThreadRecentMessages(rawArgs: unknown, ctx: MarvAIToolCallContext) : Promise<unknown> {
+    return this.chatContext.getPostThreadRecentMessages(rawArgs, ctx);
   }
 
-  private async getPostThreadSummary(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {
-    const parsed = getPostThreadSummarySchema.safeParse(rawArgs);
-    if (!parsed.success) return { error: 'invalid_args' };
-    if (ctx.rootPostId && parsed.data.rootPostId !== ctx.rootPostId) {
-      return { error: 'thread_not_in_scope' };
-    }
-    const rootPostId = parsed.data.rootPostId;
-    const scope = (ctx.rootPostId ?? '').trim() || '-';
-    const result = await this.cache.getOrSetNullableJson<{
-      rootPostId: string;
-      summary: string;
-      lastMessageIdIncluded: string | null;
-      updatedAt: string;
-    }>({
-      enabled: false,
-      key: `marv:tool:thread-summary:${rootPostId}:root:${scope}`,
-      ttlSeconds: TTL_THREAD_SUMMARY,
-      nullTtlSeconds: TTL_NEGATIVE,
-      compute: async () => {
-        const root = await this.postsRead.read.findFirst({
-          where: {
-            id: rootPostId,
-            ...await this.permittedPostWhere(ctx),
-          },
-          select: { id: true },
-        });
-        if (!root) return null;
-        const summary = await this.prisma.marvinThreadSummary.findUnique({
-          where: { rootPostId },
-          select: { summary: true, updatedAt: true, lastMessageIdIncluded: true },
-        });
-        if (!summary) return null;
-        return {
-          rootPostId,
-          summary: summary.summary.slice(0, 4_000),
-          lastMessageIdIncluded: summary.lastMessageIdIncluded,
-          updatedAt: summary.updatedAt.toISOString(),
-        };
-      },
-    });
-    if (!result) return { error: 'no_summary', note: 'Thread is short enough that no rolling summary exists yet.' };
-    return result;
+  async getPostThreadSummary(rawArgs: unknown, ctx: MarvAIToolCallContext) : Promise<unknown> {
+    return this.chatContext.getPostThreadSummary(rawArgs, ctx);
   }
 
-  private async getMyRecentChatMessages(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {
-    const parsed = getMyRecentChatMessagesSchema.safeParse(rawArgs);
-    if (!parsed.success) return { error: 'invalid_args' };
-    if (!ctx.conversationId) return { error: 'no_conversation' };
-    const limit = Math.min(RECENT_MESSAGES_MAX, parsed.data.limit ?? RECENT_MESSAGES_DEFAULT);
-    const conversationId = ctx.conversationId;
-    const requesterUserId = ctx.requesterUserId;
-    return await this.cache.getOrSetJson<unknown>({
-      enabled: true,
-      key: `marv:tool:chat-recent:${conversationId}:${requesterUserId}:${limit}`,
-      ttlSeconds: TTL_CHAT_RECENT,
-      compute: async () => {
-        const marvId = await this.identity.getMarvUserId();
-        const messages = await this.prisma.message.findMany({
-          where: {
-            conversationId,
-            deletedForAll: false,
-            // Only the requester ↔ marv messages — not anything else (defensive).
-            OR: [{ senderId: requesterUserId }, ...(marvId ? [{ senderId: marvId }] : [])],
-          },
-          select: {
-            id: true,
-            body: true,
-            createdAt: true,
-            senderId: true,
-            sender: { select: { username: true, name: true, isBot: true } },
-          },
-          orderBy: [{ createdAt: 'desc' }],
-          take: limit,
-        });
-        const ordered = messages.slice().reverse();
-        return {
-          conversationId,
-          messages: ordered.map((m) => ({
-            id: m.id,
-            body: (m.body ?? '').slice(0, 1_000),
-            createdAt: m.createdAt.toISOString(),
-            senderId: m.senderId,
-            sender: {
-              username: m.sender.username,
-              displayName: m.sender.name,
-              isBot: m.sender.isBot,
-            },
-            fromMarv: marvId ? m.senderId === marvId : false,
-          })),
-        };
-      },
-    });
+  async getMyRecentChatMessages(rawArgs: unknown, ctx: MarvAIToolCallContext) : Promise<unknown> {
+    return this.chatContext.getMyRecentChatMessages(rawArgs, ctx);
   }
 
   /**
@@ -780,357 +508,15 @@ export class MarvinToolHandlersService {
     };
   }
 
-  /**
-   * Resolve a first name, last name, or display name to @usernames.
-   * Last resort when "People in this conversation" has no match. If the model
-   * still calls it, in-thread speakers are ranked first.
-   */
-  private async findMembersByName(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {
-    const parsed = findMembersByNameSchema.safeParse(rawArgs);
-    if (!parsed.success) return { error: 'invalid_args' };
-    const name = parsed.data.name.trim();
-    const limit = parsed.data.limit ?? 5;
-    const key = name.toLowerCase();
-    const scope = (ctx.rootPostId ?? ctx.conversationId ?? 'none').trim() || 'none';
-    return await this.cache.getOrSetJson<unknown>({
-      enabled: true,
-      key: `marv:tool:name:${key}:${limit}:scope:${scope}`,
-      ttlSeconds: TTL_NAME_SEARCH,
-      compute: async () => {
-        const rows = await this.prisma.user.findMany({
-          where: {
-            bannedAt: null,
-            isBot: false,
-            username: { not: null },
-            OR: [
-              { username: { equals: name, mode: 'insensitive' } },
-              { name: { equals: name, mode: 'insensitive' } },
-              { name: { startsWith: `${name} `, mode: 'insensitive' } },
-              { name: { endsWith: ` ${name}`, mode: 'insensitive' } },
-              { username: { contains: name, mode: 'insensitive' } },
-              { name: { contains: name, mode: 'insensitive' } },
-            ],
-          },
-          select: { username: true, name: true },
-          take: Math.max(limit, 8),
-          orderBy: { createdAt: 'asc' },
-        });
-        const here = await this.conversationUsernamesNearestFirst(ctx);
-        const hereSet = new Set(here.map((u) => u.toLowerCase()));
-        const members = rankMembersByConversation(
-          rows
-            .filter((row) => (row.username ?? '').trim())
-            .map((row) => ({ username: row.username as string, displayName: row.name })),
-          here,
-        ).slice(0, limit);
-        if (members.length === 0) {
-          return {
-            members: [],
-            note: 'No members matched that name. Ask for a @username.',
-          };
-        }
-        const inConversation = members.filter((m) => hereSet.has(m.username.toLowerCase()));
-        if (inConversation.length === 1) {
-          return {
-            members,
-            note: `@${inConversation[0]!.username} is in this conversation — use that handle.`,
-          };
-        }
-        if (inConversation.length > 1) {
-          return {
-            members,
-            note: 'Multiple people in this conversation match. Prefer the first (nearest).',
-          };
-        }
-        return {
-          members,
-          note:
-            members.length === 1
-              ? 'Nobody in this conversation matched. Use this @username if it is the person they meant.'
-              : 'Nobody in this conversation matched. These are platform-wide results — do not guess.',
-        };
-      },
-    });
+  async findMembersByName(rawArgs: unknown, ctx: MarvAIToolCallContext) : Promise<unknown> {
+    return this.memberTools.findMembersByName(rawArgs, ctx);
   }
 
-  /** Speakers already in this thread/DM, nearest (most recent) first. */
-  private async conversationUsernamesNearestFirst(ctx: MarvAIToolCallContext): Promise<string[]> {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    const add = (raw?: string | null) => {
-      const handle = (raw ?? '').trim().replace(/^@/, '');
-      if (!handle) return;
-      const key = handle.toLowerCase();
-      if (key === 'marv' || seen.has(key)) return;
-      seen.add(key);
-      out.push(handle);
-    };
-    add(ctx.requesterUsername);
-    if (ctx.rootPostId) {
-      const posts = await this.postsRead.read.findMany({
-        where: {
-          deletedAt: null,
-          OR: [{ id: ctx.rootPostId }, { rootId: ctx.rootPostId }],
-        },
-        select: { user: { select: { username: true } } },
-        orderBy: { createdAt: 'desc' },
-        take: 40,
-      });
-      for (const post of posts) add(post.user?.username);
-    } else if (ctx.conversationId) {
-      const messages = await this.prisma.message.findMany({
-        where: { conversationId: ctx.conversationId, deletedForAll: false },
-        select: { sender: { select: { username: true } } },
-        orderBy: { createdAt: 'desc' },
-        take: 40,
-      });
-      for (const message of messages) add(message.sender?.username);
-    }
-    return out;
+  async conversationUsernamesNearestFirst(ctx: MarvAIToolCallContext) : Promise<string[]> {
+    return this.memberTools.conversationUsernamesNearestFirst(ctx);
   }
 
-  /**
-   * Find members similar to the requester (or matching a free-text query) using
-   * `User.interests` overlap + simple `UserContextCard.cardText` token overlap.
-   * No AI / embeddings — public-safe fields only.
-   */
-  private async findSimilarMembers(rawArgs: unknown, ctx: MarvAIToolCallContext): Promise<unknown> {
-    const parsed = findSimilarMembersSchema.safeParse(rawArgs);
-    if (!parsed.success) return { error: 'invalid_args' };
-    const limit = parsed.data.limit ?? SIMILAR_MEMBERS_DEFAULT;
-    const query = (parsed.data.query ?? '').trim();
-    const requesterUserId = ctx.requesterUserId;
-    if (!requesterUserId) return { error: 'missing_requester' };
-
-    const queryHash = crypto
-      .createHash('sha1')
-      .update(`${requesterUserId}|${query.toLowerCase()}|${limit}`)
-      .digest('hex')
-      .slice(0, 16);
-
-    return await this.cache.getOrSetJson<unknown>({
-      enabled: true,
-      key: `marv:tool:similar:${queryHash}`,
-      ttlSeconds: TTL_SIMILAR,
-      compute: async () => {
-        const requester = await this.prisma.user.findUnique({
-          where: { id: requesterUserId },
-          select: {
-            interests: true,
-            contextCard: { select: { cardText: true } },
-          },
-        });
-        if (!requester) return { error: 'requester_not_found', members: [] };
-
-        const interestSeeds = new Set(
-          (requester.interests ?? []).map((i) => i.trim().toLowerCase()).filter(Boolean),
-        );
-        for (const token of tokenizeForSimilarity(query)) {
-          interestSeeds.add(token);
-        }
-        // Also seed from the requester's own card so "anyone like me?" works with no query.
-        if (!query) {
-          for (const token of tokenizeForSimilarity(requester.contextCard?.cardText ?? '')) {
-            interestSeeds.add(token);
-          }
-        }
-        const seeds = [...interestSeeds].slice(0, 24);
-        if (seeds.length === 0) {
-          return {
-            members: [],
-            note: 'No interests or query to match on. Ask the user what they are looking for.',
-          };
-        }
-
-        // Prefer structured interest overlap (Prisma hasSome). Also pull a small
-        // recent-card cohort so free-text queries can still match on cardText.
-        const requesterInterests = (requester.interests ?? []).filter(Boolean);
-        const byInterest =
-          requesterInterests.length > 0
-            ? await this.prisma.user.findMany({
-                where: {
-                  id: { not: requesterUserId },
-                  bannedAt: null,
-                  isBot: false,
-                  interests: { hasSome: requesterInterests },
-                },
-                select: {
-                  username: true,
-                  name: true,
-                  interests: true,
-                  contextCard: { select: { cardText: true } },
-                },
-                take: SIMILAR_CANDIDATE_LIMIT,
-              })
-            : [];
-
-        const byCard =
-          seeds.length > 0
-            ? await this.prisma.user.findMany({
-                where: {
-                  id: { not: requesterUserId },
-                  bannedAt: null,
-                  isBot: false,
-                  contextCard: {
-                    is: {
-                      OR: seeds.slice(0, 8).map((term) => ({
-                        cardText: { contains: term, mode: 'insensitive' as const },
-                      })),
-                    },
-                  },
-                },
-                select: {
-                  username: true,
-                  name: true,
-                  interests: true,
-                  contextCard: { select: { cardText: true } },
-                },
-                take: SIMILAR_CANDIDATE_LIMIT,
-              })
-            : [];
-
-        const seen = new Set<string>();
-        const merged = [...byInterest, ...byCard].filter((u) => {
-          const key = (u.username ?? '').toLowerCase();
-          if (!key || seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-
-        const scored = merged
-          .map((row) => {
-            const interestOverlap = (row.interests ?? [])
-              .map((i) => i.trim().toLowerCase())
-              .filter((i) => interestSeeds.has(i));
-            const cardLower = (row.contextCard?.cardText ?? '').toLowerCase();
-            const cardHits = seeds.filter((s) => s.length >= 3 && cardLower.includes(s));
-            const score = interestOverlap.length * 3 + cardHits.length;
-            const reasons: string[] = [];
-            if (interestOverlap.length) {
-              reasons.push(`shared interests: ${interestOverlap.slice(0, 4).join(', ')}`);
-            } else if (cardHits.length) {
-              reasons.push(`profile mentions: ${cardHits.slice(0, 4).join(', ')}`);
-            }
-            return {
-              username: row.username,
-              displayName: row.name,
-              cardSnippet: (row.contextCard?.cardText ?? '').slice(0, CARD_SNIPPET_MAX) || null,
-              reasons,
-              score,
-            };
-          })
-          .filter((m) => m.score > 0 && m.username)
-          .sort((a, b) => b.score - a.score)
-          .slice(0, limit)
-          .map(({ score: _s, ...rest }) => rest);
-
-        return { members: scored, matchedOn: seeds.slice(0, 8) };
-      },
-    });
+  async findSimilarMembers(rawArgs: unknown, ctx: MarvAIToolCallContext) : Promise<unknown> {
+    return this.memberTools.findSimilarMembers(rawArgs, ctx);
   }
-}
-
-function marvPostSelect() {
-  return {
-    id: true,
-    body: true,
-    createdAt: true,
-    visibility: true,
-    rootId: true,
-    parentId: true,
-    checkinPrompt: true,
-    user: { select: { username: true, name: true, isBot: true } },
-    media: {
-      where: { deletedAt: null },
-      select: { kind: true, source: true, r2Key: true, url: true, thumbnailR2Key: true },
-      orderBy: { position: 'asc' as const },
-      take: 8,
-    },
-    poll: {
-      select: {
-        totalVoteCount: true,
-        options: { select: { text: true, voteCount: true }, orderBy: { position: 'asc' as const } },
-      },
-    },
-  };
-}
-
-function compactMarvPost(
-  post: {
-    id: string;
-    body: string | null;
-    createdAt: Date;
-    visibility?: string;
-    rootId: string | null;
-    parentId: string | null;
-    checkinPrompt?: string | null;
-    user: { username: string | null; name: string | null; isBot: boolean };
-    media?: Array<{
-      kind: string;
-      source: string;
-      r2Key: string | null;
-      url: string | null;
-      thumbnailR2Key?: string | null;
-    }>;
-    poll?: { totalVoteCount: number; options: Array<{ text: string; voteCount: number }> } | null;
-  },
-  publicBaseUrl: string | null,
-  opts: { bodyMax: number },
-) {
-  const imageUrls: string[] = [];
-  for (const media of post.media ?? []) {
-    const url = resolveMarvVisionUrl(media, publicBaseUrl);
-    if (url) imageUrls.push(url);
-  }
-  return {
-    id: post.id,
-    body: (post.body ?? '').slice(0, opts.bodyMax),
-    createdAt: post.createdAt.toISOString(),
-    visibility: post.visibility ?? 'public',
-    rootId: post.rootId,
-    parentId: post.parentId,
-    checkinPrompt: post.checkinPrompt ?? null,
-    author: {
-      username: post.user.username,
-      displayName: post.user.name,
-      isBot: post.user.isBot,
-    },
-    media: (post.media ?? []).map((m) => m.kind),
-    imageUrls: imageUrls.slice(0, 4),
-    poll: compactPoll(post.poll),
-  };
-}
-
-function rankMembersByConversation<T extends { username: string }>(
-  members: T[],
-  conversationUsernames: string[],
-): T[] {
-  const rank = new Map(conversationUsernames.map((username, index) => [username.toLowerCase(), index]));
-  return [...members].sort((a, b) => {
-    const aRank = rank.get(a.username.toLowerCase());
-    const bRank = rank.get(b.username.toLowerCase());
-    if (aRank == null && bRank == null) return 0;
-    if (aRank == null) return 1;
-    if (bRank == null) return -1;
-    return aRank - bRank;
-  });
-}
-
-function tokenizeForSimilarity(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^a-z0-9+#]+/g)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 3 && !STOPWORDS.has(t))
-    .slice(0, 24);
-}
-
-function compactPoll(
-  poll: { totalVoteCount: number; options: Array<{ text: string; voteCount: number }> } | null | undefined,
-): { totalVoteCount: number; options: Array<{ text: string; voteCount: number }> } | null {
-  if (!poll) return null;
-  return {
-    totalVoteCount: poll.totalVoteCount,
-    options: poll.options.map((o) => ({ text: o.text, voteCount: o.voteCount })),
-  };
 }

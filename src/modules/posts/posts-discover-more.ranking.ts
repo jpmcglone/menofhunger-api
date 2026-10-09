@@ -3,6 +3,8 @@
  * Kept free of Nest/Prisma so unit tests can drive scoring without I/O.
  */
 
+import { toPage, clampLimit } from '../../common/pagination/page';
+
 export type DiscoverCandidate = {
   id: string;
   userId: string;
@@ -164,7 +166,7 @@ export function pageDiscoverIds(params: {
   cursor: string | null;
   limit: number;
 }): { ids: string[]; nextCursor: string | null } {
-  const limit = Math.max(1, Math.min(50, Math.floor(params.limit || 8)));
+  const limit = clampLimit(params.limit, { default: 8, max: 50 });
   let start = 0;
   const cursor = (params.cursor ?? '').trim();
   if (cursor) {
@@ -172,8 +174,6 @@ export function pageDiscoverIds(params: {
     start = idx >= 0 ? idx + 1 : 0;
   }
   const slice = params.orderedIds.slice(start, start + limit + 1);
-  const hasMore = slice.length > limit;
-  const ids = hasMore ? slice.slice(0, limit) : slice;
-  const nextCursor = hasMore && ids.length ? ids[ids.length - 1]! : null;
+  const { items: ids, nextCursor } = toPage(slice, limit, (id) => id);
   return { ids, nextCursor };
 }

@@ -1,18 +1,26 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
-import { PrismaService } from '../prisma/prisma.service';
-import { JobsService } from '../jobs/jobs.service';
-import { AppConfigService } from '../app/app-config.service';
-import { JOBS } from '../jobs/jobs.constants';
-import { easternDayKey, easternMinuteOfDay, yesterdayEasternDayKey } from '../../common/time/eastern-day-key';
-import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { RedisService } from '../redis/redis.service';
-import { RedisKeys } from '../redis/redis-keys';
-import { NotificationsService } from '../notifications/notifications.service';
-import { crewStreakBrokenPushDelayMs, STREAK_RESET_MINUTE } from './checkin-schedule';
+import { NotificationPushService } from "../notifications";
+import { Injectable, Logger, Inject } from "@nestjs/common";
+import { Cron } from "@nestjs/schedule";
+import { PrismaService } from "../prisma/prisma.service";
+import { JobsService } from "../jobs/jobs.service";
+import { AppConfigService } from "../app/app-config.service";
+import { JOBS } from "../jobs/jobs.constants";
+import {
+  easternDayKey,
+  easternMinuteOfDay,
+  yesterdayEasternDayKey,
+} from "../../common/time/eastern-day-key";
+import { PresenceRealtimeService } from "../presence/presence-realtime.service";
+import { RedisService } from "../redis/redis.service";
+import { RedisKeys } from "../redis/redis-keys";
+import {
+  crewStreakBrokenPushDelayMs,
+  STREAK_RESET_MINUTE,
+} from "./checkin-schedule";
 
-import { PostsReadService } from '../posts-read/posts-read.service';
-import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
+import { PostsReadService } from "../posts-read/posts-read.service";
+import { USER_BRIEF_SELECT } from "../../common/prisma-selects/user.select";
+import { NOT_DELETED } from "../../common/prisma/where";
 /**
  * Nightly job that resets checkinStreakDays to 0 for every user who did not
  * check in on the previous ET calendar day (or today). Without this, stale streak
@@ -29,12 +37,16 @@ export class CheckinsStreakResetCron {
     private readonly appConfig: AppConfigService,
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly redis: RedisService,
-    private readonly notifications: NotificationsService,
+    @Inject(NotificationPushService)
+    private readonly notifications: Pick<
+      NotificationPushService,
+      "sendCrewStreakBrokenPush"
+    >,
     private readonly postsRead: PostsReadService,
   ) {}
 
   /** Fire once the clock hits 1:00am ET, once per day (deduplicated by dayKey). */
-  @Cron('*/5 * * * *')
+  @Cron("*/5 * * * *")
   async scheduleStreakReset(): Promise<void> {
     if (!this.appConfig.runSchedulers()) return;
     const now = new Date();
@@ -45,7 +57,7 @@ export class CheckinsStreakResetCron {
         JOBS.checkinsStreakReset,
         {},
         `cron-checkinsStreakReset-${dayKey}`,
-        { attempts: 3, backoff: { type: 'exponential', delay: 5 * 60_000 } },
+        { attempts: 3, backoff: { type: "exponential", delay: 5 * 60_000 } },
       );
     } catch {
       // Duplicate jobId means it was already enqueued for this day — safe to ignore.
@@ -65,8 +77,8 @@ export class CheckinsStreakResetCron {
         NOT: {
           posts: {
             some: {
-              kind: 'checkin',
-              deletedAt: null,
+              kind: "checkin",
+              ...NOT_DELETED,
               checkinDayKey: { in: [todayKey, yesterdayKey] },
             },
           },
@@ -119,16 +131,16 @@ export class CheckinsStreakResetCron {
   ): Promise<void> {
     for (const user of users) {
       const n = user.checkinStreakDays;
-      const title = n > 1 ? `Your ${n}-day streak ended` : 'Your streak ended';
+      const title = n > 1 ? `Your ${n}-day streak ended` : "Your streak ended";
       await this.prisma.notification.updateMany({
         where: {
           recipientUserId: user.id,
-          kind: 'checkin_reminder',
+          kind: "checkin_reminder",
           readAt: null,
         },
         data: {
           title,
-          body: 'Check in today to start a new one.',
+          body: "Check in today to start a new one.",
         },
       });
     }
@@ -141,12 +153,15 @@ export class CheckinsStreakResetCron {
    * to all members with the names of who didn't check in yesterday — that's the
    * behavioral nudge that drives next-day return.
    */
-  private async runCrewStreakReset(params: { todayKey: string; yesterdayKey: string }): Promise<void> {
+  private async runCrewStreakReset(params: {
+    todayKey: string;
+    yesterdayKey: string;
+  }): Promise<void> {
     const { todayKey, yesterdayKey } = params;
 
     const brokenCrews = await this.prisma.crew.findMany({
       where: {
-        deletedAt: null,
+        ...NOT_DELETED,
         currentStreakDays: { gt: 0 },
         OR: [
           { lastCompletedDayKey: null },
@@ -167,7 +182,9 @@ export class CheckinsStreakResetCron {
     });
 
     if (brokenCrews.length === 0) {
-      this.logger.debug(`[crew-streak-reset] No crew streaks to reset (yesterdayKey=${yesterdayKey})`);
+      this.logger.debug(
+        `[crew-streak-reset] No crew streaks to reset (yesterdayKey=${yesterdayKey})`,
+      );
       return;
     }
 
@@ -177,11 +194,11 @@ export class CheckinsStreakResetCron {
       if (memberIds.length === 0) continue;
 
       // Identify who actually missed yesterday so we can name names in the push/UI.
-      const checkedIn = await this.postsRead.read.findMany({
+      const checkedIn = await this.postsRead.findMany({
         where: {
-          kind: 'checkin',
+          kind: "checkin",
           checkinDayKey: yesterdayKey,
-          deletedAt: null,
+          ...NOT_DELETED,
           userId: { in: memberIds },
         },
         select: { userId: true },
@@ -192,7 +209,7 @@ export class CheckinsStreakResetCron {
         .map((m) => ({
           id: m.user.id,
           username: m.user.username,
-          displayName: (m.user.name ?? m.user.username ?? '').trim() || null,
+          displayName: (m.user.name ?? m.user.username ?? "").trim() || null,
         }));
 
       const updated = await this.prisma.crew.updateMany({
@@ -218,7 +235,9 @@ export class CheckinsStreakResetCron {
       // Bust today-state cache for every member so the next /checkins/today
       // reflects the reset crew streak block.
       for (const memberId of memberIds) {
-        void this.redis.del(RedisKeys.checkinTodayState(memberId, todayKey)).catch(() => undefined);
+        void this.redis
+          .del(RedisKeys.checkinTodayState(memberId, todayKey))
+          .catch(() => undefined);
       }
 
       const delay = crewStreakBrokenPushDelayMs(new Date());
@@ -235,7 +254,7 @@ export class CheckinsStreakResetCron {
               jobId: `crew-streak-broken-${crew.id}-${yesterdayKey}`,
               delay,
               attempts: 3,
-              backoff: { type: 'exponential', delay: 5 * 60_000 },
+              backoff: { type: "exponential", delay: 5 * 60_000 },
             },
           );
         } catch {
@@ -256,13 +275,16 @@ export class CheckinsStreakResetCron {
    * Morning push for a crew whose streak was reset overnight. Re-reads membership
    * and yesterday's check-ins so a delayed job still names the right people.
    */
-  async runCrewStreakBrokenPush(payload: { crewId?: string; missedDayKey?: string }): Promise<void> {
-    const crewId = String(payload.crewId ?? '').trim();
-    const missedDayKey = String(payload.missedDayKey ?? '').trim();
+  async runCrewStreakBrokenPush(payload: {
+    crewId?: string;
+    missedDayKey?: string;
+  }): Promise<void> {
+    const crewId = String(payload.crewId ?? "").trim();
+    const missedDayKey = String(payload.missedDayKey ?? "").trim();
     if (!crewId || !missedDayKey) return;
 
     const crew = await this.prisma.crew.findFirst({
-      where: { id: crewId, deletedAt: null },
+      where: { id: crewId, ...NOT_DELETED },
       select: {
         id: true,
         slug: true,
@@ -281,11 +303,11 @@ export class CheckinsStreakResetCron {
     const memberIds = crew.members.map((m) => m.userId);
     if (memberIds.length === 0) return;
 
-    const checkedIn = await this.postsRead.read.findMany({
+    const checkedIn = await this.postsRead.findMany({
       where: {
-        kind: 'checkin',
+        kind: "checkin",
         checkinDayKey: missedDayKey,
-        deletedAt: null,
+        ...NOT_DELETED,
         userId: { in: memberIds },
       },
       select: { userId: true },
@@ -296,7 +318,7 @@ export class CheckinsStreakResetCron {
       .map((m) => ({
         id: m.user.id,
         username: m.user.username,
-        displayName: (m.user.name ?? m.user.username ?? '').trim() || null,
+        displayName: (m.user.name ?? m.user.username ?? "").trim() || null,
       }));
 
     await this.notifications.sendCrewStreakBrokenPush({

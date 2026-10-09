@@ -1,3 +1,4 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { Injectable } from '@nestjs/common';
 import { z } from "zod";
 import { PrismaService } from "../prisma/prisma.service";
@@ -60,7 +61,7 @@ export class UsersDiscoveryService {
     const rows = await this.prisma.user.findMany({
       where: {
         usernameIsSet: true,
-        bannedAt: null,
+        ...NOT_BANNED_USER_WHERE,
         id: { not: viewerUserId },
         // Exclude users the viewer already follows.
         followers: { none: { followerId: viewerUserId } },
@@ -130,7 +131,7 @@ export class UsersDiscoveryService {
     // The count and every sample use the same viewer visibility policy.
     const baseWhere = {
       usernameIsSet: true,
-      bannedAt: null,
+      ...NOT_BANNED_USER_WHERE,
       blocksInitiated: { none: { blockedId: viewerUserId } },
       blocksReceived: { none: { blockerId: viewerUserId } },
     };

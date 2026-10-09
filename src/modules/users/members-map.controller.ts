@@ -1,24 +1,14 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { z } from 'zod';
-import { AuthGuard } from '../auth/auth.guard';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
-import { VerifiedGuard } from '../auth/verified.guard';
+import { AuthGuard } from '../auth/auth-public-api';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
+import { VerifiedGuard } from '../auth/auth-public-api';
 import { UserLookupService } from '../user-lookup/user-lookup.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import type { MembersMapSummaryDto, UserListDto } from '../../common/dto';
 import { MembersMapService } from './members-map.service';
 import { OptionalCurrentUserId } from './users.decorator';
-
-const membersQuerySchema = z.object({
-  state: z
-    .string()
-    .trim()
-    .regex(/^([A-Za-z]{2}|none)$/, 'State must be a two-letter code or "none".')
-    .transform((s) => (s === 'none' ? 'none' : s.toUpperCase())),
-  cursor: z.string().trim().regex(/^\d+$/).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-});
+import { membersQuerySchema } from './members-map.schemas';
 
 @Controller('users/map')
 export class MembersMapController {

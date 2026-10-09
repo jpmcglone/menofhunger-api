@@ -1,80 +1,25 @@
+import { limitQuery } from '../../common/pagination/cursor-query.schema';
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { z } from 'zod';
-import { AuthGuard } from '../auth/auth.guard';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { AuthGuard } from '../auth/auth-public-api';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { setReadCache } from '../../common/http-cache';
 import { BoardService } from './board.service';
 import { PickaxCrosspostService } from '../pickax/pickax-crosspost.service';
 import { XCrosspostService } from '../x/x-crosspost.service';
-import { BOARD_MAX_TAGS, BOARD_TITLE_MAX } from './board.utils';
-
-const visibilitySchema = z.enum(['public', 'verifiedOnly', 'premiumOnly']);
-
-const tagsQuerySchema = z
-  .union([z.string(), z.array(z.string())])
-  .optional()
-  .transform((v) => (Array.isArray(v) ? v : (v ?? '').split(',')).map((t) => t.trim()).filter(Boolean).slice(0, BOARD_MAX_TAGS));
-
-const listSchema = z.object({
-  sort: z.enum(['top', 'new']).optional(),
-  range: z.enum(['day', 'week', 'month', 'year', 'all']).optional(),
-  visibility: z.enum(['all', 'public', 'verifiedOnly', 'premiumOnly']).optional(),
-  tags: tagsQuerySchema,
-  domain: z.string().trim().max(200).optional(),
-  q: z.string().trim().max(120).optional(),
-  author: z.string().trim().max(120).optional(),
-  hidden: z.enum(['only']).optional(),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().max(200).optional(),
-});
-
-const commentsListSchema = z.object({
-  author: z.string().trim().max(120).optional(),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().max(200).optional(),
-});
-
-const createThreadSchema = z.object({
-  title: z.string().trim().min(1).max(BOARD_TITLE_MAX),
-  url: z.string().trim().max(2048).nullable().optional(),
-  body: z.string().max(2000).nullable().optional(),
-  image: z
-    .object({
-      r2Key: z.string().trim().min(1).max(512),
-      width: z.number().int().positive().nullable().optional(),
-      height: z.number().int().positive().nullable().optional(),
-      alt: z.string().max(500).nullable().optional(),
-    })
-    .nullable()
-    .optional(),
-  tags: z.array(z.string().trim().max(40)).max(BOARD_MAX_TAGS).optional(),
-  visibility: visibilitySchema.optional(),
-  showInFeed: z.boolean().optional(),
-  /** Only honored for public threads that are also posted to the feed. Always shares a link to the thread. */
-  crosspost: z.object({ pickax: z.literal('link').optional(), x: z.literal('link').optional() }).strict().optional(),
-});
-
-const updateThreadSchema = z.object({
-  title: z.string().trim().min(1).max(BOARD_TITLE_MAX).optional(),
-  url: z.string().trim().max(2048).nullable().optional(),
-  body: z.string().max(2000).optional(),
-  tags: z.array(z.string().trim().max(40)).max(BOARD_MAX_TAGS).optional(),
-});
-
-const createCommentSchema = z.object({
-  body: z.string().trim().min(1).max(2000),
-  parentId: z.string().trim().min(1).nullable().optional(),
-});
-
-const preferencesSchema = z.object({
-  shareToFeedDefault: z.boolean().optional(),
-  articlePostToBoardDefault: z.boolean().optional(),
-});
+import {
+  listSchema,
+  commentsListSchema,
+  createThreadSchema,
+  updateThreadSchema,
+  createCommentSchema,
+  preferencesSchema,
+} from './board.schemas';
 
 const interactThrottle = { default: { limit: rateLimitLimit('interact', 180), ttl: rateLimitTtl('interact', 60) } };
 const createThrottle = { default: { limit: rateLimitLimit('postCreate', 30), ttl: rateLimitTtl('postCreate', 60) } };
@@ -118,7 +63,7 @@ export class BoardController {
   @UseGuards(OptionalAuthGuard)
   @Get('leaderboard')
   async leaderboard(@OptionalCurrentUserId() userId: string | undefined, @Query() query: unknown) {
-    const parsed = z.object({ limit: z.coerce.number().int().min(1).max(50).optional() }).parse(query);
+    const parsed = z.object({ limit: limitQuery(50) }).parse(query);
     return { data: await this.board.leaderboard(userId ?? null, parsed.limit ?? 25) };
   }
 

@@ -1,3 +1,4 @@
+import { ViewerBlockSetsService } from './viewer-block-sets.service';
 import { Global, Module } from '@nestjs/common';
 import { ViewerContextService } from './viewer-context.service';
 import { PostVisibilityReadService } from './post-visibility-read.service';
@@ -7,8 +8,8 @@ import { CrewAccessService } from './crew-access.service';
 
 @Global()
 @Module({
-  providers: [ViewerContextService, PostVisibilityReadService, CommunityGroupReadAccessService, GroupAccessService, CrewAccessService],
-  exports: [ViewerContextService, PostVisibilityReadService, CommunityGroupReadAccessService, GroupAccessService, CrewAccessService],
+  providers: [ViewerBlockSetsService, ViewerContextService, PostVisibilityReadService, CommunityGroupReadAccessService, GroupAccessService, CrewAccessService],
+  exports: [ViewerBlockSetsService, ViewerContextService, PostVisibilityReadService, CommunityGroupReadAccessService, GroupAccessService, CrewAccessService],
 })
 export class ViewerContextModule {}
 

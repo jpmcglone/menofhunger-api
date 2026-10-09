@@ -1,7 +1,8 @@
-import { toAvatarVideoDto } from "../../common/dto/avatar-video.dto";
+import { clampLimit } from '../../common/pagination/page';
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 import { Injectable, Optional } from "@nestjs/common";
-import { listUncachedOn, NOTIFICATION_POST_CARD_KINDS } from "./notification-query-list";
-import { type NotificationKind, type VerifiedStatus } from "@prisma/client";
+import { NotificationQueryListService, NOTIFICATION_POST_CARD_KINDS } from './notification-query-list.service';
+import { type NotificationKind } from "@prisma/client";
 import { MutesService } from "../mutes/mutes.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AppConfigService } from "../app/app-config.service";
@@ -9,27 +10,16 @@ import { publicAssetUrl } from "../../common/assets/public-asset-url";
 import { createdAtIdCursorWhere } from "../../common/pagination/created-at-id-cursor";
 import { PostVisibilityReadService } from "../viewer/post-visibility-read.service";
 import { NotificationReadStateService } from "./notification-read-state.service";
-import { notificationCategory } from "./notification-category";
 import { CacheService } from "../redis/cache.service";
 import { CacheInvalidationService } from "../redis/cache-invalidation.service";
 import { CacheTtl } from "../redis/cache-ttl";
 import { RedisKeys, stableJsonHash } from "../redis/redis-keys";
-import type {
-  NotificationActorDto,
-  NotificationDto,
-  SubjectPostPreviewDto,
-  SubjectArticlePreviewDto,
-  SubjectPostVisibility,
-  SubjectTier,
-} from "./notification.dto";
+import type { NotificationDto, SubjectPostPreviewDto, SubjectPostVisibility, SubjectTier } from "./notification.dto";
 import type { PostDto } from "../../common/dto/post.dto";
-import {
-  collapseFeedByRoot,
-  type FeedCollapseMode,
-  type FeedCollapsePrefer,
-} from "../../common/feed-collapse/collapse-by-root";
-
+import { collapseFeedByRoot, type FeedCollapseMode, type FeedCollapsePrefer } from "../../common/feed-collapse/collapse-by-root";
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { notificationPostId as postIdOf, toNotificationDto } from './notification-query.mapper';
+import { NOT_DELETED } from '../../common/prisma/where';
 /**
  * Notification feed reads: the bell list (with grouping), the
  * new-posts feed, and per-row DTO composition (also used by the writer for
@@ -38,34 +28,16 @@ import { PostsReadService } from '../posts-read/posts-read.service';
 @Injectable()
 export class NotificationQueryService {
   constructor(
-    readonly prisma: PrismaService,
-    readonly postsRead: PostsReadService,
-    readonly appConfig: AppConfigService,
-    readonly postVisibility: PostVisibilityReadService,
-    readonly readState: NotificationReadStateService,
-    readonly cache?: CacheService,
-    readonly cacheInvalidation?: CacheInvalidationService,
-    @Optional() readonly mutes?: MutesService,
+    private readonly prisma: PrismaService,
+    private readonly postsRead: PostsReadService,
+    private readonly appConfig: AppConfigService,
+    private readonly postVisibility: PostVisibilityReadService,
+    private readonly readState: NotificationReadStateService,
+    private readonly listing: NotificationQueryListService,
+    private readonly cache?: CacheService,
+    private readonly cacheInvalidation?: CacheInvalidationService,
+    @Optional() private readonly mutes?: MutesService,
   ) {}
-
-  notificationPostId(n: {
-    kind: NotificationKind;
-    actorPostId?: string | null;
-    subjectPostId?: string | null;
-  }): string | null {
-    if (
-      n.kind === "followed_post" ||
-      n.kind === "checkin_post" ||
-      n.kind === "community_group_post"
-    )
-      return (n.subjectPostId ?? "").trim() || null;
-    if (n.kind === "comment") return (n.actorPostId ?? "").trim() || null;
-    if (n.kind === "mention") return (n.actorPostId ?? "").trim() || null;
-    if (n.kind === "repost")
-      return (n.actorPostId ?? n.subjectPostId ?? "").trim() || null;
-    // marv_not_in_group navigates via actorPostId on the DTO; no embedded post row.
-    return null;
-  }
 
   async list(params: {
     recipientUserId: string;
@@ -115,7 +87,7 @@ export class NotificationQueryService {
     unreadOnly?: boolean;
     boardCommentsOnly?: boolean;
   }) {
-    return listUncachedOn(this, params);
+    return this.listing.listUncached(params);
   }
 
 
@@ -128,7 +100,7 @@ export class NotificationQueryService {
     prefer?: FeedCollapsePrefer;
   }) {
     const { recipientUserId, limit, cursor } = params;
-    const desiredPostLimit = Math.max(1, Math.min(limit, 50));
+    const desiredPostLimit = clampLimit(limit, { default: 50, max: 50 });
     const rawFetchLimit = Math.min(desiredPostLimit * 8, 300);
 
     const cursorWhere = await createdAtIdCursorWhere({
@@ -283,129 +255,6 @@ export class NotificationQueryService {
     };
   }
 
-  toNotificationDto(
-    n: {
-      id: string;
-      createdAt: Date;
-      kind: NotificationKind;
-      subjectPost?: {
-        parentId: string | null;
-        id?: string;
-        kind?: string;
-        rootId?: string | null;
-      } | null;
-      actorPost?: {
-        parentId: string | null;
-        id: string;
-        kind: string;
-        rootId: string | null;
-      } | null;
-      deliveredAt: Date | null;
-      readAt: Date | null;
-      ignoredAt: Date | null;
-      nudgedBackAt: Date | null;
-      actorPostId: string | null;
-      subjectPostId: string | null;
-      subjectUserId: string | null;
-      subjectArticleId?: string | null;
-      subjectArticleCommentId?: string | null;
-      subjectGroupId?: string | null;
-      subjectCrewId?: string | null;
-      subjectCrewInviteId?: string | null;
-      subjectCommunityGroupInviteId?: string | null;
-      subjectConversationId?: string | null;
-      actionPath?: string | null;
-      subjectSpaceId?: string | null;
-      title: string | null;
-      body: string | null;
-      actor: {
-        id: string;
-        username: string | null;
-        name: string | null;
-        avatarKey: string | null;
-        avatarVideoKey?: string | null;
-        avatarVideoDurationMs?: number | null;
-        avatarUpdatedAt: Date | null;
-        premium: boolean;
-        isOrganization: boolean;
-        verifiedStatus: VerifiedStatus;
-      } | null;
-    },
-    publicBaseUrl: string | null,
-    subjectPostPreview?: SubjectPostPreviewDto | null,
-    subjectPostVisibility: SubjectPostVisibility | null = null,
-    subjectTier: SubjectTier = null,
-    subjectArticlePreview?: SubjectArticlePreviewDto | null,
-    subjectGroupSlug: string | null = null,
-    subjectGroupName: string | null = null,
-    subjectGroupAvatarUrl: string | null = null,
-    subjectCrewInviteStatus: NotificationDto["subjectCrewInviteStatus"] = null,
-    subjectCrewName: string | null = null,
-    subjectCommunityGroupInviteStatus: NotificationDto["subjectCommunityGroupInviteStatus"] = null,
-    post: PostDto | null = null,
-    subjectSpaceOwnerUsername: string | null = null,
-  ): NotificationDto {
-    let actor: NotificationActorDto | null = null;
-    if (n.actor && !(n.actor as { bannedAt?: Date | null }).bannedAt) {
-      actor = {
-        id: n.actor.id,
-        username: n.actor.username,
-        name: n.actor.name,
-        avatarUrl: publicAssetUrl({
-          publicBaseUrl,
-          key: n.actor.avatarKey,
-          updatedAt: n.actor.avatarUpdatedAt,
-        }),
-        avatarVideo: toAvatarVideoDto(n.actor, publicBaseUrl),
-        premium: n.actor.premium,
-        isOrganization: Boolean((n.actor as any).isOrganization),
-        verifiedStatus: n.actor.verifiedStatus,
-      };
-    }
-    return {
-      id: n.id,
-      createdAt: n.createdAt.toISOString(),
-      kind: n.kind,
-      category: notificationCategory(
-        n.kind,
-        n.subjectPost?.parentId ?? post?.parentId,
-      ),
-      deliveredAt: n.deliveredAt ? n.deliveredAt.toISOString() : null,
-      readAt: n.readAt ? n.readAt.toISOString() : null,
-      ignoredAt: n.ignoredAt ? n.ignoredAt.toISOString() : null,
-      nudgedBackAt: n.nudgedBackAt ? n.nudgedBackAt.toISOString() : null,
-      actor,
-      actorPostId: n.actorPostId,
-      subjectPostId: n.subjectPostId,
-      subjectUserId: n.subjectUserId,
-      subjectArticleId: n.subjectArticleId ?? null,
-      subjectArticleCommentId: n.subjectArticleCommentId ?? null,
-      subjectGroupId: n.subjectGroupId ?? null,
-      subjectGroupSlug,
-      subjectGroupName,
-      subjectGroupAvatarUrl,
-      subjectCrewId: n.subjectCrewId ?? null,
-      subjectCrewInviteId: n.subjectCrewInviteId ?? null,
-      subjectCrewInviteStatus: subjectCrewInviteStatus ?? null,
-      subjectCrewName: subjectCrewName ?? null,
-      subjectCommunityGroupInviteId: n.subjectCommunityGroupInviteId ?? null,
-      subjectCommunityGroupInviteStatus:
-        subjectCommunityGroupInviteStatus ?? null,
-      subjectConversationId: n.subjectConversationId ?? null,
-      actionPath: n.actionPath ?? null,
-      subjectSpaceId: n.subjectSpaceId ?? null,
-      subjectSpaceOwnerUsername: subjectSpaceOwnerUsername ?? null,
-      title: n.title,
-      body: n.body,
-      subjectPostPreview: subjectPostPreview ?? null,
-      post: post ?? null,
-      subjectArticlePreview: subjectArticlePreview ?? null,
-      subjectPostVisibility,
-      subjectTier,
-      ...boardNotificationRefs(n.actorPost ?? null, n.subjectPost ?? null),
-    };
-  }
-
   /** Hydrate a single notification row into its full DTO (used for realtime `notifications:new`). */
   async buildNotificationDtoForRecipient(params: {
     recipientUserId: string;
@@ -445,9 +294,7 @@ export class NotificationQueryService {
         },
         actor: {
           select: {
-            id: true,
-            username: true,
-            name: true,
+            ...USER_BRIEF_SELECT,
             avatarKey: true,
             avatarVideoKey: true,
             avatarVideoDurationMs: true,
@@ -477,7 +324,7 @@ export class NotificationQueryService {
         Boolean(postId) && arr.indexOf(postId) === index,
     );
     if (previewPostIds.length > 0) {
-      const posts = await this.postsRead.read.findMany({
+      const posts = await this.postsRead.findMany({
         where: { id: { in: previewPostIds } },
         select: {
           id: true,
@@ -485,7 +332,7 @@ export class NotificationQueryService {
           kind: true,
           visibility: true,
           media: {
-            where: { deletedAt: null },
+            where: NOT_DELETED,
             orderBy: { position: "asc" },
             select: {
               kind: true,
@@ -581,7 +428,7 @@ export class NotificationQueryService {
       }
     }
 
-    const notificationPostId = this.notificationPostId(n);
+    const notificationPostId = postIdOf(n);
     const notificationPostIds = NOTIFICATION_POST_CARD_KINDS.has(n.kind)
       ? [
           notificationPostId,
@@ -670,7 +517,7 @@ export class NotificationQueryService {
       subjectSpaceOwnerUsername = (space?.owner?.username ?? "").trim() || null;
     }
 
-    return this.toNotificationDto(
+    return toNotificationDto(
       n,
       publicBaseUrl,
       subjectPostPreview,
@@ -689,26 +536,4 @@ export class NotificationQueryService {
   }
 }
 
-type BoardRefPost = {
-  id?: string;
-  parentId: string | null;
-  kind?: string;
-  rootId?: string | null;
-} | null;
-
-/** Board thread/comment ids when the causing or subject post lives on the Board. */
-export function boardNotificationRefs(
-  actorPost: BoardRefPost,
-  subjectPost: BoardRefPost,
-): Pick<NotificationDto, "boardThreadId" | "boardCommentId"> {
-  const ref = [actorPost, subjectPost].find((p) => p?.kind === "board" && p.id);
-  if (!ref?.id) return {};
-  const threadId = ref.parentId ? (ref.rootId ?? ref.parentId) : ref.id;
-  const commentPost =
-    actorPost?.kind === "board" && actorPost.parentId
-      ? actorPost
-      : ref.parentId
-        ? ref
-        : null;
-  return { boardThreadId: threadId, boardCommentId: commentPost?.id ?? null };
-}
+export { boardNotificationRefs } from './notification-query.mapper';

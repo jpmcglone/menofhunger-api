@@ -1,36 +1,15 @@
 import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
 import { ApiTags } from '@nestjs/swagger';
 import type { SpaceDto, SpaceLobbyCountsDto, SpaceReactionDto } from '../../common/dto';
-import { AuthGuard } from '../auth/auth.guard';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { AuthGuard } from '../auth/auth-public-api';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
-import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
+import { PresenceLobbyStateService } from '../presence/presence-lobby-state.service';
 import { SpacesService } from './spaces.service';
 import { SpacesPresenceService } from './spaces-presence.service';
 import { RedisService } from '../redis/redis.service';
 import { RedisKeys } from '../redis/redis-keys';
-
-const createSpaceSchema = z.object({
-  title: z.string().trim().min(1).max(100),
-  description: z.string().trim().max(500).nullish(),
-});
-
-const updateSpaceSchema = z.object({
-  title: z.union([z.string().trim().max(100), z.null()]).optional()
-    .transform((value) => (value === '' ? null : value)),
-  description: z.string().trim().max(500).nullish(),
-});
-
-const setModeSchema = z.object({
-  mode: z.enum(['NONE', 'WATCH_PARTY', 'RADIO']),
-  watchPartyUrl: z.string().trim().max(2000).nullish(),
-  radioStreamUrl: z.string().trim().max(2000).nullish(),
-});
-
-const setScheduleSchema = z.object({
-  scheduledAt: z.string().datetime({ offset: true }).or(z.string().datetime()),
-});
+import { createSpaceSchema, updateSpaceSchema, setModeSchema, setScheduleSchema } from './spaces.schemas';
 
 @ApiTags('Radio & Spaces')
 @Controller('spaces')
@@ -38,7 +17,7 @@ export class SpacesController {
   constructor(
     private readonly spaces: SpacesService,
     private readonly spacesPresence: SpacesPresenceService,
-    private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presenceRedis: PresenceLobbyStateService,
     private readonly redis: RedisService,
   ) {}
 

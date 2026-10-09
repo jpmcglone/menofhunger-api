@@ -4,11 +4,9 @@ import { MutesService } from "../mutes/mutes.service";
 import { Prisma, type NotificationKind } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { PresenceRealtimeService } from "../presence/presence-realtime.service";
-import { PresenceRedisStateService } from "../presence/presence-redis-state.service";
+import { PresenceRedisReadService } from "../presence/presence-redis-read.service";
 import { SideEffectsService } from "../side-effects/side-effects.service";
-import {
-  NotificationReadStateService,
-} from "./notification-read-state.service";
+import { NotificationReadStateService } from "./notification-read-state.service";
 import { CacheInvalidationService } from "../redis/cache-invalidation.service";
 import { PostsReadService } from "../posts-read/posts-read.service";
 
@@ -26,7 +24,7 @@ export class NotificationWriterSupportService {
     private readonly prisma: PrismaService,
     private readonly postsRead: PostsReadService,
     private readonly presenceRealtime: PresenceRealtimeService,
-    private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presenceRedis: PresenceRedisReadService,
     private readonly sideEffects: SideEffectsService,
     private readonly readState: NotificationReadStateService,
     private readonly cacheInvalidation?: CacheInvalidationService,
@@ -120,7 +118,7 @@ export class NotificationWriterSupportService {
     kind: string,
   ): Promise<boolean> {
     if (!postId) return true;
-    const post = await this.postsRead.read.findUnique({
+    const post = await this.postsRead.findUnique({
       where: { id: postId },
       select: { communityGroupId: true },
     });

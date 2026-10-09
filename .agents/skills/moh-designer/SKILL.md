@@ -23,6 +23,11 @@ Follow the [Figma-first design workflow](../../../docs/engineering-policy.md#fig
 
 Follow the [product and visual policy](../../../docs/engineering-policy.md#product-and-visual-decisions).
 
+Use the [shared Figma library guidelines](../../../docs/figma-guidelines/README.md) in
+Codex and Cursor. For animated interactions inspect Motion context alongside static
+design data; hand off the actual timeline and reduced-motion behavior to native
+SwiftUI and Vue/CSS implementations. Report missing motion data rather than inventing it.
+
 ## The synthesis
 
 **Apple (simplicity)**

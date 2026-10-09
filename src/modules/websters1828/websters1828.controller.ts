@@ -2,8 +2,8 @@ import { Controller, Get, NotFoundException, Post, Query, Res, UseGuards } from 
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import { AuthGuard } from '../auth/auth.guard';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { AuthGuard } from '../auth/auth-public-api';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
 import { PersonAccountGuard } from '../pages/person-account.guard';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';

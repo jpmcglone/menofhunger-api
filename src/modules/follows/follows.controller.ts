@@ -1,32 +1,13 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
-import { AuthGuard } from '../auth/auth.guard';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { AuthGuard } from '../auth/auth-public-api';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
 import { CurrentUserId, OptionalCurrentUserId } from '../users/users.decorator';
 import { FollowsService } from './follows.service';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { setReadCache } from '../../common/http-cache';
-import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
-
-const listSchema = cursorPageQuerySchema();
-
-const recommendationsSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  /** Comma-separated interest keys; when present, returns users sorted by overlap count. */
-  interests: z.string().optional(),
-  seed: z.string().trim().min(1).max(80).optional(),
-});
-
-const topUsersSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-});
-
-const postNotificationsSchema = z.object({
-  enabled: z.boolean().optional(),
-  preference: z.enum(['all', 'posts', 'off']).optional(),
-}).refine(body => (body.enabled !== undefined) !== (body.preference !== undefined), { message: 'Choose one notification preference.' });
+import { listSchema, recommendationsSchema, topUsersSchema, postNotificationsSchema } from './follows.schemas';
 
 @Controller('follows')
 export class FollowsController {

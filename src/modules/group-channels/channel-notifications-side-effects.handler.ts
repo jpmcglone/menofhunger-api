@@ -1,8 +1,9 @@
 import { Injectable, NotFoundException, type OnModuleInit } from '@nestjs/common';
 import { GroupEmailService } from '../email/group-email.service';
-import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
+import { PresenceRedisReadService } from '../presence/presence-redis-read.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationPushService } from '../notifications/notification-push.service';
+import { trimPushBody } from '../notifications/notification-push-copy';
 import { NotificationPreferencesService } from '../notifications/notification-preferences.service';
 import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
 import { SideEffectsService } from '../side-effects/side-effects.service';
@@ -27,7 +28,7 @@ export class ChannelNotificationsSideEffectsHandler implements OnModuleInit {
     private readonly cache: CacheService,
     private readonly viewing: ChannelViewingService,
     private readonly groupEmail: GroupEmailService,
-    private readonly presence: PresenceRedisStateService,
+    private readonly presence: PresenceRedisReadService,
     private readonly messages: ChannelMessagesService,
   ) {}
 
@@ -79,7 +80,7 @@ export class ChannelNotificationsSideEffectsHandler implements OnModuleInit {
         const privateChannel = channel.privacy === 'private';
         await this.push.sendWebPushToRecipient(userId, {
           title: privateChannel ? 'Men of Hunger' : `${group.name} · #${channel.displayName ?? channel.name}`,
-          body: privateChannel ? 'New activity in a private channel.' : this.push.trimPushBody(message.body) ?? 'Shared an attachment.',
+          body: privateChannel ? 'New activity in a private channel.' : trimPushBody(message.body) ?? 'Shared an attachment.',
           url: `/groups/${encodeURIComponent(group.slug)}/channels/${channel.id}?message=${message.id}${message.threadRootId ? `&thread=${message.threadRootId}` : ''}`,
           tag: `channel-${message.id}-${reason}`, kind: reason === 'personal' ? 'channel_mention' : 'channel_message', threadId: `channel-${channel.id}`,
           actorUserId: message.senderId,
@@ -105,7 +106,7 @@ export class ChannelNotificationsSideEffectsHandler implements OnModuleInit {
     const sent = await this.groupEmail.send({
       kind: 'mention', recipientUserId: userId, groupId, actorUserId: message.senderId,
       channel: { id: channel.id, label: channel.displayName ?? channel.name, isPrivate: channel.privacy === 'private' },
-      messageId: message.id, excerpt: this.push.trimPushBody(message.body),
+      messageId: message.id, excerpt: trimPushBody(message.body),
     });
     if (sent) await this.cache.setJson(key, 1, { ttlSeconds: 3600 });
   }

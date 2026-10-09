@@ -1,35 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import type {
-  Announcement,
-  AnnouncementDismissMethod,
-  AnnouncementEventType,
-  AnnouncementOutcome,
-  AnnouncementPlatform,
-  AnnouncementStatus,
-  Prisma,
-} from '@prisma/client';
+import type { Announcement, AnnouncementDismissMethod, AnnouncementEventType, AnnouncementOutcome, AnnouncementPlatform, AnnouncementStatus, Prisma } from '@prisma/client';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  emptyAnnouncementStats,
-  toAnnouncementAdminDto,
-  toAnnouncementDto,
-  type AnnouncementAdminDto,
-  type AnnouncementDto,
-  type AnnouncementStatsDto,
-} from '../../common/dto/announcement.dto';
-import {
-  AD_CADENCE_MS,
-  ANNOUNCEMENT_CADENCE_MS,
-  ANNOUNCEMENT_MAX_VIEWS_MAX,
-  ANNOUNCEMENT_MAX_VIEWS_MIN,
-  canSeeAds,
-  hasRemainingViews,
-  isAudienceEligibleForAds,
-  isOnboarded,
-  pickNextRotatingItem,
-  viewerKeyFor,
-} from './announcements.selection';
+import { emptyAnnouncementStats, toAnnouncementAdminDto, toAnnouncementDto, type AnnouncementAdminDto, type AnnouncementDto, type AnnouncementStatsDto } from '../../common/dto/announcement.dto';
+import { AD_CADENCE_MS, ANNOUNCEMENT_CADENCE_MS, ANNOUNCEMENT_MAX_VIEWS_MAX, ANNOUNCEMENT_MAX_VIEWS_MIN, canSeeAds, hasRemainingViews, isAudienceEligibleForAds, isOnboarded, pickNextRotatingItem, viewerKeyFor } from './announcements.selection';
 
 const LIVE_ANNOUNCEMENT_SELECT = {
   id: true,

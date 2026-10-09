@@ -1,12 +1,16 @@
+import { Inject } from '@nestjs/common';
+import { PostsFeedFeaturedService } from '../posts/posts-feed-featured.service';
+import { PostsFeedComposeService } from '../posts/posts-feed-compose.service';
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { Injectable } from '@nestjs/common';
-import { PostsService } from '../posts/posts.service';
+
 import { TopicsService } from '../topics/topics.service';
 import { ArticlesService } from '../articles/articles.service';
 import { GroupsService } from '../groups/groups.service';
 import { HashtagsService } from '../hashtags/hashtags.service';
 import { FollowsService } from '../follows/follows.service';
 import { CheckinsService } from '../checkins/checkins.service';
-import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
+import { PresenceRedisReadService } from '../presence/presence-redis-read.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { toUserListDto } from '../../common/dto';
@@ -15,14 +19,15 @@ import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 @Injectable()
 export class ExploreService {
   constructor(
-    private readonly posts: PostsService,
+    @Inject(PostsFeedFeaturedService) private readonly postsFeatured: Pick<PostsFeedFeaturedService, 'listFeaturedFeed'>,
+    @Inject(PostsFeedComposeService) private readonly postsCompose: Pick<PostsFeedComposeService, 'composeFeedPostDtos'>,
     private readonly topics: TopicsService,
     private readonly articles: ArticlesService,
     private readonly groups: GroupsService,
     private readonly hashtags: HashtagsService,
     private readonly follows: FollowsService,
     private readonly checkins: CheckinsService,
-    private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presenceRedis: PresenceRedisReadService,
     private readonly appConfig: AppConfigService,
     private readonly prisma: PrismaService,
   ) {}
@@ -45,7 +50,7 @@ export class ExploreService {
       topUsersResult,
       onlineUserIds,
     ] = await Promise.all([
-      this.posts.listFeaturedFeed({
+      this.postsFeatured.listFeaturedFeed({
         viewerUserId,
         limit: 8,
         cursor: null,
@@ -60,7 +65,7 @@ export class ExploreService {
       this.presenceRedis.onlineUserIds(),
     ]);
 
-    const featuredDtos = await this.posts.composeFeedPostDtos({
+    const featuredDtos = await this.postsCompose.composeFeedPostDtos({
       viewerUserId,
       filteredPosts: featuredResult.posts,
       collapsedItemsByItemId: new Map(),
@@ -80,7 +85,7 @@ export class ExploreService {
         this.prisma.user.findMany({
           where: {
             usernameIsSet: true,
-            bannedAt: null,
+            ...NOT_BANNED_USER_WHERE,
             id: { not: viewerUserId },
             followers: { none: { followerId: viewerUserId } },
           },

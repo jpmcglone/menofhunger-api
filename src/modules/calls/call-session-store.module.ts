@@ -1,9 +1,9 @@
-import { Module } from '@nestjs/common';
-import { CallSessionStore } from './call-session.store';
+import { Module } from "@nestjs/common";
+import { CallSessionStore } from "./call-session.store";
 
 /**
  * Split from CallsModule so MessagesModule can read `activeCall` for conversation DTOs
- * without importing the calls service (which itself depends on MessagesService).
+ * without importing the calls service (which itself depends on MessagesCallsService).
  */
 @Module({
   providers: [CallSessionStore],

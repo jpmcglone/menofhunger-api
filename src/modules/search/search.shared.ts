@@ -5,6 +5,7 @@ import { CASHTAG_IN_TEXT_DISPLAY_RE, parseCashtagCandidatesFromText } from '../.
 import type { UserListRelationship } from '../../common/dto/user.dto';
 import { POST_LIST_INCLUDE } from '../../common/prisma-includes/post.include';
 import { articleAuthorInclude } from '../../common/dto/article.dto';
+import type { ViewerContext } from '../viewer/viewer-context.service';
 
 /**
  * Search scoring (higher = better). Used for ranking only; tie-breaks: relationship (users), createdAt (posts).
@@ -84,7 +85,7 @@ export const ARTICLE_SCORE = {
   authorNameAnyWord: 30,
 } as const;
 
-export type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean; premiumPlus?: boolean; siteAdmin?: boolean } | null;
+export type Viewer = Pick<ViewerContext, 'id' | 'verifiedStatus' | 'premium' | 'premiumPlus' | 'siteAdmin'> | null;
 
 // Same shape as the feed so Board, article, fitness, and poll posts render fully in results and bookmarks.
 export const SEARCH_POST_INCLUDE = POST_LIST_INCLUDE;
@@ -98,6 +99,55 @@ export const POST_MEDIA_NOTE_MATCH_SQL = Prisma.sql`EXISTS (
   JOIN "MediaSearchNote" n ON n."r2Key" IN (pm."r2Key", pm."thumbnailR2Key")
   WHERE pm."postId" = p."id" AND pm."deletedAt" IS NULL
     AND to_tsvector('english', n."note") @@ q.tsq
+)`;
+
+/**
+ * Bound on matching previews per query (freshest first). With `PostLink` the post side is an indexed
+ * join on url, so this only caps a pathological common word; direct body matches are unaffected.
+ */
+export const LINK_HITS_LIMIT = 5000;
+
+/**
+ * Cached link previews (OG title/description/site, X post + quoted post text/author) whose text
+ * matches the query. Add as a CTE next to `q` (`, link_hits AS MATERIALIZED (...)`) so the preview
+ * table is probed once via `LinkMetadata_preview_fts_idx` (the tsvector expression must stay identical
+ * to that index; migration 20261008235000). Joined to posts by url through `PostLink`.
+ */
+export const LINK_HITS_CTE_SQL = Prisma.sql`link_hits AS MATERIALIZED (
+  SELECT lm."url" AS url
+  FROM "LinkMetadata" lm CROSS JOIN q
+  WHERE to_tsvector('english',
+    COALESCE(lm."title", '') || ' ' || COALESCE(lm."description", '') || ' ' || COALESCE(lm."siteName", '') || ' ' ||
+    COALESCE(lm."socialPost"->>'text', '') || ' ' || COALESCE(lm."socialPost"#>>'{author,name}', '') || ' ' ||
+    COALESCE(lm."socialPost"#>>'{author,handle}', '') || ' ' || COALESCE(lm."socialPost"#>>'{quote,text}', '') || ' ' ||
+    COALESCE(lm."socialPost"#>>'{quote,author,name}', '')
+  ) @@ q.tsq
+  ORDER BY lm."updatedAt" DESC
+  LIMIT ${LINK_HITS_LIMIT}
+)`;
+
+/**
+ * True when one of the post's `PostLink` urls has a matching preview in `link_hits` (indexed on url).
+ *
+ * TRANSITIONAL FALLBACK (remove after 2026-11-15, once `node scripts/backfill-post-links.mjs` is confirmed
+ * on production): a post with NO `PostLink` rows but "http" in its body is matched by scanning the body for
+ * the preview url (old rtrim'd form), so production posts predating `PostLink` stay searchable before the
+ * backfill runs. It earns its place only until then. Gating keeps it cheap: the NOT EXISTS is a primary-key
+ * probe, the `http` check skips bodies with no links, and `link_hits` is bounded. After the backfill only
+ * posts whose links were all unparseable reach the scan. To remove: delete the second OR branch and this note,
+ * and the legacy case in search.service.spec.ts.
+ */
+export const POST_LINK_PREVIEW_MATCH_SQL = Prisma.sql`(
+  EXISTS (
+    SELECT 1 FROM "PostLink" pl JOIN link_hits lh ON lh.url = pl."url" WHERE pl."postId" = p."id"
+  )
+  OR (
+    p."body" LIKE '%http%'
+    AND NOT EXISTS (SELECT 1 FROM "PostLink" pl0 WHERE pl0."postId" = p."id")
+    AND EXISTS (
+      SELECT 1 FROM link_hits lh WHERE rtrim(lh.url, '/') <> '' AND position(rtrim(lh.url, '/') in p."body") > 0
+    )
+  )
 )`;
 
 /** Words of the query found in a photo note: 2 = all (or the whole phrase), 1 = some, 0 = none. */

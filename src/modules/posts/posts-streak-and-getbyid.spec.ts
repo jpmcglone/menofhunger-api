@@ -9,7 +9,7 @@ import { NotFoundException } from '@nestjs/common';
 
 // ─── 1. Streak CAS ───────────────────────────────────────────────────────────
 
-describe('PostsMutationService streak CAS', () => {
+describe('Post streak CAS', () => {
   function makeStreakTx(updateManyCount: number) {
     const updateMany: any = jest.fn(async () => ({ count: updateManyCount }));
     const coinTransferCreate: any = jest.fn(async () => ({ id: 'transfer-1' }));

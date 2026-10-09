@@ -1,15 +1,9 @@
 import { AdminAnalyticsService } from './admin-analytics.service';
 import { BadRequestException, Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
 import { AdminGuard } from './admin.guard';
 import { CurrentUserId } from '../users/users.decorator';
 import { AdminAnalyticsBriefService } from './admin-analytics-brief.service';
-
-const briefBodySchema = z.object({
-  range: z.enum(['7d', '30d', '3m', '1y', 'all']),
-  analytics: z.record(z.string(), z.unknown()),
-  referrals: z.record(z.string(), z.unknown()).nullable().optional(),
-});
+import { briefBodySchema } from './admin-analytics.schemas';
 
 @Controller('admin/analytics')
 @UseGuards(AdminGuard)

@@ -8,6 +8,8 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { SpacesChatService } from './spaces-chat.service';
 import { SpacesController } from './spaces.controller';
 import { SpacesPresenceService } from './spaces-presence.service';
+import { SpacesViewService } from './spaces-view.service';
+import { SpacesScheduleService } from './spaces-schedule.service';
 import { SpacesService } from './spaces.service';
 import { SpacesIdleCleanupCron } from './spaces-idle-cleanup.cron';
 import { SpacesSideEffectsHandler } from './spaces-side-effects.handler';
@@ -17,6 +19,8 @@ import { WatchPartyStateService } from './watch-party-state.service';
   imports: [AuthModule, EmailModule, JobsModule, LinkMetadataModule, NotificationsModule, RealtimeModule],
   controllers: [SpacesController],
   providers: [
+    SpacesViewService,
+    SpacesScheduleService,
     SpacesService,
     SpacesPresenceService,
     SpacesChatService,

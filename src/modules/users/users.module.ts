@@ -18,6 +18,8 @@ import { UsersLocationService } from './users-location.service';
 import { UsersMeRealtimeService } from './users-me-realtime.service';
 import { UsersPublicRealtimeService } from './users-public-realtime.service';
 import { PublicProfilesService } from './public-profiles.service';
+import { ProfileLinksService } from './profile-links.service';
+import { ProfileLinksWriteService } from './profile-links-write.service';
 import { MembersMapController } from './members-map.controller';
 import { MembersMapService } from './members-map.service';
 import { MembersMapRealtimeService } from './members-map-realtime.service';
@@ -41,8 +43,12 @@ import { MembersMapRealtimeService } from './members-map-realtime.service';
     UsersPreferencesService,
     UsersPublicProfileService,
     UsersMeService,
+    ProfileLinksService,
+    ProfileLinksWriteService,
   ],
   exports: [
+    ProfileLinksService,
+    ProfileLinksWriteService,
     UsersProfileWriteService,
     PublicProfileCacheService,
     UsersRealtimeService,

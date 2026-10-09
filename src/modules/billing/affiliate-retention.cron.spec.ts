@@ -1,5 +1,5 @@
 import { AffiliateRetentionCron } from './affiliate-retention.cron';
-import { AFFILIATE_PREMIUM_RETENTION_DAYS } from './affiliate.service';
+import { AFFILIATE_PREMIUM_RETENTION_DAYS } from './affiliate.constants';
 
 function makePrisma(): any {
   return {

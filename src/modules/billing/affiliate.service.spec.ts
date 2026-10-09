@@ -1,5 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { AffiliateService, AFFILIATE_CAP_CENTS, AFFILIATE_MIN_PAYOUT_CENTS, AFFILIATE_RATES_CENTS } from './affiliate.service';
+import { AffiliateService } from './affiliate.service';
+import { AFFILIATE_CAP_CENTS, AFFILIATE_MIN_PAYOUT_CENTS, AFFILIATE_RATES_CENTS } from './affiliate.constants';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

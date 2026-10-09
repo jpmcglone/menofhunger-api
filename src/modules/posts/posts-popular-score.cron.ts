@@ -1,12 +1,15 @@
+import { Inject } from '@nestjs/common';
+import { PostsRankingService } from './posts-ranking.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { PostsService } from './posts.service';
+
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
 import { postRankingSql } from './posts-ranking.sql';
 import { AppConfigService } from '../app/app-config.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 @Injectable()
 export class PostsPopularScoreCron {
@@ -15,7 +18,7 @@ export class PostsPopularScoreCron {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly posts: PostsService,
+    @Inject(PostsRankingService) private readonly postsRanking: Pick<PostsRankingService, 'ensureBoostScoresFresh'>,
     private readonly jobs: JobsService,
     private readonly appConfig: AppConfigService,
   ) {}
@@ -52,7 +55,7 @@ export class PostsPopularScoreCron {
       const warmup = await this.prisma.post.findMany({
         where: {
           AND: [
-            { deletedAt: null },
+            NOT_DELETED,
             { parentId: null },
             { visibility: { not: 'onlyMe' } },
             { createdAt: { gte: minCreatedAt } },
@@ -65,7 +68,7 @@ export class PostsPopularScoreCron {
         select: { id: true },
       });
       if (warmup.length > 0) {
-        await this.posts.ensureBoostScoresFresh(warmup.map((p) => p.id));
+        await this.postsRanking.ensureBoostScoresFresh(warmup.map((p) => p.id));
       }
 
       // Compute trending scores for all candidate posts, then write directly to Post.trendingScore.

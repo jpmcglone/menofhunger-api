@@ -1,32 +1,18 @@
-import { findGroupMemberStatus } from '../viewer/group-membership.queries';
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-  Optional,
-} from "@nestjs/common";
-import {MutesService} from "../mutes/mutes.service";
-import type {
-  CommunityGroupJoinPolicy,
-  PostVisibility,
-} from "@prisma/client";
-import {PrismaService} from "../prisma/prisma.service";
-import {RequestCacheService} from "../../common/cache/request-cache.service";
-import {
-  ViewerContextService,
-  type ViewerContext,
-} from "../viewer/viewer-context.service";
-import {POSTS_RANKING} from "./posts-ranking.config";
-import {
-  notDeletedWhere,
-} from "./posts-query-builders";
-import {
-  type FeedPost,
-} from "./posts-feed.types";
-import {PostsViewerEnrichmentService} from "./posts-viewer-enrichment.service";
-import {CacheService} from "../redis/cache.service";
-import {stableJsonHash} from "../redis/redis-keys";
+import { findGroupMemberStatus, listActiveGroupIdsAmong } from '../viewer/group-membership.queries';
+import { decodeJsonCursor, encodeJsonCursor } from '../../common/pagination/json-cursor';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from "@nestjs/common";
+import { MutesService } from "../mutes/mutes.service";
+import type { CommunityGroupJoinPolicy, PostVisibility } from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { RequestCacheService } from "../../common/cache/request-cache.service";
+import { ViewerContextService, type ViewerContext } from "../viewer/viewer-context.service";
+import { POSTS_RANKING } from "./posts-ranking.config";
+import { notDeletedWhere } from "./posts-query-builders";
+import { type FeedPost } from "./posts-feed.types";
+import { PostsViewerEnrichmentService } from "./posts-viewer-enrichment.service";
+import { CacheService } from "../redis/cache.service";
+import { stableJsonHash } from "../redis/redis-keys";
+
 
 export type ReadablePostShell = {
   id: string;
@@ -220,15 +206,7 @@ export class PostsFeedAccessService {
 
     let memberGroupIds = new Set<string>();
     if (viewerUserId) {
-      const rows = await this.prisma.communityGroupMember.findMany({
-        where: {
-          userId: viewerUserId,
-          groupId: { in: groupIds },
-          status: "active",
-        },
-        select: { groupId: true },
-      });
-      memberGroupIds = new Set(rows.map((r) => r.groupId));
+      memberGroupIds = await listActiveGroupIdsAmong(this.prisma, viewerUserId, groupIds);
     }
 
     const viewerVerified = this.viewerContextService.isVerified(viewer);
@@ -250,36 +228,19 @@ export class PostsFeedAccessService {
     createdAt: string;
     id: string;
   }) {
-    return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+    return encodeJsonCursor(cursor);
   }
 
   decodePopularCursor(
     token: string | null,
   ): { score: number; createdAt: string; id: string } | null {
-    const t = (token ?? "").trim();
-    if (!t) return null;
-    try {
-      const raw = Buffer.from(t, "base64url").toString("utf8");
-      // Accept both old cursors (with asOf field) and new cursors (without).
-      const parsed = JSON.parse(raw) as Partial<{
-        asOf: string;
-        score: number;
-        createdAt: string;
-        id: string;
-      }>;
-      const createdAt =
-        typeof parsed.createdAt === "string" ? parsed.createdAt : "";
-      const id = typeof parsed.id === "string" ? parsed.id : "";
-      const score =
-        typeof parsed.score === "number" && Number.isFinite(parsed.score)
-          ? parsed.score
-          : NaN;
-      if (!createdAt || !id) return null;
-      if (!Number.isFinite(score)) return null;
-      return { score, createdAt, id };
-    } catch {
-      return null;
-    }
+    // Old cursors carry an extra asOf field; it is ignored.
+    const parsed = decodeJsonCursor(token);
+    const createdAt = typeof parsed?.createdAt === "string" ? parsed.createdAt : "";
+    const id = typeof parsed?.id === "string" ? parsed.id : "";
+    const score = typeof parsed?.score === "number" && Number.isFinite(parsed.score) ? parsed.score : NaN;
+    if (!createdAt || !id || !Number.isFinite(score)) return null;
+    return { score, createdAt, id };
   }
 
   async encodeForYouCursor(
@@ -300,15 +261,11 @@ export class PostsFeedAccessService {
           ttlSeconds: POSTS_RANKING.forYouSessionTtlSeconds,
         },
       );
-      return Buffer.from(JSON.stringify({ v: 4, ref, seed })).toString(
-        "base64url",
-      );
+      return encodeJsonCursor({ v: 4, ref, seed });
     } catch {
       // During a Redis outage, continue a short session without losing exclusion history.
       if (ids.length > POSTS_RANKING.forYouInlineCursorMaxPosts) return null;
-      return Buffer.from(JSON.stringify({ v: 3, s: ids, seed })).toString(
-        "base64url",
-      );
+      return encodeJsonCursor({ v: 3, s: ids, seed });
     }
   }
 

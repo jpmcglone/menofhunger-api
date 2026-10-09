@@ -1,8 +1,8 @@
-import { Injectable, OnModuleInit } from "@nestjs/common";
+import { NotificationCreatorService } from "../../notifications";
+import { Injectable, OnModuleInit, Inject } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
 import { SideEffectsRegistry } from "../../side-effects/side-effects.registry";
-import { NotificationsService } from "../../notifications/notifications.service";
 import { RedisService } from "../../redis/redis.service";
 import { scheduleSchema } from "./delegation.schemas";
 
@@ -30,7 +30,8 @@ export class DelegationSideEffectsHandler implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly registry: SideEffectsRegistry,
-    private readonly notifications: NotificationsService,
+    @Inject(NotificationCreatorService)
+    private readonly notifications: Pick<NotificationCreatorService, "create">,
     private readonly redis: RedisService,
   ) {}
   onModuleInit() {

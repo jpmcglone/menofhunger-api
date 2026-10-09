@@ -1,17 +1,10 @@
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-  NotFoundException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { AuthService } from './auth.service';
-import { toUserDto } from '../users/user.dto';
-import { USER_DTO_SELECT } from '../../common/prisma-selects/user.select';
+import { toUserDto } from '../../common/dto/user.dto';
+import { USER_DTO_SELECT, USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 import { SlackService } from '../../common/slack/slack.service';
 import type { ImpersonationDto } from '../../common/dto/auth.dto';
 
@@ -49,7 +42,7 @@ export class ImpersonationService {
   async start(adminUserId: string, targetUsername: string, res: Response) {
     const admin = await this.prisma.user.findUnique({
       where: { id: adminUserId },
-      select: { id: true, username: true, siteAdmin: true, bannedAt: true },
+      select: { ...USER_REF_SELECT, siteAdmin: true, bannedAt: true },
     });
     // Defense in depth: AdminGuard already ran, but never mint a session off a stale flag.
     if (!admin || !admin.siteAdmin || admin.bannedAt) throw new NotFoundException();

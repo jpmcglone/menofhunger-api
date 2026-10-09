@@ -1,5 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
-import { FollowsService } from './follows.service';
+import { makeFollowsService } from "./follows.testing";
 
 function makeService(opts: {
   viewerKind?: 'person' | 'page';
@@ -25,7 +25,7 @@ function makeService(opts: {
   };
   const notifications = { create: jest.fn(async () => undefined) };
   const viewerContext = { assertUserIdNotBanned: jest.fn(async () => undefined) };
-  const service = new FollowsService(
+  const service = makeFollowsService(
     prisma,
     { r2: jest.fn(() => null) } as any,
     notifications as any,

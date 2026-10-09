@@ -1,3 +1,4 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { AppConfigService } from '../app/app-config.service';
@@ -14,6 +15,7 @@ import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selec
 import { ACTIVITY_WINDOW_DAYS, scoreActiveMan } from './landing-score';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 /** Extends the standard poll include with a shallow parent for "Replying to @username". */
 const LANDING_POST_INCLUDE = {
   ...POST_WITH_POLL_INCLUDE,
@@ -476,14 +478,14 @@ export class LandingService {
     }
 
     if (poolRows.length === 0) {
-      const fallbackPosts = await this.postsRead.read.findMany({
+      const fallbackPosts = await this.postsRead.findMany({
         where: {
-          deletedAt: null,
+          ...NOT_DELETED,
           isDraft: false,
           kind: 'regular',
           visibility: 'public',
           communityGroupId: null,
-          user: { isBot: false, bannedAt: null },
+          user: { isBot: false, ...NOT_BANNED_USER_WHERE },
         },
         orderBy: [{ commentCount: 'desc' }, { viewerCount: 'desc' }, { createdAt: 'desc' }],
         take: TOP_POSTS_SCAN_LIMIT,
@@ -505,7 +507,7 @@ export class LandingService {
 
     const topPostIds = poolRows.map((row) => row.id);
     const topPosts = topPostIds.length
-      ? await this.postsRead.read.findMany({
+      ? await this.postsRead.findMany({
           where: { id: { in: topPostIds } },
           include: LANDING_POST_INCLUDE,
         })
@@ -603,7 +605,7 @@ export class LandingService {
         .map((row) => {
           const post = topPostsById.get(row.id);
           if (!post) return null;
-          const dto = toPostDto(post as unknown as PostWithAuthorAndMedia, this.publicBaseUrl, {
+          const dto = toPostDto(post, this.publicBaseUrl, {
             viewerCanAccess: true,
           });
           const parentRaw = (post as { parent?: PostWithAuthorAndMedia | null }).parent;

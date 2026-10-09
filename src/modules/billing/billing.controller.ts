@@ -1,8 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Headers, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { z } from 'zod';
 import type { Request } from 'express';
-import { AuthGuard } from '../auth/auth.guard';
+import { AuthGuard } from '../auth/auth-public-api';
 import { CurrentUserId } from '../users/users.decorator';
 import { PersonAccountGuard } from '../pages/person-account.guard';
 import type { AffiliateSummaryDto, BillingCheckoutSessionDto, BillingMeDto, BillingPortalSessionDto, BillingTier, ReferralMeDto, RecruitDto } from '../../common/dto';
@@ -11,30 +10,14 @@ import { ReferralService } from './referral.service';
 import { AffiliateService } from './affiliate.service';
 import { LocalBillingTestService } from './local-billing-test.service';
 import { AppleIapService } from './apple-iap.service';
-
-const checkoutSchema = z.object({
-  tier: z.enum(['premium', 'premiumPlus']),
-});
-
-const checkoutSyncSchema = z.object({
-  sessionId: z.string().min(1),
-});
-
-const setReferralCodeSchema = z.object({
-  code: z.string().min(1),
-});
-
-const setRecruiterSchema = z.object({
-  code: z.string().min(1),
-});
-
-const appleVerifySchema = z.object({
-  signedTransaction: z.string().min(1),
-});
-
-const appleNotificationsSchema = z.object({
-  signedPayload: z.string().min(1),
-});
+import {
+  checkoutSchema,
+  checkoutSyncSchema,
+  setReferralCodeSchema,
+  setRecruiterSchema,
+  appleVerifySchema,
+  appleNotificationsSchema,
+} from './billing.schemas';
 
 @Controller('billing')
 export class BillingController {
@@ -154,8 +137,7 @@ export class BillingController {
     @Headers('stripe-signature') stripeSignature: string | undefined,
   ): Promise<{ data: { received: true } }> {
     if (!stripeSignature) throw new BadRequestException('Missing stripe-signature header.');
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rawBody = (req as any).rawBody as Buffer | undefined;
+    const rawBody = req.rawBody;
     if (!rawBody || !(rawBody instanceof Buffer)) throw new BadRequestException('Missing raw request body.');
 
     await this.billing.handleWebhook({ rawBody, stripeSignature });

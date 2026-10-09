@@ -1,7 +1,7 @@
 /**
  * Tuning constants for post ranking: trending/popular scores, the featured
  * subset, and the For You feed blend. Shared by PostsRankingService (score
- * computation) and the feed-query methods in PostsService.
+ * computation) and the focused feed-query services.
  */
 export const POSTS_RANKING = {
   boostScoreTtlMs: 10 * 60 * 1000,

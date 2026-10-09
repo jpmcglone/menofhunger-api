@@ -1,5 +1,8 @@
+import { eraseAccountPostContent } from '../posts-read/post-transaction.commands';
 import { revokeAccountChannels } from '../group-channels/channel-lifecycle';
-import { Prisma } from '@prisma/client';
+import { findGroupOwnershipSuccessor, listActiveGroupIdsForUser, promoteGroupOwner } from '../viewer/group-membership.queries';
+import { listCrewIdsForUser, listCrewSuccessorCandidateIds } from '../viewer/crew-membership.queries';
+import type { Prisma } from '@prisma/client';
 
 // One anonymous structural owner for shared conversations and deleted thread shells.
 // No mapping from this owner back to a person is retained.
@@ -14,23 +17,7 @@ export async function eraseAccountRecords(tx: Prisma.TransactionClient, userId: 
     create: { id: DELETED_ACCOUNT_ID, name: 'Deleted account', isBot: true, bannedAt: now, bannedReason: 'system_tombstone' },
   });
 
-  const posts = await tx.post.findMany({ where: { userId }, select: { id: true, rootId: true } });
-  const postIds = posts.map(p => p.id);
-  const rootIds = [...new Set(posts.flatMap(p => [p.id, ...(p.rootId ? [p.rootId] : [])]))];
-  // Remove content and derived summaries before reassigning structural thread shells.
-  await tx.postMedia.deleteMany({ where: { postId: { in: postIds } } });
-  await tx.postPoll.deleteMany({ where: { postId: { in: postIds } } });
-  await tx.postMention.deleteMany({ where: { postId: { in: postIds } } });
-  await tx.marvinThreadSummary.deleteMany({ where: { rootPostId: { in: rootIds } } });
-  await tx.post.updateMany({
-    where: { userId },
-    data: {
-      userId: DELETED_ACCOUNT_ID, body: '', deletedAt: now, topics: [], hashtags: [],
-      hashtagCasings: [], cashtags: [], checkinPrompt: null, checkinDayKey: null,
-      scheduledPollJson: Prisma.DbNull, scheduledError: null, scheduledAt: null,
-      fitnessShareId: null,
-    },
-  });
+  const postIds = await eraseAccountPostContent(tx, userId, DELETED_ACCOUNT_ID, now);
   // Deleting an article/comment cascades into other people's comments. Retain empty shells.
   const articles = await tx.article.findMany({ where: { authorId: userId }, select: { id: true } });
   for (const article of articles) {
@@ -59,26 +46,19 @@ export async function eraseAccountRecords(tx: Prisma.TransactionClient, userId: 
   await tx.messageConversation.updateMany({ where: { directKey: { contains: userId } }, data: { directKey: null } });
   const groups = await tx.communityGroup.findMany({ where: { OR: [{ createdByUserId: userId }, { members: { some: { userId, role: 'owner' } } }] }, select: { id: true } });
   for (const group of groups) {
-    // Prefer a verified successor, who keeps channel access; any active member beats an orphaned group.
-    const candidate = (verified: boolean) => tx.communityGroupMember.findFirst({
-      where: { groupId: group.id, userId: { not: userId }, status: 'active', user: { bannedAt: null, isBot: false, ...(verified ? { verifiedStatus: { not: 'none' as const } } : {}) } },
-      orderBy: [{ role: 'asc' }, { createdAt: 'asc' }], select: { userId: true },
-    });
-    const successor = await candidate(true) ?? await candidate(false);
-    await tx.communityGroup.update({ where: { id: group.id }, data: { createdByUserId: successor?.userId ?? DELETED_ACCOUNT_ID } });
-    if (successor) await tx.communityGroupMember.update({ where: { groupId_userId: { groupId: group.id, userId: successor.userId } }, data: { role: 'owner' } });
+    const successorId = await findGroupOwnershipSuccessor(tx, group.id, userId);
+    await tx.communityGroup.update({ where: { id: group.id }, data: { createdByUserId: successorId ?? DELETED_ACCOUNT_ID } });
+    if (successorId) await promoteGroupOwner(tx, group.id, successorId);
   }
   const crews = await tx.crew.findMany({ where: { ownerUserId: userId }, select: { id: true, designatedSuccessorUserId: true, wallConversationId: true } });
   for (const crew of crews) {
-    const members = await tx.crewMember.findMany({ where: { crewId: crew.id, userId: { not: userId }, user: { bannedAt: null } }, orderBy: { createdAt: 'asc' }, select: { userId: true } });
-    const successor = members.find(m => m.userId === crew.designatedSuccessorUserId) ?? members[0];
-    await tx.crew.update({ where: { id: crew.id }, data: { ownerUserId: successor?.userId ?? DELETED_ACCOUNT_ID, designatedSuccessorUserId: null, ...(!successor ? { deletedAt: now } : {}) } });
-    if (successor) await tx.messageParticipant.updateMany({ where: { conversationId: crew.wallConversationId, userId: successor.userId }, data: { role: 'owner' } });
+    const memberIds = await listCrewSuccessorCandidateIds(tx, crew.id, userId);
+    const successorId = memberIds.find(id => id === crew.designatedSuccessorUserId) ?? memberIds[0];
+    await tx.crew.update({ where: { id: crew.id }, data: { ownerUserId: successorId ?? DELETED_ACCOUNT_ID, designatedSuccessorUserId: null, ...(!successorId ? { deletedAt: now } : {}) } });
+    if (successorId) await tx.messageParticipant.updateMany({ where: { conversationId: crew.wallConversationId, userId: successorId }, data: { role: 'owner' } });
   }
-  const groupMemberships = await tx.communityGroupMember.findMany({ where: { userId, status: 'active' }, select: { groupId: true } });
-  for (const membership of groupMemberships) await tx.communityGroup.updateMany({ where: { id: membership.groupId, memberCount: { gt: 0 } }, data: { memberCount: { decrement: 1 } } });
-  const crewMemberships = await tx.crewMember.findMany({ where: { userId }, select: { crewId: true } });
-  for (const membership of crewMemberships) await tx.crew.updateMany({ where: { id: membership.crewId, memberCount: { gt: 0 } }, data: { memberCount: { decrement: 1 } } });
+  for (const groupId of await listActiveGroupIdsForUser(tx, userId)) await tx.communityGroup.updateMany({ where: { id: groupId, memberCount: { gt: 0 } }, data: { memberCount: { decrement: 1 } } });
+  for (const crewId of await listCrewIdsForUser(tx, userId)) await tx.crew.updateMany({ where: { id: crewId, memberCount: { gt: 0 } }, data: { memberCount: { decrement: 1 } } });
   // These are organization publications, not the departing admin's personal content.
   await tx.announcement.updateMany({ where: { createdByAdminId: userId }, data: { createdByAdminId: DELETED_ACCOUNT_ID } });
   await tx.newsletter.updateMany({ where: { createdByAdminId: userId }, data: { createdByAdminId: DELETED_ACCOUNT_ID } });

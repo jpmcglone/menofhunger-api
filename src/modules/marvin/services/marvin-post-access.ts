@@ -1,4 +1,5 @@
 import type { Prisma } from '@prisma/client';
+import { NOT_DELETED } from '../../../common/prisma/where';
 
 /**
  * Posts Marv may use as public profile evidence (context cards).
@@ -24,7 +25,7 @@ export function marvToolGroupAccessOr(rootPostId?: string | null, permittedGroup
   const or: Prisma.PostWhereInput[] = [
     { communityGroupId: null },
   ];
-  if (permittedGroupId) or.push({ communityGroupId: permittedGroupId, communityGroup: { deletedAt: null } });
+  if (permittedGroupId) or.push({ communityGroupId: permittedGroupId, communityGroup: NOT_DELETED });
   if (root) {
     or.push({ id: root }, { rootId: root });
   }

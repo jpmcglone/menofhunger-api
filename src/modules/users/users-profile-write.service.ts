@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { AuthService } from "../auth/auth.service";
+import { AuthService } from "../auth/auth-public-api";
 import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { PublicProfileCacheService } from "./public-profile-cache.service";

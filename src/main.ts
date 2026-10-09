@@ -1,5 +1,5 @@
 import { PartnerModule } from './modules/partner/partner.module';
-import { PartnerOAuthService } from './modules/partner/partner-oauth.service';
+import { PartnerOAuthService } from './modules/partner';
 import './instrument';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
@@ -16,13 +16,13 @@ import { Logger } from '@nestjs/common';
 import { AppModule } from './modules/app/app.module';
 import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
 import { ApiExceptionFilter } from './common/filters/api-exception.filter';
-import { AppConfigService } from './modules/app/app-config.service';
+import { AppConfigService } from './modules/app';
 import { PresenceIoAdapter } from './common/adapters/presence-io.adapter';
 import { RequestCacheService } from './common/cache/request-cache.service';
-import { isOneClickUnsubscribePath } from './modules/newsletters/email-unsubscribe.helpers';
+import { isOneClickUnsubscribePath } from './modules/newsletters';
 import { createMcpMiddleware } from './modules/mcp/mcp-bootstrap';
 import { AuthService } from './modules/auth/auth.service';
-import { RedisService } from './modules/redis/redis.service';
+import { RedisService } from './modules/redis';
 
 function isUnsafeMethod(method: string | undefined) {
   const m = (method ?? '').toUpperCase();
@@ -64,7 +64,7 @@ function isAppleIapNotificationPath(req: Request): boolean {
 }
 
 function installProcessStabilityHandlers(): void {
-  const g = globalThis as any;
+  const g = globalThis as typeof globalThis & { __mohProcessHandlersInstalled?: boolean };
   if (g.__mohProcessHandlersInstalled) return;
   g.__mohProcessHandlersInstalled = true;
 
@@ -209,8 +209,7 @@ async function bootstrap() {
     express.json({
       limit: appConfig.bodyJsonLimit(),
       verify: (req, _res, buf) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (req as any).rawBody = buf;
+        (req as Request).rawBody = buf;
       },
     }),
   );
@@ -252,8 +251,7 @@ async function bootstrap() {
     const incoming = String(req.headers['x-request-id'] ?? '').trim();
     const id = incoming || randomUUID();
     res.setHeader('x-request-id', id);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (req as any).requestId = id;
+    req.requestId = id;
     next();
   });
 
@@ -291,8 +289,7 @@ async function bootstrap() {
     // downstream by billing.service → stripe.webhooks.constructEvent.
     if (req.headers['stripe-signature']) return next();
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const requestId = String((req as any)?.requestId ?? '').trim() || null;
+    const requestId = String(req.requestId ?? '').trim() || null;
     const origin = String(req.headers.origin ?? '').trim();
     const referer = String(req.headers.referer ?? '').trim();
 

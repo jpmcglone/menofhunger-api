@@ -1,5 +1,5 @@
 import { Controller, Delete, Get, NotFoundException, Param, Req, UseGuards } from '@nestjs/common';
-import { AuthGuard, type AuthedRequest } from '../auth/auth.guard';
+import { AuthGuard, type AuthedRequest } from '../auth/auth-public-api';
 import { PartnerConnectionsService } from './partner-connections.service';
 import type { PartnerConnectionDto } from './partner.dto';
 

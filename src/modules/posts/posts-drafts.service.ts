@@ -8,7 +8,7 @@ import { inferTopicsFromText } from '../../common/topics/topic-utils';
 import { MENTION_USER_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { notDeletedWhere } from './posts-query-builders';
 import { resolveMentionUsernames } from './posts-mentions.helpers';
-import { toPage } from '../../common/pagination/page';
+import { toPage, clampLimit } from '../../common/pagination/page';
 
 type DraftMediaInput = {
   source: 'upload' | 'giphy';
@@ -39,7 +39,7 @@ type CleanedDraftMedia = {
 
 /**
  * Draft posts: onlyMe + isDraft rows the composer saves before publishing.
- * Publishing a draft goes through PostsService.publishFromOnlyMe → createPost
+ * Publishing a draft goes through PostsMutationEditsService.publishFromOnlyMe → PostsMutationWriteService.createPost
  * (which owns the side-effect pipeline); this service only manages the draft
  * rows themselves.
  */
@@ -48,7 +48,7 @@ export class PostsDraftsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async listDrafts(params: { userId: string; limit: number; cursor: string | null }) {
-    const limit = Math.max(1, Math.min(50, params.limit || 30));
+    const limit = clampLimit(params.limit, { default: 30, max: 50 });
     const cursor = (params.cursor ?? '').trim() || null;
 
     const cursorWhere = await createdAtIdCursorWhere({

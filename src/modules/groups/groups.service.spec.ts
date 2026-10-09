@@ -1,5 +1,8 @@
+import { GroupsExploreService } from './groups-explore.service';
+import { GroupsSearchService } from './groups-search.service';
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { GroupsService } from './groups.service';
+import { GroupMembersService } from './group-members.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
 import { PostsWriteService } from '../posts-read/posts-write.service';
@@ -47,7 +50,6 @@ function makeService(prismaOverrides: Record<string, any> = {}) {
   };
 
   prisma.$transaction ??= jest.fn(async (fn: any) => fn(prisma));
-  const posts: any = {};
   const appConfig: any = { r2: jest.fn(() => null) };
   const sideEffects: any = { dispatch: jest.fn() };
   const redis: any = {
@@ -58,8 +60,9 @@ function makeService(prismaOverrides: Record<string, any> = {}) {
 
   const marvIdentity: any = { cachedMarvUserId: jest.fn(() => null), getMarvUserId: jest.fn(async () => null) };
   const presenceRealtime: any = { emitGroupMarvChanged: jest.fn(), emitGroupNotificationPreferencesChanged: jest.fn(), emitGroupChannelChanged: jest.fn() };
-  const service = new GroupsService(prisma, new PostsReadService(prisma as never), new PostsWriteService(prisma as never), posts, appConfig, sideEffects, redis, marvIdentity, presenceRealtime);
-  return { service, prisma, presenceRealtime, sideEffects };
+  const service = new GroupsService(prisma, new PostsReadService(prisma as never), new PostsWriteService(prisma as never),  appConfig, sideEffects, redis, marvIdentity, presenceRealtime, new GroupsSearchService(prisma as never), new GroupsExploreService(prisma as never, new PostsReadService(prisma as never)));
+  const members = new GroupMembersService(prisma, appConfig, sideEffects, marvIdentity, presenceRealtime);
+  return { service, members, prisma, presenceRealtime, sideEffects };
 }
 
 describe('GroupsService.join — verification gate', () => {
@@ -384,7 +387,7 @@ describe('GroupsService — owner-or-admin gates on pin / promote / demote', () 
   });
 
   it('promoteModerator lets a site admin who is not a member promote', async () => {
-    const { service, prisma } = makeService();
+    const { members, prisma } = makeService();
     prisma.communityGroup.findFirst.mockResolvedValue({ id: 'g1', deletedAt: null });
     // First call: viewer membership lookup -> null (admin is not in the group).
     // Second call: target member lookup.
@@ -393,7 +396,7 @@ describe('GroupsService — owner-or-admin gates on pin / promote / demote', () 
       .mockResolvedValueOnce({ role: 'member', status: 'active' });
     prisma.communityGroupMember.update = jest.fn();
 
-    const result = await service.promoteModerator({
+    const result = await members.promoteModerator({
       viewerUserId: 'admin',
       isSiteAdmin: true,
       groupId: 'g1',
@@ -408,7 +411,7 @@ describe('GroupsService — owner-or-admin gates on pin / promote / demote', () 
   });
 
   it('promoteModerator rejects non-owner non-admin', async () => {
-    const { service, prisma } = makeService();
+    const { members, prisma } = makeService();
     prisma.communityGroup.findFirst.mockResolvedValue({ id: 'g1', deletedAt: null });
     prisma.communityGroupMember.findUnique.mockResolvedValue({
       role: 'moderator',
@@ -416,7 +419,7 @@ describe('GroupsService — owner-or-admin gates on pin / promote / demote', () 
     });
 
     await expect(
-      service.promoteModerator({
+      members.promoteModerator({
         viewerUserId: 'mod',
         isSiteAdmin: false,
         groupId: 'g1',
@@ -426,7 +429,7 @@ describe('GroupsService — owner-or-admin gates on pin / promote / demote', () 
   });
 
   it('demoteModerator lets a site admin who is not a member demote', async () => {
-    const { service, prisma } = makeService();
+    const { members, prisma } = makeService();
     prisma.communityGroup.findFirst.mockResolvedValue({ id: 'g1', deletedAt: null });
     prisma.communityGroupMember.findUnique
       .mockResolvedValueOnce(null)
@@ -435,7 +438,7 @@ describe('GroupsService — owner-or-admin gates on pin / promote / demote', () 
       .mockResolvedValueOnce({ role: 'moderator', status: 'active' });
     prisma.communityGroupMember.update = jest.fn();
 
-    const result = await service.demoteModerator({
+    const result = await members.demoteModerator({
       viewerUserId: 'admin',
       isSiteAdmin: true,
       groupId: 'g1',
@@ -1203,31 +1206,31 @@ describe('GroupsService.addMarvToGroup', () => {
       $queryRaw: jest.fn(async () => []),
       $transaction: transactionFn,
     };
-    const posts: any = {};
     const appConfig: any = { r2: jest.fn(() => null), marvBot: jest.fn(() => ({ enabled: true })) };
     const sideEffects: any = { dispatch: jest.fn() };
     const redis: any = {};
     const presenceRealtime: any = { emitGroupMarvChanged: jest.fn(), emitGroupNotificationPreferencesChanged: jest.fn(), emitGroupChannelChanged: jest.fn() };
-    const service = new GroupsService(prisma, new PostsReadService(prisma as never), new PostsWriteService(prisma as never), posts, appConfig, sideEffects, redis, marvIdentityLocal, presenceRealtime);
-    return { service, memberCreate, memberUpdate, groupUpdate, inviteUpdateMany, transactionFn, presenceRealtime };
+    const service = new GroupsService(prisma, new PostsReadService(prisma as never), new PostsWriteService(prisma as never),  appConfig, sideEffects, redis, marvIdentityLocal, presenceRealtime, new GroupsSearchService(prisma as never), new GroupsExploreService(prisma as never, new PostsReadService(prisma as never)));
+    const members = new GroupMembersService(prisma, appConfig, sideEffects, marvIdentityLocal, presenceRealtime);
+    return { service, members, memberCreate, memberUpdate, groupUpdate, inviteUpdateMany, transactionFn, presenceRealtime };
   }
 
   it('returns ok when Marv is already an active member (idempotent)', async () => {
-    const { service } = setup({ marvMemberStatus: 'active' });
-    const result = await service.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' });
+    const { members } = setup({ marvMemberStatus: 'active' });
+    const result = await members.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' });
     expect(result).toEqual({ data: { ok: true } });
   });
 
   it('throws ForbiddenException when actor is not owner/mod', async () => {
-    const { service } = setup({ viewerRole: 'member' });
+    const { members } = setup({ viewerRole: 'member' });
     await expect(
-      service.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' }),
+      members.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' }),
     ).rejects.toThrow(ForbiddenException);
   });
 
   it('creates a new active member row when Marv is not a member', async () => {
-    const { service, memberCreate, groupUpdate } = setup({ marvMemberStatus: null });
-    const result = await service.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' });
+    const { members, memberCreate, groupUpdate } = setup({ marvMemberStatus: null });
+    const result = await members.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' });
     expect(result).toEqual({ data: { ok: true } });
     expect(memberCreate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1240,14 +1243,14 @@ describe('GroupsService.addMarvToGroup', () => {
   });
 
   it('emits groups:marv-changed with isMember=true after adding Marv', async () => {
-    const { service, presenceRealtime } = setup({ marvMemberStatus: null });
-    await service.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' });
+    const { members, presenceRealtime } = setup({ marvMemberStatus: null });
+    await members.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' });
     expect(presenceRealtime.emitGroupMarvChanged).toHaveBeenCalledWith('g1', { groupId: 'g1', isMember: true });
   });
 
   it('does NOT emit groups:marv-changed when Marv is already active (early return)', async () => {
-    const { service, presenceRealtime } = setup({ marvMemberStatus: 'active' });
-    await service.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' });
+    const { members, presenceRealtime } = setup({ marvMemberStatus: 'active' });
+    await members.addMarvToGroup({ viewerUserId: 'actor-1', groupId: 'g1' });
     expect(presenceRealtime.emitGroupMarvChanged).not.toHaveBeenCalled();
   });
 });
@@ -1291,35 +1294,34 @@ describe('GroupsService.removeMember — Marv realtime', () => {
       ),
       $queryRaw: jest.fn(async () => []),
     };
-
-    const posts: any = {};
     const appConfig: any = { r2: jest.fn(() => null) };
     const redis: any = {};
-    const service = new GroupsService(prisma, new PostsReadService(prisma as never), new PostsWriteService(prisma as never), posts, appConfig, sideEffects, redis, marvIdentityLocal, presenceRealtime);
-    return { service, presenceRealtime, sideEffects };
+    const service = new GroupsService(prisma, new PostsReadService(prisma as never), new PostsWriteService(prisma as never),  appConfig, sideEffects, redis, marvIdentityLocal, presenceRealtime, new GroupsSearchService(prisma as never), new GroupsExploreService(prisma as never, new PostsReadService(prisma as never)));
+    const members = new GroupMembersService(prisma, appConfig, sideEffects, marvIdentityLocal, presenceRealtime);
+    return { service, members, presenceRealtime, sideEffects };
   }
 
   it('emits groups:marv-changed with isMember=false when Marv is removed', async () => {
-    const { service, presenceRealtime } = setupRemove({ targetUserId: MARV_ID });
-    await service.removeMember({ viewerUserId: 'actor-1', groupId: 'g1', userId: MARV_ID });
+    const { members, presenceRealtime } = setupRemove({ targetUserId: MARV_ID });
+    await members.removeMember({ viewerUserId: 'actor-1', groupId: 'g1', userId: MARV_ID });
     expect(presenceRealtime.emitGroupMarvChanged).toHaveBeenCalledWith('g1', { groupId: 'g1', isMember: false });
   });
 
   it('does NOT emit groups:marv-changed when a regular member is removed', async () => {
-    const { service, presenceRealtime } = setupRemove({ targetUserId: MEMBER_ID });
-    await service.removeMember({ viewerUserId: 'actor-1', groupId: 'g1', userId: MEMBER_ID });
+    const { members, presenceRealtime } = setupRemove({ targetUserId: MEMBER_ID });
+    await members.removeMember({ viewerUserId: 'actor-1', groupId: 'g1', userId: MEMBER_ID });
     expect(presenceRealtime.emitGroupMarvChanged).not.toHaveBeenCalled();
   });
 
   it('does NOT send a removal notification when Marv is removed', async () => {
-    const { service, sideEffects } = setupRemove({ targetUserId: MARV_ID });
-    await service.removeMember({ viewerUserId: 'actor-1', groupId: 'g1', userId: MARV_ID });
+    const { members, sideEffects } = setupRemove({ targetUserId: MARV_ID });
+    await members.removeMember({ viewerUserId: 'actor-1', groupId: 'g1', userId: MARV_ID });
     expect(sideEffects.dispatch).not.toHaveBeenCalled();
   });
 
   it('dispatches the removal notification for a regular member', async () => {
-    const { service, sideEffects } = setupRemove({ targetUserId: MEMBER_ID });
-    await service.removeMember({ viewerUserId: 'actor-1', groupId: 'g1', userId: MEMBER_ID });
+    const { members, sideEffects } = setupRemove({ targetUserId: MEMBER_ID });
+    await members.removeMember({ viewerUserId: 'actor-1', groupId: 'g1', userId: MEMBER_ID });
     expect(sideEffects.dispatch).toHaveBeenCalledWith('group.member.removed', {
       groupId: 'g1',
       userId: MEMBER_ID,

@@ -1,7 +1,14 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import type { Subscription } from 'rxjs';
-import { DomainEventsService } from '../events/domain-events.service';
-import { NotificationsService } from './notifications.service';
+import { NotificationReadStateService } from "./notification-read-state.service";
+import { NotificationPushService } from "./notification-push.service";
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+  Inject,
+} from "@nestjs/common";
+import type { Subscription } from "rxjs";
+import { DomainEventsService } from "../events/domain-events.service";
 
 @Injectable()
 export class MessagePushEventsHandler implements OnModuleInit, OnModuleDestroy {
@@ -11,25 +18,36 @@ export class MessagePushEventsHandler implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly events: DomainEventsService,
-    private readonly notifications: NotificationsService,
+    @Inject(NotificationReadStateService)
+    private readonly notificationReadStateService: Pick<
+      NotificationReadStateService,
+      "markConversationMessageNotificationRead"
+    >,
+    @Inject(NotificationPushService)
+    private readonly notificationPushService: Pick<
+      NotificationPushService,
+      "sendMessagePush"
+    >,
   ) {}
 
   onModuleInit(): void {
     this.readSub = this.events.onConversationRead((event) => {
-      void this.notifications
+      void this.notificationReadStateService
         .markConversationMessageNotificationRead({
           userId: event.userId,
           conversationId: event.conversationId,
         })
         .catch((err) => {
-          this.logger.debug(`[notifications] Failed to clear message notification on read: ${err}`);
+          this.logger.debug(
+            `[notifications] Failed to clear message notification on read: ${err}`,
+          );
         });
     });
 
     this.sub = this.events.onMessagePushRequested((event) => {
       // Chat unread state belongs to the messages badge; this handler only sends
       // external push notifications so chat does not appear in the bell feed.
-      void this.notifications
+      void this.notificationPushService
         .sendMessagePush({
           recipientUserId: event.recipientUserId,
           senderUserId: event.senderUserId,
@@ -51,4 +69,3 @@ export class MessagePushEventsHandler implements OnModuleInit, OnModuleDestroy {
     this.readSub = null;
   }
 }
-

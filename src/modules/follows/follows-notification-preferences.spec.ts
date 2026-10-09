@@ -1,5 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { FollowsService } from './follows.service';
+import { makeFollowsService } from "./follows.testing";
 import { FollowsController } from './follows.controller';
 import { ZodError } from 'zod';
 
@@ -10,7 +10,7 @@ describe('per-user notification preferences', () => {
       follow: { updateMany: jest.fn(async () => ({ count: 1 })) },
     };
     const realtime = { emitFollowsChanged: jest.fn() };
-    const service = new FollowsService(prisma as never, {} as never, {} as never,
+    const service = makeFollowsService(prisma as never, {} as never, {} as never,
       {} as never, {} as never, realtime as never, {} as never, {} as never);
     return { service, prisma, realtime };
   }

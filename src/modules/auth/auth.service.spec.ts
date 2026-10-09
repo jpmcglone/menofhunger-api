@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { RedisKeys } from '../redis/redis-keys';
-import { AuthService } from './auth.service';
+import { makeAuthService } from './auth.testing';
 import {
   AUTH_COOKIE_NAME,
   IMPERSONATION_SESSION_TTL_MINUTES,
@@ -132,7 +132,7 @@ function makeService(overrides?: { prisma?: any }) {
   const presenceRealtime = { emitReferralRecruitUpdated: jest.fn() } as any;
 
   const sideEffects = { dispatch: jest.fn() } as any;
-  const svc = new AuthService(prisma, appConfig, cacheInvalidation, redis, otpProvider, posthog, slack, requestCache, presence, presenceRealtime, sideEffects, new PostsReadService(prisma as never));
+  const svc = makeAuthService(prisma, appConfig, cacheInvalidation, redis, otpProvider, posthog, slack, requestCache, presence, presenceRealtime, sideEffects, new PostsReadService(prisma as never));
   return { svc, prisma, token, tokenHash, presence, posthog, sideEffects, redis, cacheInvalidation, requestCache };
 }
 
@@ -367,7 +367,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
     const presenceRealtime: any = { emitReferralRecruitUpdated: jest.fn() };
 
-    const svc = new AuthService(prisma,
+    const svc = makeAuthService(prisma,
       appConfig,
       cacheInvalidation,
       redis,
@@ -427,7 +427,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
     const presenceRealtime: any = { emitReferralRecruitUpdated: jest.fn() };
 
-    const svc = new AuthService(prisma,
+    const svc = makeAuthService(prisma,
       appConfig,
       cacheInvalidation,
       redis,
@@ -506,7 +506,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
     const presenceRealtime: any = { emitReferralRecruitUpdated: jest.fn() };
 
-    const svc = new AuthService(prisma,
+    const svc = makeAuthService(prisma,
       appConfig,
       cacheInvalidation,
       redis,
@@ -586,7 +586,7 @@ describe('AuthService.meFromSessionToken — request-scoped memoization', () => 
     const presence: any = { markSeenFromHttp: jest.fn(), persistLastSeenAt: jest.fn(), persistLastOnlineAt: jest.fn() };
     const presenceRealtime: any = { emitReferralRecruitUpdated: jest.fn() };
 
-    const svc = new AuthService(prisma,
+    const svc = makeAuthService(prisma,
       appConfig,
       cacheInvalidation,
       redis,
@@ -1147,6 +1147,45 @@ describe('AuthService.verifyPhoneCode — App Review bypass', () => {
 // revokeSessionToken + revokeAllSessionsForUser — soft-revoke
 // ---------------------------------------------------------------------------
 
+describe('AuthService.meFromSessionToken — banned accounts and cache fast path', () => {
+  it('revokes the token and rejects a banned account instead of resolving the session', async () => {
+    const session = makeSession({ expiresAt: new Date(Date.now() + 20 * 24 * 60 * 60_000), user: { ...makeMinimalUser(), bannedAt: new Date() } });
+    const token = randomSessionToken();
+    session.tokenHash = hmacSha256Hex(HMAC_SECRET, token);
+    const updateMany = jest.fn(async () => ({ count: 1 }));
+    const { svc } = makeService({
+      prisma: {
+        session: { findFirst: jest.fn(async () => session), update: jest.fn(), updateMany },
+        post: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+        user: { update: jest.fn() },
+      },
+    });
+
+    await expect(svc.meFromSessionToken(token)).rejects.toMatchObject({ response: { error: 'account_banned' } });
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { tokenHash: hmacSha256Hex(HMAC_SECRET, token), revokedAt: null },
+      data: expect.objectContaining({ revokedAt: expect.any(Date) }),
+    });
+  });
+
+  it('serves a Redis-cached session without touching the database and never reports it as renewed', async () => {
+    const { svc, prisma, redis, token } = makeService();
+    const user = { id: 'user-1', verifiedStatus: 'none', premium: false, premiumPlus: false, siteAdmin: false, bannedAt: null };
+    redis.getJson.mockResolvedValueOnce({
+      user,
+      sessionId: 'session-1',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      impersonatedByUserId: null,
+      operatedByUserId: 'operator-1',
+    });
+
+    const result = await svc.meFromSessionToken(token);
+
+    expect(prisma.session.findFirst).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ sessionId: 'session-1', renewed: false, impersonatedByUserId: null, operatedByUserId: 'operator-1' });
+  });
+});
+
 describe('revokeSessionToken', () => {
   it('soft-revokes the session by setting revokedAt instead of deleting', async () => {
     const token = randomSessionToken();
@@ -1171,7 +1210,7 @@ describe('revokeSessionToken', () => {
         phoneOtp: { findFirst: jest.fn(async () => null) },
       } as any,
     });
-    (svc as any).cacheInvalidation = cacheInvalidation;
+    (svc as any).sessions.cacheInvalidation = cacheInvalidation;
 
     await svc.revokeSessionToken(token);
 
@@ -1229,7 +1268,7 @@ describe('revokeAllSessionsForUser', () => {
         phoneOtp: { findFirst: jest.fn(async () => null) },
       } as any,
     });
-    (svc as any).cacheInvalidation = cacheInvalidation;
+    (svc as any).sessions.cacheInvalidation = cacheInvalidation;
 
     await svc.revokeAllSessionsForUser('user-1');
 

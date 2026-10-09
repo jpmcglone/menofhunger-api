@@ -6,10 +6,7 @@ import { AppConfigService } from "../app/app-config.service";
 import { RedisService } from "../redis/redis.service";
 import { Injectable, OnModuleInit } from "@nestjs/common";
 import { SideEffectsRegistry } from "../side-effects/side-effects.registry";
-import {
-  OutboundService,
-  OutboundAttentionError,
-} from "../outbound/outbound.service";
+import { OutboundService, OutboundAttentionError } from "../outbound/outbound.service";
 import { XCrosspostService } from "./x-crosspost.service";
 import { XConnectionService } from "./x-connection.service";
 import { XApiClient } from "./x-api.client";

@@ -1,4 +1,4 @@
-import { PostsMutationService } from './posts-mutation.service';
+import { makePostsMutationServices } from './posts-mutation.testing';
 
 function fixture() {
   const original = {
@@ -21,14 +21,14 @@ function fixture() {
   };
   const prisma = { post: { findUnique: jest.fn(async () => original) }, $transaction: (fn: any) => fn(tx) };
   const effects = { dispatch: jest.fn() };
-  const service = new PostsMutationService(
+  const { support, edits: service } = makePostsMutationServices(
     prisma as any, { emitPostsLiveUpdated: jest.fn() } as any,
     { bumpForPostWrite: jest.fn(async () => undefined) } as any,
     { marvBot: () => ({ username: 'marv' }), frontendBaseUrl: () => 'https://menofhunger.com' } as any,
     {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
     effects as any, { enqueueIfNeeded: jest.fn(async () => undefined) } as any,
   );
-  jest.spyOn((service as any).support, 'resolveMentionUsernames').mockImplementation(async (names: any) => names);
+  jest.spyOn(support, 'resolveMentionUsernames').mockImplementation(async (names: any) => names);
   return { service, tx, effects };
 }
 

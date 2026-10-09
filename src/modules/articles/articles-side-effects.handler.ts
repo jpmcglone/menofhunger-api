@@ -1,15 +1,17 @@
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
-import { NotificationsService } from '../notifications/notifications.service';
-import { PrismaService } from '../prisma/prisma.service';
-import { FANOUT_CONCURRENCY, runInBatches } from '../side-effects/batch';
-import { chunk } from '../../common/arrays/chunk';
+import { NotificationCreatorService } from "../notifications";
+import { NotificationEngagementWriterService } from "../notifications/notification-engagement-writer.service";
+import { Injectable, Logger, type OnModuleInit, Inject } from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { FANOUT_CONCURRENCY, runInBatches } from "../side-effects/batch";
+import { chunk } from "../../common/arrays/chunk";
 import {
   FANOUT_CHUNK_SIZE,
   FANOUT_CHUNK_THRESHOLD,
   type SideEffectPayloads,
-} from '../side-effects/side-effects.constants';
-import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
-import { SideEffectsService } from '../side-effects/side-effects.service';
+} from "../side-effects/side-effects.constants";
+import { SideEffectsRegistry } from "../side-effects/side-effects.registry";
+import { SideEffectsService } from "../side-effects/side-effects.service";
+import { NOT_DELETED } from "../../common/prisma/where";
 
 /**
  * Notification work that follows an article mutation, run off the request path.
@@ -28,26 +30,47 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly notifications: NotificationsService,
+    @Inject(NotificationCreatorService)
+    private readonly notificationCreatorService: Pick<
+      NotificationCreatorService,
+      "create"
+    >,
+    @Inject(NotificationEngagementWriterService)
+    private readonly notificationEngagementWriterService: Pick<
+      NotificationEngagementWriterService,
+      "deleteArticleBoostNotification"
+    >,
     private readonly registry: SideEffectsRegistry,
     private readonly sideEffects: SideEffectsService,
   ) {}
 
   onModuleInit(): void {
-    this.registry.register('article.published', (payload) => this.onArticlePublished(payload));
-    this.registry.register('article.comment.created', (payload) => this.onCommentCreated(payload));
-    this.registry.register('article.boosted', (payload) => this.onBoosted(payload));
-    this.registry.register('article.unboosted', (payload) => this.onUnboosted(payload));
-    this.registry.register('article.reaction.added', (payload) => this.onReactionAdded(payload));
+    this.registry.register("article.published", (payload) =>
+      this.onArticlePublished(payload),
+    );
+    this.registry.register("article.comment.created", (payload) =>
+      this.onCommentCreated(payload),
+    );
+    this.registry.register("article.boosted", (payload) =>
+      this.onBoosted(payload),
+    );
+    this.registry.register("article.unboosted", (payload) =>
+      this.onUnboosted(payload),
+    );
+    this.registry.register("article.reaction.added", (payload) =>
+      this.onReactionAdded(payload),
+    );
   }
 
   /** `followed_article` fan-out on first publish, filtered by the article's visibility tier. */
-  private async onArticlePublished(payload: SideEffectPayloads['article.published']): Promise<void> {
+  private async onArticlePublished(
+    payload: SideEffectPayloads["article.published"],
+  ): Promise<void> {
     const { articleId, authorUserId } = payload;
     if (!articleId || !authorUserId) return;
 
     const article = await this.prisma.article.findFirst({
-      where: { id: articleId, deletedAt: null },
+      where: { id: articleId, ...NOT_DELETED },
       select: { title: true, visibility: true, publishedAt: true },
     });
     // Unpublished or deleted since the dispatch — nothing to announce.
@@ -59,7 +82,9 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
         select: {
           followerId: true,
           notificationPreference: true,
-          follower: { select: { verifiedStatus: true, premium: true, premiumPlus: true } },
+          follower: {
+            select: { verifiedStatus: true, premium: true, premiumPlus: true },
+          },
         },
       }),
       this.prisma.userPageOperator.findMany({
@@ -69,20 +94,24 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
     ]);
     const operatorIds = new Set(operators.map((row) => row.operatorUserId));
 
-    const title = article.title ?? '';
+    const title = article.title ?? "";
     const titleSnippet = title.length > 80 ? `${title.slice(0, 79)}…` : title;
 
     const recipientUserIds: string[] = [];
     for (const f of follows) {
       const recipientUserId = f.followerId;
       if (!recipientUserId || recipientUserId === authorUserId) continue;
-      if (operatorIds.has(recipientUserId) || f.notificationPreference === 'off') continue;
+      if (
+        operatorIds.has(recipientUserId) ||
+        f.notificationPreference === "off"
+      )
+        continue;
 
-      if (article.visibility === 'verifiedOnly') {
-        const vs = f.follower?.verifiedStatus ?? 'none';
-        if (!vs || vs === 'none') continue;
+      if (article.visibility === "verifiedOnly") {
+        const vs = f.follower?.verifiedStatus ?? "none";
+        if (!vs || vs === "none") continue;
       }
-      if (article.visibility === 'premiumOnly') {
+      if (article.visibility === "premiumOnly") {
         if (!f.follower?.premium && !f.follower?.premiumPlus) continue;
       }
       recipientUserIds.push(recipientUserId);
@@ -90,8 +119,8 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
 
     if (recipientUserIds.length > FANOUT_CHUNK_THRESHOLD) {
       for (const slice of chunk(recipientUserIds, FANOUT_CHUNK_SIZE)) {
-        this.sideEffects.dispatch('notification.fanout.chunk', {
-          kind: 'followed_article',
+        this.sideEffects.dispatch("notification.fanout.chunk", {
+          kind: "followed_article",
           recipientUserIds: slice,
           actorUserId: authorUserId,
           actorPostId: null,
@@ -106,22 +135,26 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
       return;
     }
 
-    await runInBatches(recipientUserIds, FANOUT_CONCURRENCY, async (recipientUserId) => {
-      await this.notifications
-        .create({
-          recipientUserId,
-          kind: 'followed_article',
-          actorUserId: authorUserId,
-          subjectArticleId: articleId,
-          subjectUserId: authorUserId,
-          body: titleSnippet || undefined,
-        })
-        .catch((err) => {
-          this.logger.warn(
-            `[notifications] Failed to create followed-article notification: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        });
-    });
+    await runInBatches(
+      recipientUserIds,
+      FANOUT_CONCURRENCY,
+      async (recipientUserId) => {
+        await this.notificationCreatorService
+          .create({
+            recipientUserId,
+            kind: "followed_article",
+            actorUserId: authorUserId,
+            subjectArticleId: articleId,
+            subjectUserId: authorUserId,
+            body: titleSnippet || undefined,
+          })
+          .catch((err) => {
+            this.logger.warn(
+              `[notifications] Failed to create followed-article notification: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+      },
+    );
   }
 
   /**
@@ -130,12 +163,20 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
    * Mention usernames are carried in the payload because they were already parsed on the
    * request path; the resolution to user ids happens here.
    */
-  private async onCommentCreated(payload: SideEffectPayloads['article.comment.created']): Promise<void> {
-    const { articleId, commentId, actorUserId, parentCommentId, mentionUsernames } = payload;
+  private async onCommentCreated(
+    payload: SideEffectPayloads["article.comment.created"],
+  ): Promise<void> {
+    const {
+      articleId,
+      commentId,
+      actorUserId,
+      parentCommentId,
+      mentionUsernames,
+    } = payload;
     if (!articleId || !commentId || !actorUserId) return;
 
     const comment = await this.prisma.articleComment.findFirst({
-      where: { id: commentId, deletedAt: null },
+      where: { id: commentId, ...NOT_DELETED },
       select: { body: true },
     });
     if (!comment) return;
@@ -150,24 +191,33 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
       : [];
     const mentionUserIds = new Set<string>(mentionUsers.map((u) => u.id));
 
-    const art = await this.prisma.article.findUnique({ where: { id: articleId }, select: { authorId: true } });
+    const art = await this.prisma.article.findUnique({
+      where: { id: articleId },
+      select: { authorId: true },
+    });
     if (!art) return;
 
     const recipientId = parentCommentId
-      ? ((await this.prisma.articleComment.findUnique({ where: { id: parentCommentId }, select: { authorId: true } }))
-          ?.authorId ?? art.authorId)
+      ? ((
+          await this.prisma.articleComment.findUnique({
+            where: { id: parentCommentId },
+            select: { authorId: true },
+          })
+        )?.authorId ?? art.authorId)
       : art.authorId;
 
     // Keep parity with post reply behavior: explicit @mentions take priority over reply notifications.
     if (recipientId !== actorUserId && !mentionUserIds.has(recipientId)) {
-      await this.notifications
+      await this.notificationCreatorService
         .create({
           recipientUserId: recipientId,
-          kind: 'comment',
+          kind: "comment",
           actorUserId,
           subjectArticleId: articleId,
           subjectArticleCommentId: commentId,
-          title: parentCommentId ? 'replied to your reply' : 'replied to your article',
+          title: parentCommentId
+            ? "replied to your reply"
+            : "replied to your article",
           body: bodySnippet,
         })
         .catch((err) => {
@@ -177,27 +227,35 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
         });
     }
 
-    const mentionRecipients = [...mentionUserIds].filter((id) => id !== actorUserId);
-    await runInBatches(mentionRecipients, FANOUT_CONCURRENCY, async (mentionedUserId) => {
-      await this.notifications
-        .create({
-          recipientUserId: mentionedUserId,
-          kind: 'mention',
-          actorUserId,
-          subjectArticleId: articleId,
-          subjectArticleCommentId: commentId,
-          title: 'mentioned you in an article reply',
-          body: bodySnippet,
-        })
-        .catch((err) => {
-          this.logger.warn(
-            `[notifications] Failed to create article mention notification: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        });
-    });
+    const mentionRecipients = [...mentionUserIds].filter(
+      (id) => id !== actorUserId,
+    );
+    await runInBatches(
+      mentionRecipients,
+      FANOUT_CONCURRENCY,
+      async (mentionedUserId) => {
+        await this.notificationCreatorService
+          .create({
+            recipientUserId: mentionedUserId,
+            kind: "mention",
+            actorUserId,
+            subjectArticleId: articleId,
+            subjectArticleCommentId: commentId,
+            title: "mentioned you in an article reply",
+            body: bodySnippet,
+          })
+          .catch((err) => {
+            this.logger.warn(
+              `[notifications] Failed to create article mention notification: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+      },
+    );
   }
 
-  private async onBoosted(payload: SideEffectPayloads['article.boosted']): Promise<void> {
+  private async onBoosted(
+    payload: SideEffectPayloads["article.boosted"],
+  ): Promise<void> {
     const { articleId, actorUserId } = payload;
     if (!articleId || !actorUserId) return;
 
@@ -207,17 +265,19 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
     });
     if (!article || article.authorId === actorUserId) return;
 
-    await this.notifications.create({
+    await this.notificationCreatorService.create({
       recipientUserId: article.authorId,
-      kind: 'boost',
+      kind: "boost",
       actorUserId,
       subjectArticleId: articleId,
-      title: 'boosted your article',
+      title: "boosted your article",
       body: article.title?.trim() ? article.title.trim().slice(0, 150) : null,
     });
   }
 
-  private async onUnboosted(payload: SideEffectPayloads['article.unboosted']): Promise<void> {
+  private async onUnboosted(
+    payload: SideEffectPayloads["article.unboosted"],
+  ): Promise<void> {
     const { articleId, actorUserId } = payload;
     if (!articleId || !actorUserId) return;
 
@@ -227,10 +287,16 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
     });
     if (!article || article.authorId === actorUserId) return;
 
-    await this.notifications.deleteArticleBoostNotification(article.authorId, actorUserId, articleId);
+    await this.notificationEngagementWriterService.deleteArticleBoostNotification(
+      article.authorId,
+      actorUserId,
+      articleId,
+    );
   }
 
-  private async onReactionAdded(payload: SideEffectPayloads['article.reaction.added']): Promise<void> {
+  private async onReactionAdded(
+    payload: SideEffectPayloads["article.reaction.added"],
+  ): Promise<void> {
     const { articleId, actorUserId, emoji } = payload;
     if (!articleId || !actorUserId) return;
 
@@ -240,12 +306,12 @@ export class ArticlesSideEffectsHandler implements OnModuleInit {
     });
     if (!article || article.authorId === actorUserId) return;
 
-    await this.notifications.create({
+    await this.notificationCreatorService.create({
       recipientUserId: article.authorId,
-      kind: 'generic',
+      kind: "generic",
       actorUserId,
       subjectArticleId: articleId,
-      title: 'reacted to your article',
+      title: "reacted to your article",
       body: emoji,
     });
   }

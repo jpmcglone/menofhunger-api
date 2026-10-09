@@ -33,9 +33,15 @@ import { UsersModule } from "../users/users.module";
 import { AdminGuard } from "./admin.guard";
 import { AdminUsersController } from "./admin-users.controller";
 import { AdminUsersService } from "./admin-users.service";
+import { AdminUserActivityService } from "./admin-user-activity.service";
+import { AdminUserOrgsService } from "./admin-user-orgs.service";
 import { AdminSiteConfigController } from "./admin-site-config.controller";
 import { AdminImageReviewController } from "./admin-image-review.controller";
 import { AdminImageReviewService } from "./admin-image-review.service";
+import { AdminImageReviewStorageService } from "./admin-image-review-storage.service";
+import { AdminImageReferencesService } from "./admin-image-review-references.service";
+import { AdminImageReviewSyncService } from "./admin-image-review-sync.service";
+import { AdminImageReviewActionsService } from "./admin-image-review-actions.service";
 import { AdminSearchController } from "./admin-search.controller";
 import { AdminHashtagsService } from "./admin-hashtags.service";
 import { FeedbackModule } from "../feedback/feedback.module";
@@ -151,6 +157,8 @@ import { AdminOperationsService } from "./admin-operations.service";
     DelegationReadsService,
     AdminOperationsService,
     AdminUsersService,
+    AdminUserActivityService,
+    AdminUserOrgsService,
     AdminAnalyticsService,
     DelegationService,
     DelegationPolicyService,
@@ -168,6 +176,10 @@ import { AdminOperationsService } from "./admin-operations.service";
     AdminServiceStatusService,
     AdminAssistantService,
     AdminGuard,
+    AdminImageReviewStorageService,
+    AdminImageReferencesService,
+    AdminImageReviewSyncService,
+    AdminImageReviewActionsService,
     AdminImageReviewService,
     AdminHashtagsService,
     AdminDailyDigestCron,
@@ -177,6 +189,6 @@ import { AdminOperationsService } from "./admin-operations.service";
     AdminIntroBriefService,
     AdminIntroBriefCron,
   ],
-  exports: [DelegationRunnerService, AdminDailyDigestCron, AdminIntroBriefCron],
+  exports: [DelegationRunnerService, AdminDailyDigestCron, AdminIntroBriefCron, AdminImageReviewService],
 })
 export class AdminModule {}

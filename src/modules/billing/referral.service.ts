@@ -1,17 +1,13 @@
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
+import { isUniqueViolation } from '../../common/prisma/errors';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { EntitlementService, isPayingSubscriber } from './entitlement.service';
 import { FollowsService } from '../follows/follows.service';
 import { AffiliateService } from './affiliate.service';
 import { toUserListDto } from '../../common/dto/user.dto';
-import { USER_LIST_SELECT, USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
+import { USER_BRIEF_SELECT, USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import type { ReferralMeDto, RecruitDto } from '../../common/dto/referral.dto';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { SideEffectsService } from '../side-effects/side-effects.service';
@@ -165,7 +161,7 @@ export class ReferralService {
     const normalized = code.trim().toUpperCase();
     if (!REFERRAL_CODE_REGEX.test(normalized)) throw new NotFoundException('Invite not found.');
     const inviter = await this.prisma.user.findFirst({
-      where: { referralCode: normalized, bannedAt: null },
+      where: { referralCode: normalized, ...NOT_BANNED_USER_WHERE },
       select: {
         username: true,
         name: true,
@@ -203,7 +199,7 @@ export class ReferralService {
 
     const recruiter = await this.prisma.user.findFirst({
       where: { referralCode: normalized },
-      select: { id: true, username: true, name: true, premium: true, verifiedStatus: true },
+      select: { ...USER_BRIEF_SELECT, premium: true, verifiedStatus: true },
     });
     if (!recruiter) throw new BadRequestException('Invalid referral code.');
     if (!recruiter.premium && recruiter.verifiedStatus === 'none') {
@@ -337,7 +333,7 @@ export class ReferralService {
         }
         return candidate;
       } catch (err) {
-        if ((err as { code?: string })?.code === 'P2002') continue;
+        if (isUniqueViolation(err)) continue;
         throw err;
       }
     }

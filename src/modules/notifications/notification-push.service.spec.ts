@@ -3,7 +3,8 @@
  *   1. Delivery independent of socket presence
  *   2. Per-subject coalescing keyed by resolved tag, not just kind
  */
-import { NotificationPushService } from './notification-push.service';
+import { makeNotificationPushService } from './notification-push.testing';
+import { buildPushCopy } from './notification-push-copy';
 import { NotificationPreferencesService } from './notification-preferences.service';
 import { ApnsPushService } from './apns-push.service';
 import type { NotificationKind } from '@prisma/client';
@@ -148,7 +149,7 @@ function makeService(opts?: {
   const { svc: apnsSvc, apnsSendToUser } = opts?.apns ?? makeApns();
   const presence = opts?.presence ?? makePresence();
   const cache = opts?.cache ?? makeCache();
-  const svc = new NotificationPushService(prisma, appConfig, presence, prefs, apnsSvc, cache as any, new PostsReadService(prisma as never));
+  const svc = makeNotificationPushService(prisma, appConfig, presence, prefs, apnsSvc, cache as any, new PostsReadService(prisma as never));
   return { svc, prisma, appConfig, prefs, apnsSvc, apnsSendToUser, presence, cache };
 }
 
@@ -207,8 +208,7 @@ const notificationKinds = [
 
 describe('NotificationPushService — human-readable copy', () => {
   it.each(notificationKinds)('%s never exposes technical or generic fallback copy', (kind) => {
-    const { svc } = makeService();
-    const copy = svc.buildPushCopy({
+    const copy = buildPushCopy({
       kind,
       actor: {
         id: 'actor-1',
@@ -263,8 +263,7 @@ describe('NotificationPushService — human-readable copy', () => {
       title: 'Alice nudged you',
     },
   ])('$kind title names the action; body can carry a preview', ({ kind, fallbackTitle, body, title }) => {
-    const { svc } = makeService();
-    const copy = svc.buildPushCopy({
+    const copy = buildPushCopy({
       kind,
       actor: {
         id: 'actor-1',
@@ -964,8 +963,7 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
   });
 
   it('does not echo system titles as subtitle (avoids Good morning / Good morning)', () => {
-    const { svc } = makeService();
-    const copy = svc.buildPushCopy({
+    const copy = buildPushCopy({
       kind: 'word_of_the_day',
       actor: null,
       fallbackTitle: 'Good morning!',

@@ -2,7 +2,7 @@ import { SpacesPresenceService } from './spaces-presence.service';
 
 describe('SpacesPresenceService', () => {
   function build() {
-    return new SpacesPresenceService(null);
+    return new SpacesPresenceService();
   }
 
   it('join then leave by socket clears occupancy', () => {

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
-import { AuthService } from '../auth/auth.service';
+import { AuthService } from '../auth/auth-public-api';
 import { AppConfigService } from '../app/app-config.service';
 import { RedisService } from '../redis/redis.service';
 import type { McpConnectionItemDto, McpUsageDto } from '../../common/dto/mcp.dto';

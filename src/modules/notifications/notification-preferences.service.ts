@@ -85,8 +85,8 @@ export class NotificationPreferencesService {
 
     const updated = await this.prisma.notificationPreferences.upsert({
       where: { userId },
-      create: { userId, ...(effectivePatch as any) },
-      update: effectivePatch as any,
+      create: { userId, ...effectivePatch },
+      update: effectivePatch,
     });
     void this.cache.setJson(RedisKeys.pushPrefs(userId), updated, { ttlSeconds: CacheTtl.pushPrefsSeconds }).catch(() => undefined);
     return this.toDto(updated);

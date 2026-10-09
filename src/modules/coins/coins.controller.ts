@@ -1,14 +1,9 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
-import { AuthGuard } from '../auth/auth.guard';
+import { AuthGuard } from '../auth/auth-public-api';
 import { PersonAccountGuard } from '../pages/person-account.guard';
 import { CurrentUserId } from '../users/users.decorator';
 import { CoinsService, transferCoinsSchema } from './coins.service';
-
-const listTransfersQuerySchema = z.object({
-  cursor: z.string().optional(),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-});
+import { listTransfersQuerySchema } from './coins.schemas';
 
 @Controller('coins')
 @UseGuards(AuthGuard, PersonAccountGuard)

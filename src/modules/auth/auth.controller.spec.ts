@@ -165,7 +165,6 @@ describe('AuthController browser handoff', () => {
     const controller = new AuthController(
       {} as any,
       {} as any,
-      {} as any,
       browserHandoff as any,
       {} as any,
       {} as any,

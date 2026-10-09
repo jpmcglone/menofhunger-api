@@ -9,8 +9,13 @@ export class PartnerRateService {
   async check(buckets: Array<{ key: string; limit: number }>, res: Pick<Response, 'setHeader'>) {
     const now = Math.floor(Date.now() / 1000);
     const window = Math.floor(now / 60);
-    const counts = await Promise.all(buckets.map(async (b) => ({ ...b, count: Number(await this.redis.raw().eval(INCREMENT, 1, `partner:rate:${window}:${b.key}`)) })));
-    const limiting = counts.reduce((a, b) => a.limit - a.count <= b.limit - b.count ? a : b);
+    const counts = await Promise.all(
+      buckets.map(async (b) => ({
+        ...b,
+        count: Number(await this.redis.raw().eval(INCREMENT, 1, `partner:rate:${window}:${b.key}`)),
+      })),
+    );
+    const limiting = counts.reduce((a, b) => (a.limit - a.count <= b.limit - b.count ? a : b));
     const reset = (window + 1) * 60;
     res.setHeader('X-RateLimit-Limit', limiting.limit);
     res.setHeader('X-RateLimit-Remaining', Math.max(0, limiting.limit - limiting.count));

@@ -1,10 +1,12 @@
+import { MessagesBotDeliveryService } from "../../messages";
+import { isUniqueViolation } from '../../../common/prisma/errors';
+import { USER_BRIEF_SELECT } from '../../../common/prisma-selects/user.select';
 import { marvinFailureReason } from '../services/marvin-failure';
-import { Injectable, Logger } from '@nestjs/common';
-import { Prisma, type MarvinMode } from '@prisma/client';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { type MarvinMode } from '@prisma/client';
 import type { ResolvedMarvinMode } from '../services/marvin-routing.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppConfigService } from '../../app/app-config.service';
-import { MessagesService } from '../../messages/messages.service';
 import { MarvinAIService, MarvinAINotConfiguredError } from '../services/marvin-ai.service';
 import { MarvinBotIdentityService } from '../services/marvin-bot-identity.service';
 import { MarvinCannedRepliesService } from '../services/marvin-canned-replies.service';
@@ -41,7 +43,7 @@ export type MarvinPrivateReplyJobPayload = {
  * BullMQ "marvin.reply.private" worker — same shape as the public processor, but:
  *
  *  - source = `private_session`
- *  - reply is sent via `MessagesService.sendBotDirectMessage` (existing direct conversation)
+ *  - reply is sent via `MessagesBotDeliveryService.sendBotDirectMessage` (existing direct conversation)
  *  - rebuilds recent private history from live messages, with scoped recall for older context
  *  - rate limits use the private knobs in `marvLimits()`
  *  - non-premium → out-of-credits-style canned DM (same author flow, different copy)
@@ -56,7 +58,7 @@ export class MarvinPrivateReplyProcessor {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly identity: MarvinBotIdentityService,
-    private readonly messages: MessagesService,
+    @Inject(MessagesBotDeliveryService) private readonly messages: Pick< MessagesBotDeliveryService, "sendBotDirectMessage" >,
     private readonly credits: MarvinCreditService,
     private readonly routing: MarvinRoutingService,
     private readonly promptBuilder: MarvinPromptBuilderService,
@@ -202,7 +204,7 @@ export class MarvinPrivateReplyProcessor {
         body: true,
         senderId: true,
         sender: {
-          select: { id: true, username: true, name: true, premium: true, premiumPlus: true, bannedAt: true },
+          select: { ...USER_BRIEF_SELECT, premium: true, premiumPlus: true, bannedAt: true },
         },
         media: mediaSelect,
         replyTo: {
@@ -854,7 +856,7 @@ export class MarvinPrivateReplyProcessor {
       await this.prisma.marvinIdempotencyKey.create({ data: { key } });
       return true;
     } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return false;
+      if (isUniqueViolation(err)) return false;
       throw err;
     }
   }

@@ -1,13 +1,5 @@
 import { AccountDeletionService } from './account-deletion.service';
 import { eraseAccountRecords } from './account-erasure';
-import { BillingService } from '../billing/billing.service';
-import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { PublicProfileCacheService } from '../users/public-profile-cache.service';
-import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
-import { AdminImageReviewService } from '../admin/admin-image-review.service';
-import { RedisService } from '../redis/redis.service';
-import { CacheInvalidationService } from '../redis/cache-invalidation.service';
-import { EmailService } from '../email/email.service';
 
 jest.mock('./account-erasure', () => ({ eraseAccountRecords: jest.fn(async () => undefined) }));
 function harness() {
@@ -26,8 +18,7 @@ function harness() {
   const cache = { invalidateForUser: jest.fn(async () => undefined), bumpFeedGlobal: jest.fn(), bumpSearchGlobal: jest.fn() };
   const presence = { disconnectUserSockets: jest.fn(), emitMeUpdatedFromUser: jest.fn() };
   const email = { sendText: jest.fn(async () => ({ sent: true })) };
-  const services = new Map<any, any>([[BillingService, billing], [AdminImageReviewService, media], [RedisService, redis], [CacheInvalidationService, cache], [PublicProfileCacheService, cache], [PresenceRealtimeService, presence], [UsersMeRealtimeService, presence], [EmailService, email]]);
-  const service = new AccountDeletionService(prisma, auth, { get: (token: unknown) => services.get(token) } as any);
+  const service = new AccountDeletionService(prisma, auth, presence as any, presence as any, cache as any, billing as any, media as any, email as any, redis as any, cache as any);
   return { service, prisma, auth, billing, media, email, redis, receipt: () => receipt, setReceipt: (data: any) => { receipt = { ...receipt, ...data }; } };
 }
 afterEach(() => jest.clearAllMocks());

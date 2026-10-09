@@ -2,10 +2,7 @@ import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { LandingService } from "../landing/landing.service";
 import { assembleAdminAnalytics } from "./admin-analytics.assemble";
-import type {
-  AnalyticsGranularity,
-  AnalyticsRange,
-} from "../../common/dto/admin-analytics.dto";
+import type { AnalyticsGranularity, AnalyticsRange } from "../../common/dto/admin-analytics.dto";
 
 function resolveSince(range: string, now: Date): Date | null {
   const ms = (days: number) => new Date(now.getTime() - days * 86400000);

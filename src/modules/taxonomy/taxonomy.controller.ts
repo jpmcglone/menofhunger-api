@@ -1,19 +1,10 @@
 import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
-import { AuthGuard } from '../auth/auth.guard';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
+import { AuthGuard } from '../auth/auth-public-api';
 import { CurrentUserId } from '../users/users.decorator';
 import { AdminGuard } from '../admin/admin.guard';
 import { TaxonomyService } from './taxonomy.service';
-
-const searchSchema = z.object({
-  q: z.string().trim().max(120).optional(),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-});
-
-const preferenceSchema = z.object({
-  termIds: z.array(z.string().trim().min(1)).max(30),
-});
+import { searchSchema, preferenceSchema } from './taxonomy.schemas';
 
 @UseGuards(OptionalAuthGuard)
 @Controller('taxonomy')

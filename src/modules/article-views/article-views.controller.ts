@@ -1,31 +1,12 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Param,
-  Post,
-  Query,
-  Req,
-  UnauthorizedException,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { z } from 'zod';
 import type { Request } from 'express';
 import { getSessionCookie } from '../../common/session-cookie';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
 import { OptionalCurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { ArticleViewsService } from './article-views.service';
-
-const markViewedBatchSchema = z.object({
-  articleIds: z.array(z.string().trim().min(1)).min(1).max(50),
-  require_auth: z.boolean().optional(),
-  anon_id: z.string().trim().min(12).max(128).optional(),
-  source: z.string().trim().min(1).max(80).optional(),
-});
+import { markViewedBatchSchema } from './article-views.schemas';
 
 @Controller()
 export class ArticleViewsController {

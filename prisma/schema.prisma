@@ -336,6 +336,9 @@ enum SpaceMode {
 }
 
 model User {
+  profileLinks ProfileLink[]
+  /** Show the connected X follower count on the public links page. */
+  showXFollowerCount Boolean @default(false)
   adminAssistantTurns AdminAssistantTurn[]
   embedding           UserEmbedding?
 
@@ -364,6 +367,7 @@ model User {
   // Public profile fields.
   name                         String?
   bio                          String?
+  /** @deprecated Mirror of the ProfileLink row with legacyField='website'; written only by the links service. Drop in a later migration. */
   website                      String?
   /**
    * Verified X handle. Written only by the X connection service; never user-editable.
@@ -373,8 +377,11 @@ model User {
    * Verified Pickax handle. Written only by the Pickax connection service; never user-editable.
    */
   pickaxUsername               String?
+  /** @deprecated Mirror of the ProfileLink row with legacyField='rumble'; written only by the links service. Drop in a later migration. */
   rumbleUrl                    String?
+  /** @deprecated Mirror of the ProfileLink row with legacyField='linkedin'; written only by the links service. Drop in a later migration. */
   linkedinUrl                  String?
+  /** @deprecated Mirror of the ProfileLink row with legacyField='youtube'; written only by the links service. Drop in a later migration. */
   youtubeUrl                   String?
   /**
    * Raw user-entered location query (zip/city/state text).
@@ -1693,6 +1700,7 @@ model Post {
   poll                     PostPoll?
   bookmarks                Bookmark[]
   mentions                 PostMention[]
+  links                    PostLink[]
   versions                 PostVersion[]
   anonViews                PostAnonView[]
   pinnedByUser             User?          @relation("PinnedPost")
@@ -1986,6 +1994,18 @@ model PostMention {
 
   @@id([postId, userId])
   @@index([userId])
+}
+
+/// External URLs in a post body, normalized exactly like `LinkMetadata.url` (see extractLinks).
+/// Lets search join a post to its cached link preview by url instead of scanning bodies.
+model PostLink {
+  postId String
+  url    String
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([postId, url])
+  @@index([url])
 }
 
 model BookmarkCollection {
@@ -4473,4 +4493,22 @@ model UserEmbedding {
   embedding   Unsupported("vector(512)")
   updatedAt   DateTime @default(now())
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ProfileLink {
+  id            String   @id @default(cuid())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  userId        String
+  url           String
+  title         String
+  position      Int
+  /// website | youtube | rumble | linkedin — row mirrors that legacy User column
+  legacyField   String?
+  /// Migrated pre-gate link; publicly visible even if owner is unverified
+  grandfathered Boolean  @default(false)
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, legacyField])
+  @@index([userId, position])
 }

@@ -5,11 +5,12 @@ import { QueueEvents } from 'bullmq';
 import { MOH_BACKGROUND_QUEUE, MOH_MARVIN_QUEUE } from './jobs.constants';
 import { MOH_SIDE_EFFECTS_QUEUE } from '../side-effects/side-effects.constants';
 import { AppConfigService } from '../app/app-config.service';
+import type { JobState } from 'bullmq';
 
 export type JobStatus =
   | { status: 'not_found' }
   | {
-      status: 'waiting' | 'delayed' | 'active' | 'completed' | 'failed' | 'paused';
+      status: JobState | 'unknown';
       jobId: string;
       name: string;
       attemptsMade: number;
@@ -82,14 +83,14 @@ export class JobsStatusService implements OnModuleDestroy {
 
     const state = await j.getState();
     return {
-      status: state as any,
+      status: state,
       jobId: String(j.id ?? jobId),
       name: String(j.name ?? ''),
       attemptsMade: j.attemptsMade ?? 0,
       processedOn: typeof j.processedOn === 'number' ? j.processedOn : null,
       finishedOn: typeof j.finishedOn === 'number' ? j.finishedOn : null,
       failedReason: j.failedReason ? String(j.failedReason) : null,
-      returnValue: (j as any).returnvalue ?? null,
+      returnValue: j.returnvalue ?? null,
     };
   }
 

@@ -1,46 +1,27 @@
-import {
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from "@nestjs/common";
-import {Prisma} from "@prisma/client";
-import type {
-  PostVisibility,
-} from "@prisma/client";
-import {PrismaService} from "../prisma/prisma.service";
-import {RequestCacheService} from "../../common/cache/request-cache.service";
-import {
-  ViewerContextService,
-} from "../viewer/viewer-context.service";
-import {
-  BOARD_THREAD_PREVIEW_INCLUDE,
-  BOARD_ROOT_TITLE_INCLUDE,
-  ARTICLE_SHARE_INCLUDE,
-  FITNESS_SHARE_INCLUDE,
-  QUOTED_POST_INCLUDE,
-} from "../../common/prisma-includes/post.include";
-import {
-  MENTION_USER_SELECT,
-  USER_LIST_SELECT,
-} from "../../common/prisma-selects/user.select";
-import {
-  notDeletedWhere,
-} from "./posts-query-builders";
-import {
-  type FeedPost,
-} from "./posts-feed.types";
-import {PostsViewerEnrichmentService} from "./posts-viewer-enrichment.service";
-import {CacheService} from "../redis/cache.service";
-import {CacheTtl} from "../redis/cache-ttl";
-import {RedisKeys} from "../redis/redis-keys";
-import {
-  totalPostCommentsWhere,
-} from "../../common/content-counts";
-import {excludeMarvFromParticipants} from "./posts-mentions.helpers";
-import {PostsFeedAccessService, type ReadablePostShell} from "./posts-feed-access.service";
-import {PostsRankingService} from "./posts-ranking.service";
-import {AppConfigService} from "../app/app-config.service";
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
+import { decodeJsonCursor, encodeJsonCursor } from '../../common/pagination/json-cursor';
+import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
+import type { PostVisibility } from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { RequestCacheService } from "../../common/cache/request-cache.service";
+import { ViewerContextService } from "../viewer/viewer-context.service";
+import { BOARD_THREAD_PREVIEW_INCLUDE, BOARD_ROOT_TITLE_INCLUDE, ARTICLE_SHARE_INCLUDE, FITNESS_SHARE_INCLUDE, QUOTED_POST_INCLUDE } from "../../common/prisma-includes/post.include";
+import { MENTION_USER_SELECT, USER_LIST_SELECT } from "../../common/prisma-selects/user.select";
+import { notDeletedWhere } from "./posts-query-builders";
+import { type FeedPost } from "./posts-feed.types";
+import { PostsViewerEnrichmentService } from "./posts-viewer-enrichment.service";
+import { CacheService } from "../redis/cache.service";
+import { CacheTtl } from "../redis/cache-ttl";
+import { RedisKeys } from "../redis/redis-keys";
+import { totalPostCommentsWhere } from "../../common/content-counts";
+import { excludeMarvFromParticipants } from "./posts-mentions.helpers";
+import { PostsFeedAccessService, type ReadablePostShell } from "./posts-feed-access.service";
+import { PostsRankingService } from "./posts-ranking.service";
+import { AppConfigService } from "../app/app-config.service";
 import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
+import { toPage } from '../../common/pagination/page';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 @Injectable()
 export class PostsFeedLookupService {
@@ -55,28 +36,17 @@ export class PostsFeedLookupService {
     private readonly appConfig: AppConfigService,
   ) {}
   private encodeCommentCursor(cursor: { createdAt: string; id: string }) {
-    return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+    return encodeJsonCursor(cursor);
   }
 
   private decodeCommentCursor(
     token: string | null,
   ): { createdAt: string; id: string } | null {
-    const t = (token ?? "").trim();
-    if (!t) return null;
-    try {
-      const raw = Buffer.from(t, "base64url").toString("utf8");
-      const parsed = JSON.parse(raw) as Partial<{
-        createdAt: string;
-        id: string;
-      }>;
-      const createdAt =
-        typeof parsed.createdAt === "string" ? parsed.createdAt : "";
-      const id = typeof parsed.id === "string" ? parsed.id : "";
-      if (!createdAt || !id) return null;
-      return { createdAt, id };
-    } catch {
-      return null;
-    }
+    const parsed = decodeJsonCursor(token);
+    const createdAt = typeof parsed?.createdAt === "string" ? parsed.createdAt : "";
+    const id = typeof parsed?.id === "string" ? parsed.id : "";
+    if (!createdAt || !id) return null;
+    return { createdAt, id };
   }
 
   /**
@@ -188,14 +158,9 @@ export class PostsFeedLookupService {
         }),
         this.commentVisibilityCounts(postId),
       ]);
-      const slice = comments.slice(0, limit);
-      const nextCursor =
-        comments.length > limit && slice[slice.length - 1]
-          ? this.encodeCommentCursor({
-              createdAt: slice[slice.length - 1].createdAt.toISOString(),
-              id: slice[slice.length - 1].id,
-            })
-          : null;
+      const { items: slice, nextCursor } = toPage(comments, limit, (c) =>
+        this.encodeCommentCursor({ createdAt: c.createdAt.toISOString(), id: c.id }),
+      );
       return { comments: slice, nextCursor, counts: countMap };
     }
 
@@ -211,14 +176,9 @@ export class PostsFeedLookupService {
       this.commentVisibilityCounts(postId),
     ]);
 
-    const slice = comments.slice(0, limit);
-    const nextCursor =
-      comments.length > limit && slice[slice.length - 1]
-        ? this.encodeCommentCursor({
-            createdAt: slice[slice.length - 1].createdAt.toISOString(),
-            id: slice[slice.length - 1].id,
-          })
-        : null;
+    const { items: slice, nextCursor } = toPage(comments, limit, (c) =>
+      this.encodeCommentCursor({ createdAt: c.createdAt.toISOString(), id: c.id }),
+    );
 
     return { comments: slice, nextCursor, counts: countMap };
   }
@@ -301,7 +261,7 @@ export class PostsFeedLookupService {
       where: {
         id: { in: participantIds },
         usernameIsSet: true,
-        bannedAt: null,
+        ...NOT_BANNED_USER_WHERE,
       },
       select: USER_REF_SELECT,
     });
@@ -368,7 +328,7 @@ export class PostsFeedLookupService {
     if (!postId) throw new NotFoundException("Post not found.");
 
     const post = await this.prisma.post.findFirst({
-      where: { id: postId, visibility: { not: "onlyMe" }, deletedAt: null },
+      where: { id: postId, visibility: { not: "onlyMe" }, ...NOT_DELETED },
       include: {
         user: { select: USER_LIST_SELECT },
         media: { orderBy: { position: "asc" } },

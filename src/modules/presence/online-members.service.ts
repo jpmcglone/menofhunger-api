@@ -1,9 +1,10 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { Injectable } from '@nestjs/common';
 import { AppConfigService } from '../app/app-config.service';
-import { AccountSwitchService } from '../auth/account-switch.service';
+import { AccountSwitchService } from '../auth/auth-public-api';
 import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { PresenceRedisStateService } from './presence-redis-state.service';
+import { PresenceRedisReadService } from './presence-redis-read.service';
 
 export type OnlineRoster = {
   /** Accounts with a live socket, oldest connection first (Redis order). */
@@ -29,7 +30,7 @@ export class OnlineMembersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
-    private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presenceRedis: PresenceRedisReadService,
     private readonly accountSwitch: AccountSwitchService,
     private readonly marvIdentity: MarvinBotIdentityService,
   ) {}
@@ -59,7 +60,7 @@ export class OnlineMembersService {
     const lookup = marvId ? [...candidates, marvId] : candidates;
     const rows = lookup.length
       ? await this.prisma.user.findMany({
-          where: { id: { in: lookup }, usernameIsSet: true, bannedAt: null },
+          where: { id: { in: lookup }, usernameIsSet: true, ...NOT_BANNED_USER_WHERE },
           select: { id: true, locationState: true },
         })
       : [];

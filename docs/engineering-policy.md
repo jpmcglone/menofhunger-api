@@ -4,6 +4,7 @@ Authoritative source: `menofhunger-api/docs/engineering-policy.md`. Web and iOS 
 identical checked copies so a standalone checkout works in both Codex and Cursor.
 Edit the source, then run `python3 scripts/sync-agent-guidance.py` in the API repository.
 Use `--check` to detect drift; no background process or editor-specific skill copies.
+Pass `--ios-root /absolute/path/to/menofhunger-ios` when synchronizing an active iOS worktree.
 The same command also syncs shared Cursor rule *bodies* (`15-feed-surface`,
 `20-deletion-deprecation`, `56-notification-seen-vs-read`). Per-repo frontmatter
 (`globs`) and any `<!-- guidance-addendum -->` stay local. `60-realtime-first` is
@@ -57,6 +58,22 @@ handoff so later changes can follow the same source.
 After Figma approval, implement iOS first, then web. At desktop widths, web should read like the
 iOS app on a large iPad: lodge rail, content column, and inspector, with the same headers,
 filters, and row anatomy. Web keeps browser conventions such as real links and page navigation.
+
+Codex and Cursor share this workflow. Inspect static design context, component bindings,
+and screenshots; for an animated interaction also inspect Figma Motion data through
+`get_motion_context` when available. Capture triggers, properties, keyframes, duration,
+easing, delays, interruption, and reduced-motion behavior in the handoff. Report missing
+motion data rather than guessing from a still image. Translate to existing native SwiftUI
+motion helpers and Vue/CSS tokens; do not add a runtime or dependency as an incidental
+consequence of generated output. Verify both platforms with reduced motion enabled.
+
+The [Figma library guidelines](figma-guidelines/README.md) are canonical in this API
+repository and mirrored by the guidance sync script. Run `python3 scripts/sync-figma-guidelines.py`
+to export the upload bundle and `--check` to detect export or last-verified-application
+drift. Exporting is local-only; a remote receipt requires an actual matching Figma readback.
+Use Make for scoped flow exploration and return the selected design to the UI Library.
+Use Weave, Motion media, and Lottie for approved creative briefs; generated assets that
+enter the product still follow the media ownership and review policy.
 
 Behavior-only bug fixes do not require a cosmetic redesign. If a fix changes visible behavior
 or introduces a new UI state, reflect that state in Figma as part of the work. Explicit user

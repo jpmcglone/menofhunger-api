@@ -1,18 +1,13 @@
-import {
-  jobInputSchema,
-  boardPublicationSchema,
-  jobEditSchema,
-  jobControlSchema,
-} from "./delegation/delegation.schemas";
+import { jobInputSchema, boardPublicationSchema, jobEditSchema, jobControlSchema } from "./delegation/delegation.schemas";
 import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { z } from "zod";
 import type { PrismaService } from "../prisma/prisma.service";
-import { updateSchema as feedbackSchema } from "./admin-feedback.controller";
-import { updateSchema as reportSchema } from "./admin-reports.controller";
-import { writeSchema as announcementSchema } from "./admin-announcements.controller";
-import { writeSchema as newsletterSchema } from "./admin-newsletters.controller";
-import { approveSchema, rejectSchema } from "./admin-verification.controller";
-import { adminUserPatchSchema } from "../marvin/marvin.controller";
+import { updateSchema as feedbackSchema } from "./admin-feedback.schemas";
+import { updateSchema as reportSchema } from "./admin-reports.schemas";
+import { writeSchema as announcementSchema } from "./admin-announcements.schemas";
+import { writeSchema as newsletterSchema } from "./admin-newsletters.schemas";
+import { approveSchema, rejectSchema } from "./admin-verification.schemas";
+import { adminUserPatchSchema } from "../marvin/marvin-admin.schemas";
 import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 
 export const assistantPostSchema = z

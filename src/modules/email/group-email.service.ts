@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { buildGroupEmail, type GroupEmailKind } from './email-content-group';
 import { buildGreeting, getVerifiedRecipientEmail, preferredDisplayName } from './email-send.helpers';
 import { EmailService } from './email.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 export type GroupEmailInput = {
   kind: GroupEmailKind;
@@ -43,7 +44,7 @@ export class GroupEmailService {
           notificationPreferences: { select: { emailInstantHighSignal: true } },
         },
       }),
-      this.prisma.communityGroup.findFirst({ where: { id: input.groupId, deletedAt: null }, select: { slug: true, name: true } }),
+      this.prisma.communityGroup.findFirst({ where: { id: input.groupId, ...NOT_DELETED }, select: { slug: true, name: true } }),
       input.actorUserId
         ? this.prisma.user.findUnique({ where: { id: input.actorUserId }, select: { name: true, username: true } })
         : Promise.resolve(null),

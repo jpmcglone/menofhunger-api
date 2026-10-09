@@ -2,7 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { SubscriptionGrant } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
-import { AuthService } from '../auth/auth.service';
+import { AuthService } from '../auth/auth-public-api';
 import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 

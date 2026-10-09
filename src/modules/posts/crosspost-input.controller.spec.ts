@@ -1,16 +1,16 @@
-import { PostsController } from './posts.controller';
+import { PostsPublicationController } from './posts-publication.controller';
 import { ScheduledPostsController } from './scheduled-posts.controller';
 
 describe('crosspost request choices', () => {
   it.each(['link', 'native'])('preserves Pickax %s on immediate posts', async pickax => {
     const reachedMutation = new Error('mutation reached');
     const posts = { createPost: jest.fn().mockRejectedValue(reachedMutation) };
-    await expect(PostsController.prototype.create.call({ posts }, { body: 'example.com', crosspost: { pickax } }, 'user')).rejects.toBe(reachedMutation);
+    await expect(PostsPublicationController.prototype.create.call({ postsMutationWrite: posts }, { body: 'example.com', crosspost: { pickax } }, 'user')).rejects.toBe(reachedMutation);
     expect(posts.createPost).toHaveBeenCalledWith(expect.objectContaining({ crosspost: { pickax } }));
   });
   it('rejects X shares before creating a post', async () => {
     const posts = { createPost: jest.fn() };
-    await expect(PostsController.prototype.create.call({ posts }, { body: 'Hello', crosspost: { x: 'link' } }, 'user')).rejects.toThrow();
+    await expect(PostsPublicationController.prototype.create.call({ postsMutationWrite: posts }, { body: 'Hello', crosspost: { x: 'link' } }, 'user')).rejects.toThrow();
     expect(posts.createPost).not.toHaveBeenCalled();
   });
   it.each(['link', 'native'])('preserves Pickax %s when scheduling and editing', async pickax => {

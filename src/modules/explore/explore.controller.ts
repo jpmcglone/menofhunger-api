@@ -3,7 +3,7 @@ import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { publicCacheControl } from '../../common/http-cache';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { CacheService } from '../redis/cache.service';
 import { RedisKeys } from '../redis/redis-keys';

@@ -1,13 +1,7 @@
 import { PickaxOAuthClient } from './pickax-oauth.client';
 import { RedisService } from '../redis/redis.service';
 import { randomBytes } from 'node:crypto';
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  Logger,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import type { PickaxConnection } from '@prisma/client';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -16,13 +10,7 @@ import { UsersMeRealtimeService } from '../users/users-me-realtime.service';
 import { UsersPublicRealtimeService } from '../users/users-public-realtime.service';
 import { normalizeSocialHandle } from '../users/social-handles';
 import { PickaxApiClient, PickaxApiError, type PickaxTokenPair } from './pickax-api.client';
-import {
-  fetchPickaxProfileTexts,
-  profileMatchesIdentity,
-  profileVerificationCode,
-  readTokenClaimKeys,
-  readTokenIdentity,
-} from './pickax-identity';
+import { fetchPickaxProfileTexts, profileMatchesIdentity, profileVerificationCode, readTokenClaimKeys, readTokenIdentity } from './pickax-identity';
 import { openSecret, sealSecret } from '../../common/crypto/secret-box';
 import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 

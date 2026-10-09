@@ -1,5 +1,6 @@
-import { PostsReadService } from '../posts-read/posts-read.service';
-import { NotificationWriterService } from './notification-writer.service';
+import { makeNotificationWriter } from "./notification-writer.testing";
+import { PostsReadService } from "../posts-read/posts-read.service";
+import type { NotificationCreatorService } from "./notification-creator.service";
 
 /**
  * Invariant: a recipient gets at most one post-shaped notification (comment /
@@ -8,18 +9,30 @@ import { NotificationWriterService } from './notification-writer.service';
  * or dispatch a push.
  */
 
-function buildWriter(prisma: object, presenceRealtime: object, sideEffects: object, mutes?: object): NotificationWriterService {
-  return new NotificationWriterService(
+function buildWriter(
+  prisma: object,
+  presenceRealtime: object,
+  sideEffects: object,
+  mutes?: object,
+): Pick<NotificationCreatorService, "create"> {
+  return makeNotificationWriter(
     prisma as never,
     new PostsReadService(prisma as never),
     presenceRealtime as never,
-    { isOnline: jest.fn(async () => false), isIdle: jest.fn(async () => false) } as never,
+    {
+      isOnline: jest.fn(async () => false),
+      isIdle: jest.fn(async () => false),
+    } as never,
     { enqueueCron: jest.fn() } as never,
     sideEffects as never,
     { buildNotificationDtoForRecipient: jest.fn(async () => null) } as never,
     {
       emitWaitingCountForUser: jest.fn(),
-      undeliveredBellWhere: (uid: string) => ({ recipientUserId: uid, deliveredAt: null }),      emitNavUnreadForUser: jest.fn(async () => undefined),
+      undeliveredBellWhere: (uid: string) => ({
+        recipientUserId: uid,
+        deliveredAt: null,
+      }),
+      emitNavUnreadForUser: jest.fn(async () => undefined),
     } as never,
     undefined,
     mutes as never,
@@ -27,23 +40,44 @@ function buildWriter(prisma: object, presenceRealtime: object, sideEffects: obje
 }
 
 function makeDeps(existing: { id: string } | null = null) {
-  const notifCreate = jest.fn(async (args: { data: unknown }) => ({ id: 'notif-new', ...(args.data as object) }));
+  const notifCreate = jest.fn(async (args: { data: unknown }) => ({
+    id: "notif-new",
+    ...(args.data as object),
+  }));
   const notifCount = jest.fn(async () => 1);
   const notifFindFirst = jest.fn(async () => existing);
   const userUpdate = jest.fn(async () => ({}));
-  const $transaction = jest.fn(async (fn: (tx: unknown) => Promise<unknown>) => {
-    const tx = {
-      notification: { create: notifCreate, count: notifCount, findFirst: notifFindFirst },
-      user: { update: userUpdate },
-    };
-    return fn(tx);
-  });
-  const presenceRealtime = { emitNotificationsUpdated: jest.fn(), emitNotificationNew: jest.fn() };
+  const $transaction = jest.fn(
+    async (fn: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        notification: {
+          create: notifCreate,
+          count: notifCount,
+          findFirst: notifFindFirst,
+        },
+        user: { update: userUpdate },
+      };
+      return fn(tx);
+    },
+  );
+  const presenceRealtime = {
+    emitNotificationsUpdated: jest.fn(),
+    emitNotificationNew: jest.fn(),
+  };
   const sideEffects = { dispatch: jest.fn() };
   const prisma = {
-    follow: { findUnique: jest.fn(async () => ({ notificationPreference: 'all', postNotificationsEnabled: true })) },
+    follow: {
+      findUnique: jest.fn(async () => ({
+        notificationPreference: "all",
+        postNotificationsEnabled: true,
+      })),
+    },
     $transaction,
-    notification: { create: notifCreate, count: notifCount, findFirst: notifFindFirst },
+    notification: {
+      create: notifCreate,
+      count: notifCount,
+      findFirst: notifFindFirst,
+    },
     user: { update: userUpdate },
     userPageOperator: { findUnique: jest.fn(async () => null) },
     // Home posts: permitsGroupActivity returns true without a membership lookup.
@@ -59,50 +93,63 @@ function makeDeps(existing: { id: string } | null = null) {
   };
 }
 
-describe('NotificationWriterService — muted actors', () => {
-  it('writes nothing, bumps no bell, and sends no push when the recipient muted the actor', async () => {
+describe("NotificationCreatorService — muted actors", () => {
+  it("writes nothing, bumps no bell, and sends no push when the recipient muted the actor", async () => {
     const { prisma, presenceRealtime, sideEffects } = makeDeps(null);
-    const mutes = { hasMuted: jest.fn(async (muter: string, muted: string) => muter === 'user-1' && muted === 'actor-1') };
+    const mutes = {
+      hasMuted: jest.fn(
+        async (muter: string, muted: string) =>
+          muter === "user-1" && muted === "actor-1",
+      ),
+    };
     const writer = buildWriter(prisma, presenceRealtime, sideEffects, mutes);
 
-    await writer.create({ recipientUserId: 'user-1', kind: 'comment', actorUserId: 'actor-1', actorPostId: 'reply-1', subjectPostId: 'parent-1' });
+    await writer.create({
+      recipientUserId: "user-1",
+      kind: "comment",
+      actorUserId: "actor-1",
+      actorPostId: "reply-1",
+      subjectPostId: "parent-1",
+    });
 
-    expect(mutes.hasMuted).toHaveBeenCalledWith('user-1', 'actor-1');
+    expect(mutes.hasMuted).toHaveBeenCalledWith("user-1", "actor-1");
     expect(prisma.notification.create).not.toHaveBeenCalled();
     expect(presenceRealtime.emitNotificationsUpdated).not.toHaveBeenCalled();
     expect(sideEffects.dispatch).not.toHaveBeenCalled();
   });
 });
 
-describe('NotificationWriterService — post-caused create is idempotent', () => {
-  it('creates a comment notification when none exists for that post', async () => {
+describe("NotificationCreatorService — post-caused create is idempotent", () => {
+  it("creates a comment notification when none exists for that post", async () => {
     const { writer, prisma, presenceRealtime, sideEffects } = makeDeps(null);
 
     await writer.create({
-      recipientUserId: 'user-1',
-      kind: 'comment',
-      actorUserId: 'actor-1',
-      actorPostId: 'reply-1',
-      subjectPostId: 'parent-1',
+      recipientUserId: "user-1",
+      kind: "comment",
+      actorUserId: "actor-1",
+      actorPostId: "reply-1",
+      subjectPostId: "parent-1",
     });
 
     expect(prisma.notification.create).toHaveBeenCalledTimes(1);
     expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalled();
     expect(sideEffects.dispatch).toHaveBeenCalledWith(
-      'notification.push',
-      expect.objectContaining({ recipientUserId: 'user-1', kind: 'comment' }),
+      "notification.push",
+      expect.objectContaining({ recipientUserId: "user-1", kind: "comment" }),
     );
   });
 
-  it('skips a second comment for the same recipient and reply', async () => {
-    const { writer, prisma, presenceRealtime, sideEffects } = makeDeps({ id: 'notif-existing' });
+  it("skips a second comment for the same recipient and reply", async () => {
+    const { writer, prisma, presenceRealtime, sideEffects } = makeDeps({
+      id: "notif-existing",
+    });
 
     await writer.create({
-      recipientUserId: 'user-1',
-      kind: 'comment',
-      actorUserId: 'actor-1',
-      actorPostId: 'reply-1',
-      subjectPostId: 'parent-1',
+      recipientUserId: "user-1",
+      kind: "comment",
+      actorUserId: "actor-1",
+      actorPostId: "reply-1",
+      subjectPostId: "parent-1",
     });
 
     expect(prisma.notification.create).not.toHaveBeenCalled();
@@ -110,15 +157,17 @@ describe('NotificationWriterService — post-caused create is idempotent', () =>
     expect(sideEffects.dispatch).not.toHaveBeenCalled();
   });
 
-  it('skips followed_post when a comment already exists for the same reply', async () => {
-    const { writer, prisma, presenceRealtime, sideEffects } = makeDeps({ id: 'notif-comment' });
+  it("skips followed_post when a comment already exists for the same reply", async () => {
+    const { writer, prisma, presenceRealtime, sideEffects } = makeDeps({
+      id: "notif-comment",
+    });
 
     await writer.create({
-      recipientUserId: 'user-1',
-      kind: 'followed_post',
-      actorUserId: 'actor-1',
-      actorPostId: 'reply-1',
-      subjectPostId: 'reply-1',
+      recipientUserId: "user-1",
+      kind: "followed_post",
+      actorUserId: "actor-1",
+      actorPostId: "reply-1",
+      subjectPostId: "reply-1",
     });
 
     expect(prisma.notification.create).not.toHaveBeenCalled();
@@ -127,22 +176,48 @@ describe('NotificationWriterService — post-caused create is idempotent', () =>
   });
 });
 
-
-describe('page publication subscriptions', () => {
-  it('delivers followed posts to page operators through the normal bell and push pipeline', async () => {
+describe("page publication subscriptions", () => {
+  it("delivers followed posts to page operators through the normal bell and push pipeline", async () => {
     const { writer, prisma, presenceRealtime, sideEffects } = makeDeps();
-    prisma.userPageOperator.findUnique = jest.fn(async () => ({ operatorUserId: 'user-1' })) as never;
-    await writer.create({ recipientUserId: 'user-1', actorUserId: 'mohnews', kind: 'followed_post', subjectPostId: 'daily-news' });
+    prisma.userPageOperator.findUnique = jest.fn(async () => ({
+      operatorUserId: "user-1",
+    })) as never;
+    await writer.create({
+      recipientUserId: "user-1",
+      actorUserId: "mohnews",
+      kind: "followed_post",
+      subjectPostId: "daily-news",
+    });
     expect(prisma.notification.create).toHaveBeenCalledTimes(1);
     expect(prisma.userPageOperator.findUnique).not.toHaveBeenCalled();
     expect(presenceRealtime.emitNotificationsUpdated).toHaveBeenCalled();
-    expect(sideEffects.dispatch).toHaveBeenCalledWith('notification.push', expect.objectContaining({ recipientUserId: 'user-1', actorUserId: 'mohnews', kind: 'followed_post' }));
+    expect(sideEffects.dispatch).toHaveBeenCalledWith(
+      "notification.push",
+      expect.objectContaining({
+        recipientUserId: "user-1",
+        actorUserId: "mohnews",
+        kind: "followed_post",
+      }),
+    );
   });
-  it('still suppresses true self-notifications and muted page subscriptions', async () => {
+  it("still suppresses true self-notifications and muted page subscriptions", async () => {
     const { writer, prisma } = makeDeps();
-    await writer.create({ recipientUserId: 'mohnews', actorUserId: 'mohnews', kind: 'followed_post', subjectPostId: 'daily-news' });
-    prisma.follow.findUnique = jest.fn(async () => ({ notificationPreference: 'off', postNotificationsEnabled: false }));
-    await writer.create({ recipientUserId: 'user-1', actorUserId: 'mohnews', kind: 'followed_post', subjectPostId: 'daily-news' });
+    await writer.create({
+      recipientUserId: "mohnews",
+      actorUserId: "mohnews",
+      kind: "followed_post",
+      subjectPostId: "daily-news",
+    });
+    prisma.follow.findUnique = jest.fn(async () => ({
+      notificationPreference: "off",
+      postNotificationsEnabled: false,
+    }));
+    await writer.create({
+      recipientUserId: "user-1",
+      actorUserId: "mohnews",
+      kind: "followed_post",
+      subjectPostId: "daily-news",
+    });
     expect(prisma.notification.create).not.toHaveBeenCalled();
   });
 });

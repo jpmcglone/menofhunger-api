@@ -1,32 +1,18 @@
+import { MessagesCallsService } from "../messages";
 import { CallBudgetService } from './call-budget.service';
 import { SfuService } from './sfu.service';
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import * as crypto from 'node:crypto';
-import type {
-  CallsAckDto,
-  CallsAckErrorCode,
-  CallType,
-  MessageCallDto,
-  MessageCallOutcome,
-} from '../../common/dto/call.dto';
+import type { CallsAckDto, CallsAckErrorCode, CallType, MessageCallDto, MessageCallOutcome } from '../../common/dto/call.dto';
 import type { UserListDto } from '../../common/dto/user.dto';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS, type JobName } from '../jobs/jobs.constants';
-import { MessagesService, type CallConversationContext } from '../messages/messages.service';
+import { type CallConversationContext } from '../messages';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
+import { PresenceRedisReadService } from '../presence/presence-redis-read.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { CallSessionStore, type CallParticipantRecord, type CallSessionRecord } from './call-session.store';
-import {
-  CALL_EMPTY_GRACE_MS,
-  CALL_PARTICIPANT_GRACE_MS,
-  CALL_RING_TIMEOUT_MS,
-  CALL_SWEEP_SLACK_MS,
-  callCapacityFor,
-  callEmptyGraceJobId,
-  callParticipantGraceJobId,
-  callRingTimeoutJobId,
-} from './calls.constants';
+import { CALL_EMPTY_GRACE_MS, CALL_PARTICIPANT_GRACE_MS, CALL_RING_TIMEOUT_MS, CALL_SWEEP_SLACK_MS, callCapacityFor, callEmptyGraceJobId, callParticipantGraceJobId, callRingTimeoutJobId } from './calls.constants';
 
 function ackError(code: CallsAckErrorCode, message: string): CallsAckDto {
   return { call: null, error: { code, message } };
@@ -79,11 +65,11 @@ export class CallsService {
 
   constructor(
     private readonly store: CallSessionStore,
-    private readonly messages: MessagesService,
+    @Inject(MessagesCallsService) private readonly messages: Pick< MessagesCallsService, | "getCallConversationContext" | "createCallMessage" | "updateCallMessage" | "listConversationMemberUserIds" >,
     private readonly realtime: PresenceRealtimeService,
     private readonly jobs: JobsService,
     private readonly sideEffects: SideEffectsService,
-    private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presenceRedis: PresenceRedisReadService,
     private readonly sfu: SfuService,
     private readonly budget: CallBudgetService,
   ) {}

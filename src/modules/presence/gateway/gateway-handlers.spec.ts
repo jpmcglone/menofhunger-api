@@ -3,19 +3,22 @@
  * FakeServer pattern (no real Socket.IO process or Redis).
  */
 
-import { GatewayContextService } from './gateway-context.service';
-import { GatewayThrottleService } from './gateway-throttle.service';
-import { RadioGatewayHandler } from './gateway-radio.handler';
-import { ContentSubscriptionsHandler } from './gateway-subscriptions.handler';
-import { MessagingGatewayHandler } from './gateway-messaging.handler';
-import { PresenceStatusHandler } from './gateway-presence.handler';
-import { CommunityGroupReadAccessService } from '../../viewer/community-group-read-access.service';
-import { SpacesGatewayHandler } from './gateway-spaces.handler';
-import { OnlineMembersService } from '../online-members.service';
+import { GatewayContextService } from "./gateway-context.service";
+import { GatewayThrottleService } from "./gateway-throttle.service";
+import { RadioGatewayHandler } from "./gateway-radio.handler";
+import { ContentSubscriptionsHandler } from "./gateway-subscriptions.handler";
+import { MessagingGatewayHandler } from "./gateway-messaging.handler";
+import { PresenceStatusHandler } from "./gateway-presence.handler";
+import { CommunityGroupReadAccessService } from "../../viewer/community-group-read-access.service";
+import { SpacesGatewayHandler } from "./gateway-spaces.handler";
+import { OnlineMembersService } from "../online-members.service";
 
-import { PostsReadService } from '../../posts-read/posts-read.service';
+import { PostsReadService } from "../../posts-read/posts-read.service";
 /** The real shared roster over the fixture's presence mocks: every connected id is a member. */
-function makeOnlineMembers(presenceRedis: any, opts: { marvId?: string | null } = {}) {
+function makeOnlineMembers(
+  presenceRedis: any,
+  opts: { marvId?: string | null } = {},
+) {
   return new OnlineMembersService(
     {
       user: {
@@ -35,7 +38,6 @@ function makeOnlineMembers(presenceRedis: any, opts: { marvId?: string | null } 
     { getMarvUserId: async () => opts.marvId ?? null } as any,
   );
 }
-
 
 // ─── Lightweight fake socket.io infrastructure ──────────────────────────────
 
@@ -57,9 +59,15 @@ class FakeSocket {
     return this;
   }
 
-  join(room: string) { this.joined.add(room); }
-  leave(room: string) { this.joined.delete(room); }
-  to(_room: string): this { return this; }
+  join(room: string) {
+    this.joined.add(room);
+  }
+  leave(room: string) {
+    this.joined.delete(room);
+  }
+  to(_room: string): this {
+    return this;
+  }
   lastEmitted(event: string): unknown {
     const all = this.emitted.filter((e) => e.event === event);
     return all[all.length - 1]?.payload ?? undefined;
@@ -94,13 +102,17 @@ class FakeServer {
           }
         },
       }),
-      emit: (event: string, payload?: unknown) => this.emitted.push({ event, payload: payload ?? null }),
+      emit: (event: string, payload?: unknown) =>
+        this.emitted.push({ event, payload: payload ?? null }),
     };
   }
 }
 
 function makeContext(presence: any, server: FakeServer): GatewayContextService {
-  const ctx = new GatewayContextService({ isProd: jest.fn().mockReturnValue(true) } as any, presence);
+  const ctx = new GatewayContextService(
+    { isProd: jest.fn().mockReturnValue(true) } as any,
+    presence,
+  );
   ctx.setServer(server.asIoServer());
   return ctx;
 }
@@ -125,7 +137,9 @@ function makePresenceRedis() {
     publishEmitToRoom: jest.fn().mockResolvedValue(undefined),
     publishUserSpaceChanged: jest.fn().mockResolvedValue(undefined),
     publishSpacesLobbyCounts: jest.fn().mockResolvedValue(undefined),
-    syncAndAggregateLobbyCounts: jest.fn(async (local: Record<string, number>) => ({ ...local })),
+    syncAndAggregateLobbyCounts: jest.fn(
+      async (local: Record<string, number>) => ({ ...local }),
+    ),
     clearSpaceEmptySince: jest.fn().mockResolvedValue(undefined),
     ensureSpaceEmptySince: jest.fn().mockResolvedValue(null),
   } as any;
@@ -137,257 +151,400 @@ afterEach(() => {
 
 // ─── GatewayThrottleService ──────────────────────────────────────────────────
 
-describe('GatewayThrottleService', () => {
-  it('allows the first emit and throttles repeats within the interval', () => {
-    jest.spyOn(Date, 'now').mockReturnValue(1000);
+describe("GatewayThrottleService", () => {
+  it("allows the first emit and throttles repeats within the interval", () => {
+    jest.spyOn(Date, "now").mockReturnValue(1000);
     const throttle = new GatewayThrottleService();
-    expect(throttle.shouldEmitTyping('k', 700)).toBe(true);
-    expect(throttle.shouldEmitTyping('k', 700)).toBe(false);
+    expect(throttle.shouldEmitTyping("k", 700)).toBe(true);
+    expect(throttle.shouldEmitTyping("k", 700)).toBe(false);
     (Date.now as jest.Mock).mockReturnValue(1800);
-    expect(throttle.shouldEmitTyping('k', 700)).toBe(true);
+    expect(throttle.shouldEmitTyping("k", 700)).toBe(true);
   });
 
-  it('tracks reaction throttles independently of typing throttles', () => {
-    jest.spyOn(Date, 'now').mockReturnValue(1000);
+  it("tracks reaction throttles independently of typing throttles", () => {
+    jest.spyOn(Date, "now").mockReturnValue(1000);
     const throttle = new GatewayThrottleService();
-    expect(throttle.shouldEmitReaction('k', 400)).toBe(true);
+    expect(throttle.shouldEmitReaction("k", 400)).toBe(true);
     // Same key, different map — typing is unaffected.
-    expect(throttle.shouldEmitTyping('k', 700)).toBe(true);
-    expect(throttle.shouldEmitReaction('k', 400)).toBe(false);
+    expect(throttle.shouldEmitTyping("k", 700)).toBe(true);
+    expect(throttle.shouldEmitReaction("k", 400)).toBe(false);
   });
 
-  it('clearTypingThrottleForUser drops the user-prefixed keys', () => {
-    jest.spyOn(Date, 'now').mockReturnValue(1000);
+  it("clearTypingThrottleForUser drops the user-prefixed keys", () => {
+    jest.spyOn(Date, "now").mockReturnValue(1000);
     const throttle = new GatewayThrottleService();
-    throttle.shouldEmitTyping('u1:conv:1', 700);
-    throttle.shouldEmitTyping('spaces:u1:space:1', 250);
-    throttle.shouldEmitTyping('u2:conv:1', 700);
+    throttle.shouldEmitTyping("u1:conv:1", 700);
+    throttle.shouldEmitTyping("spaces:u1:space:1", 250);
+    throttle.shouldEmitTyping("u2:conv:1", 700);
 
-    throttle.clearTypingThrottleForUser('u1');
+    throttle.clearTypingThrottleForUser("u1");
 
-    expect(throttle.shouldEmitTyping('u1:conv:1', 700)).toBe(true);
-    expect(throttle.shouldEmitTyping('spaces:u1:space:1', 250)).toBe(true);
-    expect(throttle.shouldEmitTyping('u2:conv:1', 700)).toBe(false);
+    expect(throttle.shouldEmitTyping("u1:conv:1", 700)).toBe(true);
+    expect(throttle.shouldEmitTyping("spaces:u1:space:1", 250)).toBe(true);
+    expect(throttle.shouldEmitTyping("u2:conv:1", 700)).toBe(false);
   });
 });
 
 // ─── RadioGatewayHandler ─────────────────────────────────────────────────────
 
-describe('RadioGatewayHandler', () => {
+describe("RadioGatewayHandler", () => {
   function makeRadioFixture() {
     const server = new FakeServer();
-    const presence = makePresence({ getSocketIdsForUser: jest.fn().mockReturnValue([]) });
+    const presence = makePresence({
+      getSocketIdsForUser: jest.fn().mockReturnValue([]),
+    });
     const presenceRedis = makePresenceRedis();
     const radio = {
       isValidStationId: jest.fn().mockReturnValue(true),
-      join: jest.fn().mockReturnValue({ prevStationId: null, prevRoomStationId: null }),
-      getListenersForStation: jest.fn().mockReturnValue({ userIds: [], pausedUserIds: [], mutedUserIds: [] }),
-      getLobbyCountsByStationId: jest.fn().mockReturnValue({ 'station-1': 1 }),
+      join: jest
+        .fn()
+        .mockReturnValue({ prevStationId: null, prevRoomStationId: null }),
+      getListenersForStation: jest
+        .fn()
+        .mockReturnValue({ userIds: [], pausedUserIds: [], mutedUserIds: [] }),
+      getLobbyCountsByStationId: jest.fn().mockReturnValue({ "station-1": 1 }),
       onDisconnect: jest.fn().mockReturnValue(null),
     } as any;
-    const follows = { getFollowListUsersByIds: jest.fn().mockResolvedValue([]) } as any;
-    const handler = new RadioGatewayHandler(presence, presenceRedis, follows, radio, {} as any, makeContext(presence, server));
+    const follows = {
+      getFollowListUsersByIds: jest.fn().mockResolvedValue([]),
+    } as any;
+    const handler = new RadioGatewayHandler(
+      presence,
+      presenceRedis,
+      follows,
+      radio,
+      {} as any,
+      makeContext(presence, server),
+    );
     return { server, presence, radio, handler };
   }
 
-  it('radio:join joins the station room and emits listeners + lobby counts', async () => {
+  it("radio:join joins the station room and emits listeners + lobby counts", async () => {
     const { server, handler, radio } = makeRadioFixture();
-    const socket = new FakeSocket('s1', { userId: 'u1' });
+    const socket = new FakeSocket("s1", { userId: "u1" });
     server.register(socket);
-    server.joinRoom('s1', 'radio:station-1');
+    server.joinRoom("s1", "radio:station-1");
 
-    await handler.handleRadioJoin(socket as any, { stationId: 'station-1' });
+    await handler.handleRadioJoin(socket as any, { stationId: "station-1" });
 
-    expect(radio.join).toHaveBeenCalledWith({ socketId: 's1', userId: 'u1', stationId: 'station-1' });
-    expect(socket.joined.has('radio:station-1')).toBe(true);
-    expect(socket.lastEmitted('radio:listeners')).toEqual({ stationId: 'station-1', listeners: [] });
+    expect(radio.join).toHaveBeenCalledWith({
+      socketId: "s1",
+      userId: "u1",
+      stationId: "station-1",
+    });
+    expect(socket.joined.has("radio:station-1")).toBe(true);
+    expect(socket.lastEmitted("radio:listeners")).toEqual({
+      stationId: "station-1",
+      listeners: [],
+    });
   });
 
-  it('radio:join notifies the user\'s other sockets with radio:replaced', async () => {
+  it("radio:join notifies the user's other sockets with radio:replaced", async () => {
     const { server, presence, handler } = makeRadioFixture();
-    const socket = new FakeSocket('s1', { userId: 'u1' });
-    const otherTab = new FakeSocket('s2', { userId: 'u1' });
+    const socket = new FakeSocket("s1", { userId: "u1" });
+    const otherTab = new FakeSocket("s2", { userId: "u1" });
     server.register(socket);
     server.register(otherTab);
-    presence.getSocketIdsForUser.mockReturnValue(['s1', 's2']);
+    presence.getSocketIdsForUser.mockReturnValue(["s1", "s2"]);
 
-    await handler.handleRadioJoin(socket as any, { stationId: 'station-1' });
+    await handler.handleRadioJoin(socket as any, { stationId: "station-1" });
 
-    expect(otherTab.allEmitted('radio:replaced')).toHaveLength(1);
-    expect(socket.allEmitted('radio:replaced')).toHaveLength(0);
+    expect(otherTab.allEmitted("radio:replaced")).toHaveLength(1);
+    expect(socket.allEmitted("radio:replaced")).toHaveLength(0);
   });
 
-  it('disconnect cleanup emits listeners for the left station when active', () => {
+  it("disconnect cleanup emits listeners for the left station when active", () => {
     const { server, handler, radio } = makeRadioFixture();
-    const socket = new FakeSocket('s1', { userId: 'u1' });
+    const socket = new FakeSocket("s1", { userId: "u1" });
     server.register(socket);
-    radio.onDisconnect.mockReturnValueOnce({ stationId: 'station-1', wasActive: true });
+    radio.onDisconnect.mockReturnValueOnce({
+      stationId: "station-1",
+      wasActive: true,
+    });
 
     handler.handleDisconnect(socket as any);
 
-    expect(radio.onDisconnect).toHaveBeenCalledWith('s1');
+    expect(radio.onDisconnect).toHaveBeenCalledWith("s1");
     // Lobby counts go to the radio:lobbies room via the server.
-    expect(server.emitted.some((e) => e.event === 'radio:lobbyCounts')).toBe(true);
+    expect(server.emitted.some((e) => e.event === "radio:lobbyCounts")).toBe(
+      true,
+    );
   });
 });
 
 // ─── ContentSubscriptionsHandler ─────────────────────────────────────────────
 
-describe('ContentSubscriptionsHandler', () => {
-  function makeSubsFixture(opts: {
-    posts?: Array<{ id: string; userId: string; visibility: string; communityGroupId?: string | null }>;
-    articles?: Array<{ id: string; authorId: string; visibility: string }>;
-    groupPolicies?: Array<{ id: string; joinPolicy: 'open' | 'approval' }>;
-    memberships?: Array<{ groupId: string }>;
-  } = {}) {
+describe("ContentSubscriptionsHandler", () => {
+  function makeSubsFixture(
+    opts: {
+      posts?: Array<{
+        id: string;
+        userId: string;
+        visibility: string;
+        communityGroupId?: string | null;
+      }>;
+      articles?: Array<{ id: string; authorId: string; visibility: string }>;
+      groupPolicies?: Array<{ id: string; joinPolicy: "open" | "approval" }>;
+      memberships?: Array<{ groupId: string }>;
+    } = {},
+  ) {
     const prisma = {
       post: { findMany: jest.fn().mockResolvedValue(opts.posts ?? []) },
       article: { findMany: jest.fn().mockResolvedValue(opts.articles ?? []) },
-      communityGroup: { findMany: jest.fn().mockResolvedValue(opts.groupPolicies ?? []) },
-      communityGroupMember: { findMany: jest.fn().mockResolvedValue(opts.memberships ?? []) },
+      communityGroup: {
+        findMany: jest.fn().mockResolvedValue(opts.groupPolicies ?? []),
+      },
+      communityGroupMember: {
+        findMany: jest.fn().mockResolvedValue(opts.memberships ?? []),
+      },
     } as any;
-    const groupReadAccess = new CommunityGroupReadAccessService(prisma, {} as any);
-    return { handler: new ContentSubscriptionsHandler(prisma, groupReadAccess, new PostsReadService(prisma as never)), prisma };
+    const groupReadAccess = new CommunityGroupReadAccessService(
+      prisma,
+      {} as any,
+    );
+    return {
+      handler: new ContentSubscriptionsHandler(
+        prisma,
+        groupReadAccess,
+        new PostsReadService(prisma as never),
+      ),
+      prisma,
+    };
   }
 
-  it('puts verified viewers in the members map room and everyone else in the counts room', () => {
+  it("puts verified viewers in the members map room and everyone else in the counts room", () => {
     const { handler } = makeSubsFixture();
-    const verified = new FakeSocket('s1', { userId: 'v', viewer: { verified: true } });
-    const unverified = new FakeSocket('s2', { userId: 'u', viewer: { verified: false } });
-    const guest = new FakeSocket('s3', {});
+    const verified = new FakeSocket("s1", {
+      userId: "v",
+      viewer: { verified: true },
+    });
+    const unverified = new FakeSocket("s2", {
+      userId: "u",
+      viewer: { verified: false },
+    });
+    const guest = new FakeSocket("s3", {});
 
-    for (const s of [verified, unverified, guest]) handler.handleMembersMapSubscribe(s as any);
+    for (const s of [verified, unverified, guest])
+      handler.handleMembersMapSubscribe(s as any);
 
-    expect([...verified.joined]).toEqual(['members-map:members']);
-    expect([...unverified.joined]).toEqual(['members-map:counts']);
-    expect([...guest.joined]).toEqual(['members-map:counts']);
+    expect([...verified.joined]).toEqual(["members-map:members"]);
+    expect([...unverified.joined]).toEqual(["members-map:counts"]);
+    expect([...guest.joined]).toEqual(["members-map:counts"]);
     handler.handleMembersMapUnsubscribe(verified as any);
     expect(verified.joined.size).toBe(0);
   });
 
-  it('accepts a public post and joins its room', async () => {
-    const { handler } = makeSubsFixture({ posts: [{ id: 'p1', userId: 'author', visibility: 'public', communityGroupId: null }] });
-    const socket = new FakeSocket('s1', { userId: 'viewer', viewer: {} });
+  it("accepts a public post and joins its room", async () => {
+    const { handler } = makeSubsFixture({
+      posts: [
+        {
+          id: "p1",
+          userId: "author",
+          visibility: "public",
+          communityGroupId: null,
+        },
+      ],
+    });
+    const socket = new FakeSocket("s1", { userId: "viewer", viewer: {} });
 
-    await handler.handlePostsSubscribe(socket as any, { postIds: ['p1'] });
+    await handler.handlePostsSubscribe(socket as any, { postIds: ["p1"] });
 
-    expect(socket.joined.has('post:p1')).toBe(true);
-    expect(socket.lastEmitted('posts:subscribed')).toEqual({ postIds: ['p1'] });
+    expect(socket.joined.has("post:p1")).toBe(true);
+    expect(socket.lastEmitted("posts:subscribed")).toEqual({ postIds: ["p1"] });
   });
 
-  it('rejects a verifiedOnly post for an unverified viewer but accepts it for the author', async () => {
-    const posts = [{ id: 'p1', userId: 'author', visibility: 'verifiedOnly', communityGroupId: null }];
+  it("rejects a verifiedOnly post for an unverified viewer but accepts it for the author", async () => {
+    const posts = [
+      {
+        id: "p1",
+        userId: "author",
+        visibility: "verifiedOnly",
+        communityGroupId: null,
+      },
+    ];
 
     const { handler } = makeSubsFixture({ posts });
-    const viewerSocket = new FakeSocket('s1', { userId: 'viewer', viewer: { verified: false } });
-    await handler.handlePostsSubscribe(viewerSocket as any, { postIds: ['p1'] });
-    expect(viewerSocket.allEmitted('posts:subscribed')).toHaveLength(0);
+    const viewerSocket = new FakeSocket("s1", {
+      userId: "viewer",
+      viewer: { verified: false },
+    });
+    await handler.handlePostsSubscribe(viewerSocket as any, {
+      postIds: ["p1"],
+    });
+    expect(viewerSocket.allEmitted("posts:subscribed")).toHaveLength(0);
 
     const { handler: handler2 } = makeSubsFixture({ posts });
-    const authorSocket = new FakeSocket('s2', { userId: 'author', viewer: { verified: false } });
-    await handler2.handlePostsSubscribe(authorSocket as any, { postIds: ['p1'] });
-    expect(authorSocket.lastEmitted('posts:subscribed')).toEqual({ postIds: ['p1'] });
+    const authorSocket = new FakeSocket("s2", {
+      userId: "author",
+      viewer: { verified: false },
+    });
+    await handler2.handlePostsSubscribe(authorSocket as any, {
+      postIds: ["p1"],
+    });
+    expect(authorSocket.lastEmitted("posts:subscribed")).toEqual({
+      postIds: ["p1"],
+    });
   });
 
-  it('gates group posts on group read access', async () => {
+  it("gates group posts on group read access", async () => {
     const { handler } = makeSubsFixture({
-      posts: [{ id: 'p1', userId: 'author', visibility: 'public', communityGroupId: 'g1' }],
-      groupPolicies: [{ id: 'g1', joinPolicy: 'approval' }],
+      posts: [
+        {
+          id: "p1",
+          userId: "author",
+          visibility: "public",
+          communityGroupId: "g1",
+        },
+      ],
+      groupPolicies: [{ id: "g1", joinPolicy: "approval" }],
       memberships: [],
     });
-    const socket = new FakeSocket('s1', { userId: 'viewer', viewer: { verified: true } });
+    const socket = new FakeSocket("s1", {
+      userId: "viewer",
+      viewer: { verified: true },
+    });
 
-    await handler.handlePostsSubscribe(socket as any, { postIds: ['p1'] });
+    await handler.handlePostsSubscribe(socket as any, { postIds: ["p1"] });
 
-    expect(socket.allEmitted('posts:subscribed')).toHaveLength(0);
-    expect(socket.joined.has('post:p1')).toBe(false);
+    expect(socket.allEmitted("posts:subscribed")).toHaveLength(0);
+    expect(socket.joined.has("post:p1")).toBe(false);
   });
 
-  it('posts:unsubscribe leaves the room and clears the sub', async () => {
-    const { handler } = makeSubsFixture({ posts: [{ id: 'p1', userId: 'a', visibility: 'public', communityGroupId: null }] });
-    const socket = new FakeSocket('s1', { userId: 'viewer', viewer: {} });
-    await handler.handlePostsSubscribe(socket as any, { postIds: ['p1'] });
+  it("posts:unsubscribe leaves the room and clears the sub", async () => {
+    const { handler } = makeSubsFixture({
+      posts: [
+        { id: "p1", userId: "a", visibility: "public", communityGroupId: null },
+      ],
+    });
+    const socket = new FakeSocket("s1", { userId: "viewer", viewer: {} });
+    await handler.handlePostsSubscribe(socket as any, { postIds: ["p1"] });
 
-    handler.handlePostsUnsubscribe(socket as any, { postIds: ['p1'] });
+    handler.handlePostsUnsubscribe(socket as any, { postIds: ["p1"] });
 
-    expect(socket.joined.has('post:p1')).toBe(false);
-    expect(((socket.data as any).postSubs as Set<string>).has('p1')).toBe(false);
+    expect(socket.joined.has("post:p1")).toBe(false);
+    expect(((socket.data as any).postSubs as Set<string>).has("p1")).toBe(
+      false,
+    );
   });
 
-  it('rejects a premiumOnly article for a free viewer', async () => {
-    const { handler } = makeSubsFixture({ articles: [{ id: 'a1', authorId: 'author', visibility: 'premiumOnly' }] });
-    const socket = new FakeSocket('s1', { userId: 'viewer', viewer: { verified: true, premium: false } });
+  it("rejects a premiumOnly article for a free viewer", async () => {
+    const { handler } = makeSubsFixture({
+      articles: [{ id: "a1", authorId: "author", visibility: "premiumOnly" }],
+    });
+    const socket = new FakeSocket("s1", {
+      userId: "viewer",
+      viewer: { verified: true, premium: false },
+    });
 
-    await handler.handleArticlesSubscribe(socket as any, { articleIds: ['a1'] });
+    await handler.handleArticlesSubscribe(socket as any, {
+      articleIds: ["a1"],
+    });
 
-    expect(socket.allEmitted('articles:subscribed')).toHaveLength(0);
+    expect(socket.allEmitted("articles:subscribed")).toHaveLength(0);
   });
 
-  it('accepts an article for a premium viewer', async () => {
-    const { handler } = makeSubsFixture({ articles: [{ id: 'a1', authorId: 'author', visibility: 'premiumOnly' }] });
-    const socket = new FakeSocket('s1', { userId: 'viewer', viewer: { premium: true } });
+  it("accepts an article for a premium viewer", async () => {
+    const { handler } = makeSubsFixture({
+      articles: [{ id: "a1", authorId: "author", visibility: "premiumOnly" }],
+    });
+    const socket = new FakeSocket("s1", {
+      userId: "viewer",
+      viewer: { premium: true },
+    });
 
-    await handler.handleArticlesSubscribe(socket as any, { articleIds: ['a1'] });
+    await handler.handleArticlesSubscribe(socket as any, {
+      articleIds: ["a1"],
+    });
 
-    expect(socket.lastEmitted('articles:subscribed')).toEqual({ articleIds: ['a1'] });
-    expect(socket.joined.has('article:a1')).toBe(true);
+    expect(socket.lastEmitted("articles:subscribed")).toEqual({
+      articleIds: ["a1"],
+    });
+    expect(socket.joined.has("article:a1")).toBe(true);
   });
 });
 
 // ─── MessagingGatewayHandler ─────────────────────────────────────────────────
 
-describe('MessagingGatewayHandler', () => {
+describe("MessagingGatewayHandler", () => {
   function makeMessagingFixture() {
     const server = new FakeServer();
     const presence = makePresence();
     const presenceRedis = makePresenceRedis();
-    const messages = { listConversationParticipantUserIds: jest.fn().mockResolvedValue([]) } as any;
+    const messages = {
+      listConversationParticipantUserIds: jest.fn().mockResolvedValue([]),
+    } as any;
     const throttle = new GatewayThrottleService();
-    const handler = new MessagingGatewayHandler(presence, presenceRedis, messages, throttle, makeContext(presence, server));
+    const handler = new MessagingGatewayHandler(
+      presence,
+      presenceRedis,
+      messages,
+      throttle,
+      makeContext(presence, server),
+    );
     return { server, presence, messages, handler };
   }
 
-  it('messages:screen records chat-screen + active conversation state', () => {
+  it("messages:screen records chat-screen + active conversation state", () => {
     const { presence, handler } = makeMessagingFixture();
-    presence.getUserIdForSocket.mockReturnValue('u1');
-    const socket = new FakeSocket('s1');
+    presence.getUserIdForSocket.mockReturnValue("u1");
+    const socket = new FakeSocket("s1");
 
-    handler.handleMessagesScreen(socket as any, { active: true, conversationId: 'c1' });
+    handler.handleMessagesScreen(socket as any, {
+      active: true,
+      conversationId: "c1",
+    });
 
-    expect(presence.setChatScreenActive).toHaveBeenCalledWith('s1', true);
-    expect(presence.setActiveConversation).toHaveBeenCalledWith('s1', 'c1');
+    expect(presence.setChatScreenActive).toHaveBeenCalledWith("s1", true);
+    expect(presence.setActiveConversation).toHaveBeenCalledWith("s1", "c1");
   });
 
-  it('messages:typing fans out to the other participants\' chat-screen sockets only', async () => {
+  it("messages:typing fans out to the other participants' chat-screen sockets only", async () => {
     const { server, presence, messages, handler } = makeMessagingFixture();
-    presence.getUserIdForSocket.mockReturnValue('u1');
-    messages.listConversationParticipantUserIds.mockResolvedValue(['u1', 'u2']);
-    const target = new FakeSocket('s-target');
+    presence.getUserIdForSocket.mockReturnValue("u1");
+    messages.listConversationParticipantUserIds.mockResolvedValue(["u1", "u2"]);
+    const target = new FakeSocket("s-target");
     server.register(target);
-    presence.getChatScreenSocketIdsForUser.mockImplementation((id: string) => (id === 'u2' ? ['s-target'] : []));
+    presence.getChatScreenSocketIdsForUser.mockImplementation((id: string) =>
+      id === "u2" ? ["s-target"] : [],
+    );
 
-    await handler.handleMessagesTyping(new FakeSocket('s1') as any, { conversationId: 'c1', typing: true });
+    await handler.handleMessagesTyping(new FakeSocket("s1") as any, {
+      conversationId: "c1",
+      typing: true,
+    });
 
-    expect(target.lastEmitted('messages:typing')).toEqual({ conversationId: 'c1', userId: 'u1', typing: true });
+    expect(target.lastEmitted("messages:typing")).toEqual({
+      conversationId: "c1",
+      userId: "u1",
+      typing: true,
+    });
   });
 
-  it('messages:typing is throttled per user+conversation+direction', async () => {
-    jest.spyOn(Date, 'now').mockReturnValue(1000);
+  it("messages:typing is throttled per user+conversation+direction", async () => {
+    jest.spyOn(Date, "now").mockReturnValue(1000);
     const { presence, messages, handler } = makeMessagingFixture();
-    presence.getUserIdForSocket.mockReturnValue('u1');
-    messages.listConversationParticipantUserIds.mockResolvedValue(['u1', 'u2']);
-    const socket = new FakeSocket('s1');
+    presence.getUserIdForSocket.mockReturnValue("u1");
+    messages.listConversationParticipantUserIds.mockResolvedValue(["u1", "u2"]);
+    const socket = new FakeSocket("s1");
 
-    await handler.handleMessagesTyping(socket as any, { conversationId: 'c1', typing: true });
-    await handler.handleMessagesTyping(socket as any, { conversationId: 'c1', typing: true });
+    await handler.handleMessagesTyping(socket as any, {
+      conversationId: "c1",
+      typing: true,
+    });
+    await handler.handleMessagesTyping(socket as any, {
+      conversationId: "c1",
+      typing: true,
+    });
 
-    expect(messages.listConversationParticipantUserIds).toHaveBeenCalledTimes(1);
+    expect(messages.listConversationParticipantUserIds).toHaveBeenCalledTimes(
+      1,
+    );
   });
 });
 
 // ─── PresenceStatusHandler ───────────────────────────────────────────────────
 
-describe('PresenceStatusHandler', () => {
+describe("PresenceStatusHandler", () => {
   function makePresenceHandlerFixture() {
     const server = new FakeServer();
     const presence = makePresence({
@@ -406,19 +563,31 @@ describe('PresenceStatusHandler', () => {
       setIdle: jest.fn().mockResolvedValue(undefined),
       setActive: jest.fn().mockResolvedValue(undefined),
       touchSocket: jest.fn().mockResolvedValue(undefined),
-      platformsByUserIds: jest.fn().mockResolvedValue(new Map([['u1', ['ios', 'web']]])),
-      onlineUserIds: jest.fn().mockResolvedValue(['u-followed']),
-      lastConnectAtMsByUserId: jest.fn().mockResolvedValue(new Map([['u-followed', 1]])),
-      idleByUserIds: jest.fn().mockResolvedValue(new Map([['u-followed', false]])),
+      platformsByUserIds: jest
+        .fn()
+        .mockResolvedValue(new Map([["u1", ["ios", "web"]]])),
+      onlineUserIds: jest.fn().mockResolvedValue(["u-followed"]),
+      lastConnectAtMsByUserId: jest
+        .fn()
+        .mockResolvedValue(new Map([["u-followed", 1]])),
+      idleByUserIds: jest
+        .fn()
+        .mockResolvedValue(new Map([["u-followed", false]])),
       anonymousOnlineCount: jest.fn().mockResolvedValue(0),
     } as any;
     const follows = {
       getFollowListUsersByIds: jest.fn().mockResolvedValue([]),
     };
     const handler = new PresenceStatusHandler(
-      { isProd: jest.fn().mockReturnValue(true), marvBot: jest.fn().mockReturnValue({ enabled: false }) } as any,
+      {
+        isProd: jest.fn().mockReturnValue(true),
+        marvBot: jest.fn().mockReturnValue({ enabled: false }),
+      } as any,
       {} as any,
       presence,
+      presenceRedis,
+      presenceRedis,
+      presenceRedis,
       presenceRedis,
       follows as any,
       {} as any,
@@ -427,7 +596,9 @@ describe('PresenceStatusHandler', () => {
       new GatewayThrottleService(),
       makeContext(presence, server),
       {
-        presenceClusterByUserId: jest.fn(async (ids: string[]) => new Map(ids.map((id) => [id, [id]]))),
+        presenceClusterByUserId: jest.fn(
+          async (ids: string[]) => new Map(ids.map((id) => [id, [id]])),
+        ),
         expandPresenceOnlineIds: jest.fn(async (ids: string[]) => ({
           displayedIds: [...ids],
           sourceByDisplayedId: new Map(ids.map((id) => [id, id])),
@@ -440,91 +611,111 @@ describe('PresenceStatusHandler', () => {
     return { server, presence, presenceRedis, follows, handler };
   }
 
-  it('presence:idle marks the user idle and fans out presence:idle to subscribers', () => {
-    const { server, presence, presenceRedis, handler } = makePresenceHandlerFixture();
-    presence.getUserIdForSocket.mockReturnValue('u1');
-    const subscriber = new FakeSocket('s-sub');
+  it("presence:idle marks the user idle and fans out presence:idle to subscribers", () => {
+    const { server, presence, presenceRedis, handler } =
+      makePresenceHandlerFixture();
+    presence.getUserIdForSocket.mockReturnValue("u1");
+    const subscriber = new FakeSocket("s-sub");
     server.register(subscriber);
-    presence.getSubscribers.mockReturnValue(new Set(['s-sub']));
+    presence.getSubscribers.mockReturnValue(new Set(["s-sub"]));
 
-    handler.handleIdle(new FakeSocket('s1') as any);
+    handler.handleIdle(new FakeSocket("s1") as any);
 
-    expect(presence.setUserIdle).toHaveBeenCalledWith('u1');
-    expect(presenceRedis.setIdle).toHaveBeenCalledWith('u1');
-    expect(subscriber.lastEmitted('presence:idle')).toEqual({ userId: 'u1' });
+    expect(presence.setUserIdle).toHaveBeenCalledWith("u1");
+    expect(presenceRedis.setIdle).toHaveBeenCalledWith("u1");
+    expect(subscriber.lastEmitted("presence:idle")).toEqual({ userId: "u1" });
   });
 
-  it('presence:active emits presence:active only when the user was idle', () => {
+  it("presence:active emits presence:active only when the user was idle", () => {
     jest.useFakeTimers();
     try {
       const { server, presence, handler } = makePresenceHandlerFixture();
-      presence.getUserIdForSocket.mockReturnValue('u1');
-      const subscriber = new FakeSocket('s-sub');
+      presence.getUserIdForSocket.mockReturnValue("u1");
+      const subscriber = new FakeSocket("s-sub");
       server.register(subscriber);
-      presence.getSubscribers.mockReturnValue(new Set(['s-sub']));
+      presence.getSubscribers.mockReturnValue(new Set(["s-sub"]));
 
       presence.isUserIdle.mockReturnValue(false);
-      handler.handleActive(new FakeSocket('s1') as any);
-      expect(subscriber.allEmitted('presence:active')).toHaveLength(0);
+      handler.handleActive(new FakeSocket("s1") as any);
+      expect(subscriber.allEmitted("presence:active")).toHaveLength(0);
 
       presence.isUserIdle.mockReturnValue(true);
-      handler.handleActive(new FakeSocket('s1') as any);
-      expect(subscriber.lastEmitted('presence:active')).toEqual({ userId: 'u1' });
+      handler.handleActive(new FakeSocket("s1") as any);
+      expect(subscriber.lastEmitted("presence:active")).toEqual({
+        userId: "u1",
+      });
     } finally {
       jest.useRealTimers();
     }
   });
 
-  it('emits platform changes to online-feed listeners', async () => {
+  it("emits platform changes to online-feed listeners", async () => {
     const { server, presence, handler } = makePresenceHandlerFixture();
-    const listener = new FakeSocket('s-feed');
+    const listener = new FakeSocket("s-feed");
     server.register(listener);
-    presence.getOnlineFeedListeners.mockReturnValue(new Set(['s-feed']));
+    presence.getOnlineFeedListeners.mockReturnValue(new Set(["s-feed"]));
 
-    await handler.emitPlatformsChanged('u1');
+    await handler.emitPlatformsChanged("u1");
 
-    expect(listener.lastEmitted('presence:platforms-changed')).toEqual({
-      userId: 'u1',
-      platforms: ['ios', 'web'],
+    expect(listener.lastEmitted("presence:platforms-changed")).toEqual({
+      userId: "u1",
+      platforms: ["ios", "web"],
     });
   });
 
-  it('online-feed snapshot loads follow relationships for the subscribing viewer', async () => {
+  it("online-feed snapshot loads follow relationships for the subscribing viewer", async () => {
     const { presence, follows, handler } = makePresenceHandlerFixture();
     follows.getFollowListUsersByIds.mockResolvedValue([
       {
-        id: 'u-followed',
-        username: 'marv',
-        relationship: { viewerFollowsUser: true, userFollowsViewer: false, viewerPostNotificationsEnabled: true },
+        id: "u-followed",
+        username: "marv",
+        relationship: {
+          viewerFollowsUser: true,
+          userFollowsViewer: false,
+          viewerPostNotificationsEnabled: true,
+        },
       },
     ]);
-    const socket = new FakeSocket('s-viewer', { userId: 'viewer-1', viewer: { verified: true } });
+    const socket = new FakeSocket("s-viewer", {
+      userId: "viewer-1",
+      viewer: { verified: true },
+    });
 
     await handler.handleSubscribeOnlineFeed(socket as any);
 
     expect(follows.getFollowListUsersByIds).toHaveBeenCalledWith({
-      viewerUserId: 'viewer-1',
-      userIds: ['u-followed'],
+      viewerUserId: "viewer-1",
+      userIds: ["u-followed"],
     });
-    const snap = socket.lastEmitted('presence:onlineFeedSnapshot') as {
+    const snap = socket.lastEmitted("presence:onlineFeedSnapshot") as {
       users: Array<{ relationship?: { viewerFollowsUser?: boolean } }>;
     };
     expect(snap.users[0]?.relationship?.viewerFollowsUser).toBe(true);
-    expect(presence.subscribeOnlineFeed).toHaveBeenCalledWith('s-viewer');
+    expect(presence.subscribeOnlineFeed).toHaveBeenCalledWith("s-viewer");
   });
 
   it.each([
-    ['a signed-out guest', {}],
-    ['an unverified member', { userId: 'viewer-1', viewer: { verified: false, verifiedStatus: 'none' } }],
-  ])('gives %s a counts-only snapshot with no users', async (_label, data) => {
+    ["a signed-out guest", {}],
+    [
+      "an unverified member",
+      {
+        userId: "viewer-1",
+        viewer: { verified: false, verifiedStatus: "none" },
+      },
+    ],
+  ])("gives %s a counts-only snapshot with no users", async (_label, data) => {
     const { presence, follows, handler } = makePresenceHandlerFixture();
-    follows.getFollowListUsersByIds.mockResolvedValue([{ id: 'u-followed', username: 'marv' }]);
-    const socket = new FakeSocket('s-guest', data);
+    follows.getFollowListUsersByIds.mockResolvedValue([
+      { id: "u-followed", username: "marv" },
+    ]);
+    const socket = new FakeSocket("s-guest", data);
 
     await handler.handleSubscribeOnlineFeed(socket as any);
 
-    expect(presence.subscribeOnlineFeed).toHaveBeenCalledWith('s-guest', { countOnly: true });
-    expect(socket.lastEmitted('presence:onlineFeedSnapshot')).toEqual({
+    expect(presence.subscribeOnlineFeed).toHaveBeenCalledWith("s-guest", {
+      countOnly: true,
+    });
+    expect(socket.lastEmitted("presence:onlineFeedSnapshot")).toEqual({
       users: [],
       totalOnline: 1,
       anonymousOnline: 0,
@@ -532,73 +723,91 @@ describe('PresenceStatusHandler', () => {
     });
   });
 
-  it('sends count-only listeners one debounced presence:online-count and never user payloads', async () => {
+  it("sends count-only listeners one debounced presence:online-count and never user payloads", async () => {
     jest.useFakeTimers();
     try {
-      const { server, presence, follows, handler } = makePresenceHandlerFixture();
-      follows.getFollowListUsersByIds.mockResolvedValue([{ id: 'u-followed', username: 'marv' }]);
-      const guest = new FakeSocket('s-guest');
+      const { server, presence, follows, handler } =
+        makePresenceHandlerFixture();
+      follows.getFollowListUsersByIds.mockResolvedValue([
+        { id: "u-followed", username: "marv" },
+      ]);
+      const guest = new FakeSocket("s-guest");
       server.register(guest);
-      presence.getCountOnlyFeedListeners.mockReturnValue(new Set(['s-guest']));
+      presence.getCountOnlyFeedListeners.mockReturnValue(new Set(["s-guest"]));
 
-      await handler.emitOnline('u-followed');
+      await handler.emitOnline("u-followed");
       await handler.emitAnonymousCount(3);
       await jest.advanceTimersByTimeAsync(2000);
 
-      expect(guest.allEmitted('presence:online-count')).toHaveLength(1);
-      expect(guest.lastEmitted('presence:online-count')).toEqual({ totalOnline: 1, anonymousOnline: 0 });
-      expect(guest.lastEmitted('presence:online')).toBeUndefined();
+      expect(guest.allEmitted("presence:online-count")).toHaveLength(1);
+      expect(guest.lastEmitted("presence:online-count")).toEqual({
+        totalOnline: 1,
+        anonymousOnline: 0,
+      });
+      expect(guest.lastEmitted("presence:online")).toBeUndefined();
     } finally {
       jest.useRealTimers();
     }
   });
 
-  it('broadcast presence:online omits follow relationship (one payload for every viewer)', async () => {
-    const { server, presence, presenceRedis, follows, handler } = makePresenceHandlerFixture();
+  it("broadcast presence:online omits follow relationship (one payload for every viewer)", async () => {
+    const { server, presence, presenceRedis, follows, handler } =
+      makePresenceHandlerFixture();
     follows.getFollowListUsersByIds.mockResolvedValue([
       {
-        id: 'u-new',
-        username: 'newguy',
-        relationship: { viewerFollowsUser: false, userFollowsViewer: false, viewerPostNotificationsEnabled: false },
+        id: "u-new",
+        username: "newguy",
+        relationship: {
+          viewerFollowsUser: false,
+          userFollowsViewer: false,
+          viewerPostNotificationsEnabled: false,
+        },
       },
     ]);
-    presenceRedis.lastConnectAtMsByUserId.mockResolvedValue(new Map([['u-new', 9]]));
-    presenceRedis.idleByUserIds.mockResolvedValue(new Map([['u-new', false]]));
-    presenceRedis.platformsByUserIds.mockResolvedValue(new Map([['u-new', ['web']]]));
+    presenceRedis.lastConnectAtMsByUserId.mockResolvedValue(
+      new Map([["u-new", 9]]),
+    );
+    presenceRedis.idleByUserIds.mockResolvedValue(new Map([["u-new", false]]));
+    presenceRedis.platformsByUserIds.mockResolvedValue(
+      new Map([["u-new", ["web"]]]),
+    );
     presence.getActiveStatusByUserId = jest.fn().mockResolvedValue(null);
-    const listener = new FakeSocket('s-feed');
+    const listener = new FakeSocket("s-feed");
     server.register(listener);
-    presence.getOnlineFeedListeners.mockReturnValue(new Set(['s-feed']));
+    presence.getOnlineFeedListeners.mockReturnValue(new Set(["s-feed"]));
     presence.getSubscribers.mockReturnValue(new Set());
 
-    await handler.emitOnline('u-new');
+    await handler.emitOnline("u-new");
 
-    const payload = listener.lastEmitted('presence:online') as { user?: { relationship?: unknown } };
+    const payload = listener.lastEmitted("presence:online") as {
+      user?: { relationship?: unknown };
+    };
     expect(payload.user).toBeDefined();
     expect(payload.user?.relationship).toBeUndefined();
   });
 
-  it('uses the originating instance platform snapshot for cross-instance events', async () => {
-    const { server, presence, presenceRedis, handler } = makePresenceHandlerFixture();
-    const listener = new FakeSocket('s-feed');
+  it("uses the originating instance platform snapshot for cross-instance events", async () => {
+    const { server, presence, presenceRedis, handler } =
+      makePresenceHandlerFixture();
+    const listener = new FakeSocket("s-feed");
     server.register(listener);
-    presence.getOnlineFeedListeners.mockReturnValue(new Set(['s-feed']));
+    presence.getOnlineFeedListeners.mockReturnValue(new Set(["s-feed"]));
 
-    await handler.emitPlatformsChanged('u1', ['ios', 'web']);
+    await handler.emitPlatformsChanged("u1", ["ios", "web"]);
 
     expect(presenceRedis.platformsByUserIds).not.toHaveBeenCalled();
-    expect(listener.lastEmitted('presence:platforms-changed')).toEqual({
-      userId: 'u1',
-      platforms: ['ios', 'web'],
+    expect(listener.lastEmitted("presence:platforms-changed")).toEqual({
+      userId: "u1",
+      platforms: ["ios", "web"],
     });
   });
 });
 
 // ─── CommunityGroupReadAccessService ─────────────────────────────────────────
 
-describe('CommunityGroupReadAccessService', () => {
+describe("CommunityGroupReadAccessService", () => {
   function makeService(opts: {
-    group?: { joinPolicy: 'open' | 'approval' } | null;
+    group?: { joinPolicy: "open" | "approval" } | null;
     membership?: { status: string } | null;
     viewer?: Record<string, unknown> | null;
     isVerified?: boolean;
@@ -606,11 +815,19 @@ describe('CommunityGroupReadAccessService', () => {
     const prisma = {
       communityGroup: {
         findFirst: jest.fn().mockResolvedValue(opts.group ?? null),
-        findMany: jest.fn().mockResolvedValue(opts.group ? [{ id: 'g1', joinPolicy: opts.group.joinPolicy }] : []),
+        findMany: jest
+          .fn()
+          .mockResolvedValue(
+            opts.group ? [{ id: "g1", joinPolicy: opts.group.joinPolicy }] : [],
+          ),
       },
       communityGroupMember: {
         findUnique: jest.fn().mockResolvedValue(opts.membership ?? null),
-        findMany: jest.fn().mockResolvedValue(opts.membership?.status === 'active' ? [{ groupId: 'g1' }] : []),
+        findMany: jest
+          .fn()
+          .mockResolvedValue(
+            opts.membership?.status === "active" ? [{ groupId: "g1" }] : [],
+          ),
       },
     } as any;
     const viewerContextService = {
@@ -620,68 +837,132 @@ describe('CommunityGroupReadAccessService', () => {
     return new CommunityGroupReadAccessService(prisma, viewerContextService);
   }
 
-  it('assertCanRead: 404s for an unknown group', async () => {
+  it("assertCanRead: 404s for an unknown group", async () => {
     const svc = makeService({ group: null });
-    await expect(svc.assertCanRead('u1', 'missing')).rejects.toThrow('Group not found.');
+    await expect(svc.assertCanRead("u1", "missing")).rejects.toThrow(
+      "Group not found.",
+    );
   });
 
-  it('assertCanRead: allows site admins regardless of membership', async () => {
-    const svc = makeService({ group: { joinPolicy: 'approval' }, viewer: { siteAdmin: true } });
-    await expect(svc.assertCanRead('u1', 'g1')).resolves.toBeUndefined();
+  it("assertCanRead: allows site admins regardless of membership", async () => {
+    const svc = makeService({
+      group: { joinPolicy: "approval" },
+      viewer: { siteAdmin: true },
+    });
+    await expect(svc.assertCanRead("u1", "g1")).resolves.toBeUndefined();
   });
 
-  it('assertCanRead: allows verified viewers into open groups', async () => {
-    const svc = makeService({ group: { joinPolicy: 'open' }, viewer: {}, isVerified: true });
-    await expect(svc.assertCanRead('u1', 'g1')).resolves.toBeUndefined();
+  it("assertCanRead: allows verified viewers into open groups", async () => {
+    const svc = makeService({
+      group: { joinPolicy: "open" },
+      viewer: {},
+      isVerified: true,
+    });
+    await expect(svc.assertCanRead("u1", "g1")).resolves.toBeUndefined();
   });
 
-  it('assertCanRead: rejects unverified viewers from open groups', async () => {
-    const svc = makeService({ group: { joinPolicy: 'open' }, viewer: {}, isVerified: false });
-    await expect(svc.assertCanRead('u1', 'g1')).rejects.toThrow('Verify your account to view groups.');
+  it("assertCanRead: rejects unverified viewers from open groups", async () => {
+    const svc = makeService({
+      group: { joinPolicy: "open" },
+      viewer: {},
+      isVerified: false,
+    });
+    await expect(svc.assertCanRead("u1", "g1")).rejects.toThrow(
+      "Verify your account to view groups.",
+    );
   });
 
-  it('assertCanRead: rejects non-members of approval groups', async () => {
-    const svc = makeService({ group: { joinPolicy: 'approval' }, viewer: {}, isVerified: true, membership: null });
-    await expect(svc.assertCanRead('u1', 'g1')).rejects.toThrow('You are not a member of this group.');
+  it("assertCanRead: rejects non-members of approval groups", async () => {
+    const svc = makeService({
+      group: { joinPolicy: "approval" },
+      viewer: {},
+      isVerified: true,
+      membership: null,
+    });
+    await expect(svc.assertCanRead("u1", "g1")).rejects.toThrow(
+      "You are not a member of this group.",
+    );
   });
 
-  it('assertCanRead: allows active members of approval groups', async () => {
-    const svc = makeService({ group: { joinPolicy: 'approval' }, viewer: {}, isVerified: true, membership: { status: 'active' } });
-    await expect(svc.assertCanRead('u1', 'g1')).resolves.toBeUndefined();
+  it("assertCanRead: allows active members of approval groups", async () => {
+    const svc = makeService({
+      group: { joinPolicy: "approval" },
+      viewer: {},
+      isVerified: true,
+      membership: { status: "active" },
+    });
+    await expect(svc.assertCanRead("u1", "g1")).resolves.toBeUndefined();
   });
 
-  it('filterReadableGroupIds: active member yes, anonymous into approval group no', async () => {
-    const memberSvc = makeService({ group: { joinPolicy: 'approval' }, membership: { status: 'active' } });
+  it("filterReadableGroupIds: active member yes, anonymous into approval group no", async () => {
+    const memberSvc = makeService({
+      group: { joinPolicy: "approval" },
+      membership: { status: "active" },
+    });
     await expect(
-      memberSvc.filterReadableGroupIds({ viewerUserId: 'u1', viewerIsAdmin: false, viewerIsVerified: true, groupIds: ['g1'] }),
-    ).resolves.toEqual(new Set(['g1']));
+      memberSvc.filterReadableGroupIds({
+        viewerUserId: "u1",
+        viewerIsAdmin: false,
+        viewerIsVerified: true,
+        groupIds: ["g1"],
+      }),
+    ).resolves.toEqual(new Set(["g1"]));
 
-    const anonSvc = makeService({ group: { joinPolicy: 'approval' } });
+    const anonSvc = makeService({ group: { joinPolicy: "approval" } });
     await expect(
-      anonSvc.filterReadableGroupIds({ viewerUserId: null, viewerIsAdmin: false, viewerIsVerified: false, groupIds: ['g1'] }),
+      anonSvc.filterReadableGroupIds({
+        viewerUserId: null,
+        viewerIsAdmin: false,
+        viewerIsVerified: false,
+        groupIds: ["g1"],
+      }),
     ).resolves.toEqual(new Set());
   });
 
-  it('rejects revoked verification for approval-group members over HTTP and sockets', async () => {
-    const svc = makeService({ group: { joinPolicy: 'approval' }, viewer: {}, isVerified: false, membership: { status: 'active' } });
-    await expect(svc.assertCanRead('u1', 'g1')).rejects.toThrow('Verify your account to view groups.');
-    await expect(svc.filterReadableGroupIds({ viewerUserId: 'u1', viewerIsAdmin: false, viewerIsVerified: false, groupIds: ['g1'] })).resolves.toEqual(new Set());
+  it("rejects revoked verification for approval-group members over HTTP and sockets", async () => {
+    const svc = makeService({
+      group: { joinPolicy: "approval" },
+      viewer: {},
+      isVerified: false,
+      membership: { status: "active" },
+    });
+    await expect(svc.assertCanRead("u1", "g1")).rejects.toThrow(
+      "Verify your account to view groups.",
+    );
+    await expect(
+      svc.filterReadableGroupIds({
+        viewerUserId: "u1",
+        viewerIsAdmin: false,
+        viewerIsVerified: false,
+        groupIds: ["g1"],
+      }),
+    ).resolves.toEqual(new Set());
   });
 
-  it('filterReadableGroupIds: open group requires verification', async () => {
-    const svc = makeService({ group: { joinPolicy: 'open' } });
+  it("filterReadableGroupIds: open group requires verification", async () => {
+    const svc = makeService({ group: { joinPolicy: "open" } });
     await expect(
-      svc.filterReadableGroupIds({ viewerUserId: 'u1', viewerIsAdmin: false, viewerIsVerified: true, groupIds: ['g1'] }),
-    ).resolves.toEqual(new Set(['g1']));
+      svc.filterReadableGroupIds({
+        viewerUserId: "u1",
+        viewerIsAdmin: false,
+        viewerIsVerified: true,
+        groupIds: ["g1"],
+      }),
+    ).resolves.toEqual(new Set(["g1"]));
     await expect(
-      svc.filterReadableGroupIds({ viewerUserId: 'u1', viewerIsAdmin: false, viewerIsVerified: false, groupIds: ['g1'] }),
+      svc.filterReadableGroupIds({
+        viewerUserId: "u1",
+        viewerIsAdmin: false,
+        viewerIsVerified: false,
+        groupIds: ["g1"],
+      }),
     ).resolves.toEqual(new Set());
   });
 });
 
 // ─── Connection lifecycle under admin impersonation ──────────────────────────
 
-describe('PresenceStatusHandler — impersonated connections', () => {
+describe("PresenceStatusHandler — impersonated connections", () => {
   // Real timers would leave a 5-minute idle timer dangling per connect.
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
@@ -690,7 +971,9 @@ describe('PresenceStatusHandler — impersonated connections', () => {
     const server = new FakeServer();
     const presence = makePresence({
       register: jest.fn().mockReturnValue({ isNewlyOnline: true }),
-      unregister: jest.fn().mockReturnValue({ userId: 'u1', isNowOffline: true }),
+      unregister: jest
+        .fn()
+        .mockReturnValue({ userId: "u1", isNowOffline: true }),
       persistLastSeenAt: jest.fn(),
       persistDailyActivity: jest.fn(),
       persistLastOnlineAt: jest.fn(),
@@ -713,17 +996,23 @@ describe('PresenceStatusHandler — impersonated connections', () => {
     } as any;
     const auth = {
       meFromSessionToken: jest.fn().mockResolvedValue({
-        user: { id: 'u1', username: 'target', verifiedStatus: 'none' },
-        sessionId: 's1',
+        user: { id: "u1", username: "target", verifiedStatus: "none" },
+        sessionId: "s1",
         expiresAt: new Date(),
         renewed: false,
         impersonatedByUserId,
       }),
     } as any;
     const handler = new PresenceStatusHandler(
-      { isProd: jest.fn().mockReturnValue(true), marvBot: jest.fn().mockReturnValue({ enabled: false }) } as any,
+      {
+        isProd: jest.fn().mockReturnValue(true),
+        marvBot: jest.fn().mockReturnValue({ enabled: false }),
+      } as any,
       auth,
       presence,
+      presenceRedis,
+      presenceRedis,
+      presenceRedis,
       presenceRedis,
       { getFollowListUsersByIds: jest.fn().mockResolvedValue([]) } as any,
       { getJson: jest.fn().mockResolvedValue(null) } as any,
@@ -732,7 +1021,9 @@ describe('PresenceStatusHandler — impersonated connections', () => {
       new GatewayThrottleService(),
       makeContext(presence, server),
       {
-        presenceClusterByUserId: jest.fn(async (ids: string[]) => new Map(ids.map((id) => [id, [id]]))),
+        presenceClusterByUserId: jest.fn(
+          async (ids: string[]) => new Map(ids.map((id) => [id, [id]])),
+        ),
         expandPresenceOnlineIds: jest.fn(async (ids: string[]) => ({
           displayedIds: [...ids],
           sourceByDisplayedId: new Map(ids.map((id) => [id, id])),
@@ -742,29 +1033,47 @@ describe('PresenceStatusHandler — impersonated connections', () => {
       makeOnlineMembers(presenceRedis),
       { dispatch: jest.fn() } as any,
     );
-    const emitOnline = jest.spyOn(handler, 'emitOnline').mockResolvedValue(undefined);
-    const emitPlatformsChanged = jest.spyOn(handler, 'emitPlatformsChanged').mockResolvedValue(undefined);
-    const emitOffline = jest.spyOn(handler, 'emitOffline').mockResolvedValue(undefined);
+    const emitOnline = jest
+      .spyOn(handler, "emitOnline")
+      .mockResolvedValue(undefined);
+    const emitPlatformsChanged = jest
+      .spyOn(handler, "emitPlatformsChanged")
+      .mockResolvedValue(undefined);
+    const emitOffline = jest
+      .spyOn(handler, "emitOffline")
+      .mockResolvedValue(undefined);
 
-    const socket = new FakeSocket('s1');
-    (socket as any).handshake = { headers: { cookie: 'moh_session=tok' }, query: { client: 'web' } };
+    const socket = new FakeSocket("s1");
+    (socket as any).handshake = {
+      headers: { cookie: "moh_session=tok" },
+      query: { client: "web" },
+    };
 
-    return { handler, presence, presenceRedis, socket, emitOnline, emitPlatformsChanged, emitOffline };
+    return {
+      handler,
+      presence,
+      presenceRedis,
+      socket,
+      emitOnline,
+      emitPlatformsChanged,
+      emitOffline,
+    };
   }
 
-  it('an ordinary connection persists activity and announces the user online', async () => {
-    const { handler, presence, socket, emitOnline } = makeConnectionFixture(null);
+  it("an ordinary connection persists activity and announces the user online", async () => {
+    const { handler, presence, socket, emitOnline } =
+      makeConnectionFixture(null);
 
     await handler.handleConnection(socket as any);
 
-    expect(presence.persistLastSeenAt).toHaveBeenCalledWith('u1');
-    expect(presence.persistDailyActivity).toHaveBeenCalledWith('u1');
-    expect(emitOnline).toHaveBeenCalledWith('u1');
+    expect(presence.persistLastSeenAt).toHaveBeenCalledWith("u1");
+    expect(presence.persistDailyActivity).toHaveBeenCalledWith("u1");
+    expect(emitOnline).toHaveBeenCalledWith("u1");
   });
 
-  it('an impersonated connection writes no activity and announces nothing', async () => {
+  it("an impersonated connection writes no activity and announces nothing", async () => {
     const { handler, presence, socket, emitOnline, emitPlatformsChanged } =
-      makeConnectionFixture('admin-1');
+      makeConnectionFixture("admin-1");
 
     await handler.handleConnection(socket as any);
 
@@ -777,22 +1086,24 @@ describe('PresenceStatusHandler — impersonated connections', () => {
     expect(emitPlatformsChanged).not.toHaveBeenCalled();
   });
 
-  it('registers the impersonated socket in-memory only (not in Redis) so per-user events reach the admin', async () => {
-    const { handler, presence, presenceRedis, socket } = makeConnectionFixture('admin-1');
+  it("registers the impersonated socket in-memory only (not in Redis) so per-user events reach the admin", async () => {
+    const { handler, presence, presenceRedis, socket } =
+      makeConnectionFixture("admin-1");
 
     await handler.handleConnection(socket as any);
 
     // `emitToUser` resolves sockets from the in-memory registry — the admin must see
     // live notifications and messages while impersonating.
-    expect(presence.register).toHaveBeenCalledWith('s1', 'u1', 'web');
+    expect(presence.register).toHaveBeenCalledWith("s1", "u1", "web");
     // Must NOT write to Redis: an impersonated socket must not make the target
     // appear online to other users or other API instances.
     expect(presenceRedis.registerSocket).not.toHaveBeenCalled();
     expect((socket.data as { impersonated?: boolean }).impersonated).toBe(true);
   });
 
-  it('an impersonated disconnect neither stamps lastOnlineAt nor announces offline, and skips Redis unregister', async () => {
-    const { handler, presence, presenceRedis, socket, emitOffline } = makeConnectionFixture('admin-1');
+  it("an impersonated disconnect neither stamps lastOnlineAt nor announces offline, and skips Redis unregister", async () => {
+    const { handler, presence, presenceRedis, socket, emitOffline } =
+      makeConnectionFixture("admin-1");
     await handler.handleConnection(socket as any);
 
     handler.handleDisconnect(socket as any);
@@ -807,17 +1118,19 @@ describe('PresenceStatusHandler — impersonated connections', () => {
   });
 });
 
-describe('PresenceStatusHandler — anonymous guest sockets', () => {
+describe("PresenceStatusHandler — anonymous guest sockets", () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
 
-  const VALID_ANON = 'anon_abcdef123456';
+  const VALID_ANON = "anon_abcdef123456";
 
   function makeAnonFixture(opts?: { userId?: string | null; anon?: string }) {
     const server = new FakeServer();
     const presence = makePresence({
       register: jest.fn().mockReturnValue({ isNewlyOnline: true }),
-      unregister: jest.fn().mockReturnValue({ userId: opts?.userId ?? null, isNowOffline: false }),
+      unregister: jest
+        .fn()
+        .mockReturnValue({ userId: opts?.userId ?? null, isNowOffline: false }),
       persistLastSeenAt: jest.fn(),
       persistDailyActivity: jest.fn(),
       persistLastOnlineAt: jest.fn(),
@@ -827,7 +1140,9 @@ describe('PresenceStatusHandler — anonymous guest sockets', () => {
       getLastActivity: jest.fn().mockReturnValue(0),
       presenceIdleAfterMinutes: jest.fn().mockReturnValue(5),
       getActiveStatusByUserId: jest.fn().mockResolvedValue(null),
-      getOnlineFeedListeners: jest.fn().mockReturnValue(new Set(['listener-1'])),
+      getOnlineFeedListeners: jest
+        .fn()
+        .mockReturnValue(new Set(["listener-1"])),
     });
     const presenceRedis = {
       registerSocket: jest.fn().mockResolvedValue({ isNewlyOnline: true }),
@@ -844,8 +1159,12 @@ describe('PresenceStatusHandler — anonymous guest sockets', () => {
       meFromSessionToken: jest.fn().mockResolvedValue(
         opts?.userId
           ? {
-              user: { id: opts.userId, username: 'member', verifiedStatus: 'none' },
-              sessionId: 's1',
+              user: {
+                id: opts.userId,
+                username: "member",
+                verifiedStatus: "none",
+              },
+              sessionId: "s1",
               expiresAt: new Date(),
               renewed: false,
               impersonatedByUserId: null,
@@ -854,18 +1173,29 @@ describe('PresenceStatusHandler — anonymous guest sockets', () => {
       ),
     } as any;
     const handler = new PresenceStatusHandler(
-      { isProd: jest.fn().mockReturnValue(true), marvBot: jest.fn().mockReturnValue({ enabled: false }) } as any,
+      {
+        isProd: jest.fn().mockReturnValue(true),
+        marvBot: jest.fn().mockReturnValue({ enabled: false }),
+      } as any,
       auth,
       presence,
       presenceRedis,
+      presenceRedis,
+      presenceRedis,
+      presenceRedis,
       { getFollowListUsersByIds: jest.fn().mockResolvedValue([]) } as any,
-      { getJson: jest.fn().mockResolvedValue(null), setJson: jest.fn().mockResolvedValue(undefined) } as any,
+      {
+        getJson: jest.fn().mockResolvedValue(null),
+        setJson: jest.fn().mockResolvedValue(undefined),
+      } as any,
       { getLobbyCountsBySpaceId: jest.fn().mockReturnValue({}) } as any,
       {} as any,
       new GatewayThrottleService(),
       makeContext(presence, server),
       {
-        presenceClusterByUserId: jest.fn(async (ids: string[]) => new Map(ids.map((id) => [id, [id]]))),
+        presenceClusterByUserId: jest.fn(
+          async (ids: string[]) => new Map(ids.map((id) => [id, [id]])),
+        ),
         expandPresenceOnlineIds: jest.fn(async (ids: string[]) => ({
           displayedIds: [...ids],
           sourceByDisplayedId: new Map(ids.map((id) => [id, id])),
@@ -875,27 +1205,39 @@ describe('PresenceStatusHandler — anonymous guest sockets', () => {
       makeOnlineMembers(presenceRedis),
       { dispatch: jest.fn() } as any,
     );
-    const emitAnonymousCount = jest.spyOn(handler, 'emitAnonymousCount').mockResolvedValue(undefined);
-    const emitOnline = jest.spyOn(handler, 'emitOnline').mockResolvedValue(undefined);
-    const socket = new FakeSocket('s1');
+    const emitAnonymousCount = jest
+      .spyOn(handler, "emitAnonymousCount")
+      .mockResolvedValue(undefined);
+    const emitOnline = jest
+      .spyOn(handler, "emitOnline")
+      .mockResolvedValue(undefined);
+    const socket = new FakeSocket("s1");
     (socket as any).handshake = {
       headers: {},
-      query: { client: 'web', ...(opts?.anon ? { anon: opts.anon } : {}) },
+      query: { client: "web", ...(opts?.anon ? { anon: opts.anon } : {}) },
     };
-    return { handler, presence, presenceRedis, socket, emitAnonymousCount, emitOnline };
+    return {
+      handler,
+      presence,
+      presenceRedis,
+      socket,
+      emitAnonymousCount,
+      emitOnline,
+    };
   }
 
-  it('registers a valid logged-out anon id and announces the guest count', async () => {
-    const { handler, presenceRedis, socket, emitAnonymousCount, emitOnline } = makeAnonFixture({
-      anon: VALID_ANON,
-    });
+  it("registers a valid logged-out anon id and announces the guest count", async () => {
+    const { handler, presenceRedis, socket, emitAnonymousCount, emitOnline } =
+      makeAnonFixture({
+        anon: VALID_ANON,
+      });
 
     await handler.handleConnection(socket as any);
 
     expect(presenceRedis.registerAnonSocket).toHaveBeenCalledWith({
-      socketId: 's1',
+      socketId: "s1",
       anonId: VALID_ANON,
-      client: 'web',
+      client: "web",
     });
     expect(presenceRedis.registerSocket).not.toHaveBeenCalled();
     expect(emitAnonymousCount).toHaveBeenCalled();
@@ -903,11 +1245,12 @@ describe('PresenceStatusHandler — anonymous guest sockets', () => {
     expect((socket.data as { anonId?: string }).anonId).toBe(VALID_ANON);
   });
 
-  it('ignores anon from an iOS handshake', async () => {
-    const { handler, presenceRedis, socket, emitAnonymousCount } = makeAnonFixture({
-      anon: VALID_ANON,
-    });
-    (socket as any).handshake.query = { client: 'ios', anon: VALID_ANON };
+  it("ignores anon from an iOS handshake", async () => {
+    const { handler, presenceRedis, socket, emitAnonymousCount } =
+      makeAnonFixture({
+        anon: VALID_ANON,
+      });
+    (socket as any).handshake.query = { client: "ios", anon: VALID_ANON };
 
     await handler.handleConnection(socket as any);
 
@@ -916,11 +1259,12 @@ describe('PresenceStatusHandler — anonymous guest sockets', () => {
     expect((socket.data as { anonId?: string }).anonId).toBeUndefined();
   });
 
-  it('ignores anon when the socket is signed in', async () => {
-    const { handler, presenceRedis, socket, emitAnonymousCount } = makeAnonFixture({
-      userId: 'u1',
-      anon: VALID_ANON,
-    });
+  it("ignores anon when the socket is signed in", async () => {
+    const { handler, presenceRedis, socket, emitAnonymousCount } =
+      makeAnonFixture({
+        userId: "u1",
+        anon: VALID_ANON,
+      });
 
     await handler.handleConnection(socket as any);
 
@@ -930,10 +1274,11 @@ describe('PresenceStatusHandler — anonymous guest sockets', () => {
     expect((socket.data as { anonId?: string }).anonId).toBeUndefined();
   });
 
-  it('unregisters the guest on disconnect and re-emits the count when they leave', async () => {
-    const { handler, presenceRedis, socket, emitAnonymousCount } = makeAnonFixture({
-      anon: VALID_ANON,
-    });
+  it("unregisters the guest on disconnect and re-emits the count when they leave", async () => {
+    const { handler, presenceRedis, socket, emitAnonymousCount } =
+      makeAnonFixture({
+        anon: VALID_ANON,
+      });
     await handler.handleConnection(socket as any);
     emitAnonymousCount.mockClear();
 
@@ -942,22 +1287,22 @@ describe('PresenceStatusHandler — anonymous guest sockets', () => {
     await Promise.resolve();
 
     expect(presenceRedis.unregisterAnonSocket).toHaveBeenCalledWith({
-      socketId: 's1',
+      socketId: "s1",
       anonId: VALID_ANON,
     });
     expect(emitAnonymousCount).toHaveBeenCalled();
   });
 });
 
-describe('SpacesGatewayHandler chat join/leave system messages', () => {
-  const SPACE_ID = 'space-1';
+describe("SpacesGatewayHandler chat join/leave system messages", () => {
+  const SPACE_ID = "space-1";
   const SENDER = {
-    id: 'u1',
-    username: 'ocaptain',
+    id: "u1",
+    username: "ocaptain",
     premium: false,
     premiumPlus: false,
     isOrganization: false,
-    verifiedStatus: 'none' as const,
+    verifiedStatus: "none" as const,
   };
 
   function setup(spacesOverrides: Record<string, unknown> = {}) {
@@ -965,28 +1310,53 @@ describe('SpacesGatewayHandler chat join/leave system messages', () => {
     const presence = makePresence();
     const ctx = makeContext(presence, server);
     const spacesChat = {
-      appendSystemMessage: jest.fn().mockImplementation((p: { event: string; spaceId: string; userId: string; username: string | null }) => ({
-        id: `sys-${p.event}`,
-        spaceId: p.spaceId,
-        kind: 'system',
-        body: `@${p.username} has ${p.event === 'join' ? 'joined' : 'left'} the chat`,
-        createdAt: new Date().toISOString(),
-        sender: null,
-        system: { firstEvent: p.event, lastEvent: p.event, userId: p.userId, username: p.username },
-      })),
+      appendSystemMessage: jest
+        .fn()
+        .mockImplementation(
+          (p: {
+            event: string;
+            spaceId: string;
+            userId: string;
+            username: string | null;
+          }) => ({
+            id: `sys-${p.event}`,
+            spaceId: p.spaceId,
+            kind: "system",
+            body: `@${p.username} has ${p.event === "join" ? "joined" : "left"} the chat`,
+            createdAt: new Date().toISOString(),
+            sender: null,
+            system: {
+              firstEvent: p.event,
+              lastEvent: p.event,
+              userId: p.userId,
+              username: p.username,
+            },
+          }),
+        ),
       snapshot: jest.fn().mockReturnValue({ spaceId: SPACE_ID, messages: [] }),
     };
     const spaces = {
-      getOwnerIdForSpace: jest.fn().mockResolvedValue('owner-1'),
+      getOwnerIdForSpace: jest.fn().mockResolvedValue("owner-1"),
       isSpaceActive: jest.fn().mockResolvedValue(true),
       ...spacesOverrides,
     };
     const handler = new SpacesGatewayHandler(
       presence,
       makePresenceRedis(),
+      makePresenceRedis(),
       {} as any,
       spaces as any,
-      { isValidSpaceId: (id: string) => Boolean(id?.trim()), onDisconnect: jest.fn().mockReturnValue(null), leaveByUserId: jest.fn().mockReturnValue(null), getMembersForSpace: jest.fn().mockReturnValue({ userIds: [], pausedUserIds: [], mutedUserIds: [] }), getLobbyCountsBySpaceId: jest.fn().mockReturnValue({}) } as any,
+      {
+        isValidSpaceId: (id: string) => Boolean(id?.trim()),
+        onDisconnect: jest.fn().mockReturnValue(null),
+        leaveByUserId: jest.fn().mockReturnValue(null),
+        getMembersForSpace: jest.fn().mockReturnValue({
+          userIds: [],
+          pausedUserIds: [],
+          mutedUserIds: [],
+        }),
+        getLobbyCountsBySpaceId: jest.fn().mockReturnValue({}),
+      } as any,
       spacesChat as any,
       {} as any,
       {} as any,
@@ -997,16 +1367,22 @@ describe('SpacesGatewayHandler chat join/leave system messages', () => {
     return { server, handler, spacesChat, spaces };
   }
 
-  it('emits join on first socket and leave only when the last socket unsubscribes', async () => {
+  it("emits join on first socket and leave only when the last socket unsubscribes", async () => {
     const { server, handler, spacesChat } = setup();
-    const a = new FakeSocket('sock-a', { userId: SENDER.id, spaceChatUser: SENDER });
-    const b = new FakeSocket('sock-b', { userId: SENDER.id, spaceChatUser: SENDER });
+    const a = new FakeSocket("sock-a", {
+      userId: SENDER.id,
+      spaceChatUser: SENDER,
+    });
+    const b = new FakeSocket("sock-b", {
+      userId: SENDER.id,
+      spaceChatUser: SENDER,
+    });
     server.register(a);
     server.register(b);
 
     await handler.handleSpacesChatSubscribe(a as any, { spaceId: SPACE_ID });
     expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(1);
-    expect(spacesChat.appendSystemMessage.mock.calls[0][0].event).toBe('join');
+    expect(spacesChat.appendSystemMessage.mock.calls[0][0].event).toBe("join");
 
     await handler.handleSpacesChatSubscribe(b as any, { spaceId: SPACE_ID });
     expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(1);
@@ -1016,13 +1392,19 @@ describe('SpacesGatewayHandler chat join/leave system messages', () => {
 
     handler.handleSpacesChatUnsubscribe(b as any);
     expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(2);
-    expect(spacesChat.appendSystemMessage.mock.calls[1][0].event).toBe('leave');
+    expect(spacesChat.appendSystemMessage.mock.calls[1][0].event).toBe("leave");
   });
 
-  it('does not emit leave on disconnect when another socket is still in the chat', async () => {
+  it("does not emit leave on disconnect when another socket is still in the chat", async () => {
     const { server, handler, spacesChat } = setup();
-    const a = new FakeSocket('sock-a', { userId: SENDER.id, spaceChatUser: SENDER });
-    const b = new FakeSocket('sock-b', { userId: SENDER.id, spaceChatUser: SENDER });
+    const a = new FakeSocket("sock-a", {
+      userId: SENDER.id,
+      spaceChatUser: SENDER,
+    });
+    const b = new FakeSocket("sock-b", {
+      userId: SENDER.id,
+      spaceChatUser: SENDER,
+    });
     server.register(a);
     server.register(b);
 
@@ -1040,9 +1422,12 @@ describe('SpacesGatewayHandler chat join/leave system messages', () => {
     }
   });
 
-  it('emits leave on disconnect when it is the last chat socket', async () => {
+  it("emits leave on disconnect when it is the last chat socket", async () => {
     const { server, handler, spacesChat } = setup();
-    const a = new FakeSocket('sock-a', { userId: SENDER.id, spaceChatUser: SENDER });
+    const a = new FakeSocket("sock-a", {
+      userId: SENDER.id,
+      spaceChatUser: SENDER,
+    });
     server.register(a);
 
     await handler.handleSpacesChatSubscribe(a as any, { spaceId: SPACE_ID });
@@ -1054,20 +1439,28 @@ describe('SpacesGatewayHandler chat join/leave system messages', () => {
       expect(spacesChat.appendSystemMessage).not.toHaveBeenCalled();
       jest.advanceTimersByTime(SpacesGatewayHandler.CHAT_LEAVE_DEBOUNCE_MS);
       expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(1);
-      expect(spacesChat.appendSystemMessage.mock.calls[0][0].event).toBe('leave');
+      expect(spacesChat.appendSystemMessage.mock.calls[0][0].event).toBe(
+        "leave",
+      );
     } finally {
       jest.useRealTimers();
     }
   });
 
-  it('cancels a disconnect leave when the user resubscribes before the debounce', async () => {
+  it("cancels a disconnect leave when the user resubscribes before the debounce", async () => {
     const { server, handler, spacesChat } = setup();
-    const a = new FakeSocket('sock-a', { userId: SENDER.id, spaceChatUser: SENDER });
+    const a = new FakeSocket("sock-a", {
+      userId: SENDER.id,
+      spaceChatUser: SENDER,
+    });
     server.register(a);
     await handler.handleSpacesChatSubscribe(a as any, { spaceId: SPACE_ID });
     spacesChat.appendSystemMessage.mockClear();
 
-    const b = new FakeSocket('sock-b', { userId: SENDER.id, spaceChatUser: SENDER });
+    const b = new FakeSocket("sock-b", {
+      userId: SENDER.id,
+      spaceChatUser: SENDER,
+    });
     server.register(b);
 
     jest.useFakeTimers();
@@ -1075,50 +1468,64 @@ describe('SpacesGatewayHandler chat join/leave system messages', () => {
       handler.handleDisconnect(a as any, SENDER.id);
       await handler.handleSpacesChatSubscribe(b as any, { spaceId: SPACE_ID });
       jest.advanceTimersByTime(SpacesGatewayHandler.CHAT_LEAVE_DEBOUNCE_MS);
-      const events = spacesChat.appendSystemMessage.mock.calls.map((c: [{ event: string }]) => c[0].event);
-      expect(events).not.toContain('leave');
+      const events = spacesChat.appendSystemMessage.mock.calls.map(
+        (c: [{ event: string }]) => c[0].event,
+      );
+      expect(events).not.toContain("leave");
     } finally {
       jest.useRealTimers();
     }
   });
 
-  it('lets a visitor subscribe to chat while the space is idle', async () => {
-    const { server, handler, spacesChat } = setup({ isSpaceActive: jest.fn().mockResolvedValue(false) });
-    const visitor = new FakeSocket('sock-w', { userId: SENDER.id, spaceChatUser: SENDER });
+  it("lets a visitor subscribe to chat while the space is idle", async () => {
+    const { server, handler, spacesChat } = setup({
+      isSpaceActive: jest.fn().mockResolvedValue(false),
+    });
+    const visitor = new FakeSocket("sock-w", {
+      userId: SENDER.id,
+      spaceChatUser: SENDER,
+    });
     server.register(visitor);
 
-    await handler.handleSpacesChatSubscribe(visitor as any, { spaceId: SPACE_ID });
+    await handler.handleSpacesChatSubscribe(visitor as any, {
+      spaceId: SPACE_ID,
+    });
 
     expect(visitor.joined.has(`spacesChat:${SPACE_ID}`)).toBe(true);
     expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(1);
     expect(spacesChat.snapshot).toHaveBeenCalled();
-    expect(visitor.lastEmitted('spaces:chatSnapshot')).toBeDefined();
+    expect(visitor.lastEmitted("spaces:chatSnapshot")).toBeDefined();
   });
 
-  it('allows the owner to subscribe to chat while the space is inactive', async () => {
+  it("allows the owner to subscribe to chat while the space is inactive", async () => {
     const { server, handler, spacesChat } = setup({
       getOwnerIdForSpace: jest.fn().mockResolvedValue(SENDER.id),
       isSpaceActive: jest.fn().mockResolvedValue(false),
     });
-    const owner = new FakeSocket('sock-o', { userId: SENDER.id, spaceChatUser: SENDER });
+    const owner = new FakeSocket("sock-o", {
+      userId: SENDER.id,
+      spaceChatUser: SENDER,
+    });
     server.register(owner);
 
-    await handler.handleSpacesChatSubscribe(owner as any, { spaceId: SPACE_ID });
+    await handler.handleSpacesChatSubscribe(owner as any, {
+      spaceId: SPACE_ID,
+    });
 
     expect(spacesChat.snapshot).toHaveBeenCalled();
     expect(spacesChat.appendSystemMessage).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('SpacesGatewayHandler chat react', () => {
-  const SPACE_ID = 'space-1';
+describe("SpacesGatewayHandler chat react", () => {
+  const SPACE_ID = "space-1";
   const SENDER = {
-    id: 'u1',
-    username: 'ocaptain',
+    id: "u1",
+    username: "ocaptain",
     premium: false,
     premiumPlus: false,
     isOrganization: false,
-    verifiedStatus: 'none' as const,
+    verifiedStatus: "none" as const,
   };
 
   function setup() {
@@ -1130,18 +1537,33 @@ describe('SpacesGatewayHandler chat react', () => {
       snapshot: jest.fn().mockReturnValue({ spaceId: SPACE_ID, messages: [] }),
     };
     const spaces = {
-      getOwnerIdForSpace: jest.fn().mockResolvedValue('owner-1'),
+      getOwnerIdForSpace: jest.fn().mockResolvedValue("owner-1"),
       isSpaceActive: jest.fn().mockResolvedValue(true),
-      getReactionById: jest.fn().mockImplementation((id: string) =>
-        id === 'strong' ? { id: 'strong', emoji: '💪', label: 'Strong' } : null,
-      ),
+      getReactionById: jest
+        .fn()
+        .mockImplementation((id: string) =>
+          id === "strong"
+            ? { id: "strong", emoji: "💪", label: "Strong" }
+            : null,
+        ),
     };
     const handler = new SpacesGatewayHandler(
       presence,
       makePresenceRedis(),
+      makePresenceRedis(),
       {} as any,
       spaces as any,
-      { isValidSpaceId: (id: string) => Boolean(id?.trim()), onDisconnect: jest.fn().mockReturnValue(null), leaveByUserId: jest.fn().mockReturnValue(null), getMembersForSpace: jest.fn().mockReturnValue({ userIds: [], pausedUserIds: [], mutedUserIds: [] }), getLobbyCountsBySpaceId: jest.fn().mockReturnValue({}) } as any,
+      {
+        isValidSpaceId: (id: string) => Boolean(id?.trim()),
+        onDisconnect: jest.fn().mockReturnValue(null),
+        leaveByUserId: jest.fn().mockReturnValue(null),
+        getMembersForSpace: jest.fn().mockReturnValue({
+          userIds: [],
+          pausedUserIds: [],
+          mutedUserIds: [],
+        }),
+        getLobbyCountsBySpaceId: jest.fn().mockReturnValue({}),
+      } as any,
       spacesChat as any,
       {} as any,
       {} as any,
@@ -1152,57 +1574,69 @@ describe('SpacesGatewayHandler chat react', () => {
     return { server, handler, spaces };
   }
 
-  it('broadcasts a chat reaction without requiring the message on the server', async () => {
+  it("broadcasts a chat reaction without requiring the message on the server", async () => {
     const { server, handler } = setup();
-    const sock = new FakeSocket('sock-r', { userId: SENDER.id, spaceChatUser: SENDER, spaceChatSpaceId: SPACE_ID });
+    const sock = new FakeSocket("sock-r", {
+      userId: SENDER.id,
+      spaceChatUser: SENDER,
+      spaceChatSpaceId: SPACE_ID,
+    });
     server.register(sock);
     server.joinRoom(sock.id, `spacesChat:${SPACE_ID}`);
 
     handler.handleSpacesChatReact(sock as any, {
       spaceId: SPACE_ID,
-      messageId: 'local-only-msg',
-      reactionId: 'strong',
+      messageId: "local-only-msg",
+      reactionId: "strong",
     });
 
-    const ev = server.emitted.find((e) => e.event === 'spaces:chatReaction');
+    const ev = server.emitted.find((e) => e.event === "spaces:chatReaction");
     expect(ev?.payload).toMatchObject({
       spaceId: SPACE_ID,
-      messageId: 'local-only-msg',
+      messageId: "local-only-msg",
       userId: SENDER.id,
-      username: 'ocaptain',
-      reactionId: 'strong',
-      emoji: '💪',
+      username: "ocaptain",
+      reactionId: "strong",
+      emoji: "💪",
     });
   });
 
-  it('drops unknown reaction ids', () => {
+  it("drops unknown reaction ids", () => {
     const { server, handler } = setup();
-    const sock = new FakeSocket('sock-r', { userId: SENDER.id, spaceChatUser: SENDER, spaceChatSpaceId: SPACE_ID });
+    const sock = new FakeSocket("sock-r", {
+      userId: SENDER.id,
+      spaceChatUser: SENDER,
+      spaceChatSpaceId: SPACE_ID,
+    });
     server.register(sock);
     handler.handleSpacesChatReact(sock as any, {
       spaceId: SPACE_ID,
-      messageId: 'm1',
-      reactionId: 'nope',
+      messageId: "m1",
+      reactionId: "nope",
     });
-    expect(server.emitted.some((e) => e.event === 'spaces:chatReaction')).toBe(false);
+    expect(server.emitted.some((e) => e.event === "spaces:chatReaction")).toBe(
+      false,
+    );
   });
 });
 
-describe('SpacesGatewayHandler offline occupancy', () => {
-  const SPACE_ID = 'space-1';
+describe("SpacesGatewayHandler offline occupancy", () => {
+  const SPACE_ID = "space-1";
 
-  it('drops leftover membership when the last live socket is gone', () => {
+  it("drops leftover membership when the last live socket is gone", () => {
     const server = new FakeServer();
     const presence = makePresence();
     const presenceRedis = makePresenceRedis();
     const spacesPresence = {
       isValidSpaceId: (id: string) => Boolean(id?.trim()),
       onDisconnect: jest.fn().mockReturnValue({
-        userId: 'u1',
+        userId: "u1",
         spaceId: SPACE_ID,
         wasActive: false,
       }),
-      leaveByUserId: jest.fn().mockReturnValue({ userId: 'u1', spaceId: SPACE_ID }),
+      leaveByUserId: jest
+        .fn()
+        .mockReturnValue({ userId: "u1", spaceId: SPACE_ID }),
       getMembersForSpace: jest.fn().mockReturnValue({
         userIds: [],
         pausedUserIds: [],
@@ -1213,51 +1647,6 @@ describe('SpacesGatewayHandler offline occupancy', () => {
     const handler = new SpacesGatewayHandler(
       presence,
       presenceRedis,
-      { getFollowListUsersByIds: jest.fn().mockResolvedValue([]) } as any,
-      { getOwnerIdForSpace: jest.fn() } as any,
-      spacesPresence as any,
-      { appendSystemMessage: jest.fn() } as any,
-      {} as any,
-      { setJson: jest.fn().mockResolvedValue(undefined) } as any,
-      new GatewayThrottleService(),
-      makeContext(presence, server),
-      { capture: jest.fn() } as any,
-    );
-
-    const socket = new FakeSocket('s1', { userId: 'u1' });
-    server.register(socket);
-    handler.handleDisconnect(socket as any, 'u1');
-
-    expect(spacesPresence.leaveByUserId).toHaveBeenCalledWith('u1');
-    expect(presenceRedis.publishUserSpaceChanged).toHaveBeenCalledWith({
-      userId: 'u1',
-      spaceId: null,
-      previousSpaceId: SPACE_ID,
-    });
-  });
-
-  it('keeps occupancy when another tab is still connected', () => {
-    const server = new FakeServer();
-    const other = new FakeSocket('s2', { userId: 'u1' });
-    server.register(other);
-    const presence = makePresence({ getSocketIdsForUser: jest.fn().mockReturnValue(['s2']) });
-    const presenceRedis = makePresenceRedis();
-    const spacesPresence = {
-      onDisconnect: jest.fn().mockReturnValue({
-        userId: 'u1',
-        spaceId: SPACE_ID,
-        wasActive: false,
-      }),
-      leaveByUserId: jest.fn(),
-      getMembersForSpace: jest.fn().mockReturnValue({
-        userIds: ['u1'],
-        pausedUserIds: [],
-        mutedUserIds: [],
-      }),
-      getLobbyCountsBySpaceId: jest.fn().mockReturnValue({ [SPACE_ID]: 1 }),
-    };
-    const handler = new SpacesGatewayHandler(
-      presence,
       presenceRedis,
       { getFollowListUsersByIds: jest.fn().mockResolvedValue([]) } as any,
       { getOwnerIdForSpace: jest.fn() } as any,
@@ -1270,9 +1659,58 @@ describe('SpacesGatewayHandler offline occupancy', () => {
       { capture: jest.fn() } as any,
     );
 
-    const socket = new FakeSocket('s1', { userId: 'u1' });
+    const socket = new FakeSocket("s1", { userId: "u1" });
     server.register(socket);
-    handler.handleDisconnect(socket as any, 'u1');
+    handler.handleDisconnect(socket as any, "u1");
+
+    expect(spacesPresence.leaveByUserId).toHaveBeenCalledWith("u1");
+    expect(presenceRedis.publishUserSpaceChanged).toHaveBeenCalledWith({
+      userId: "u1",
+      spaceId: null,
+      previousSpaceId: SPACE_ID,
+    });
+  });
+
+  it("keeps occupancy when another tab is still connected", () => {
+    const server = new FakeServer();
+    const other = new FakeSocket("s2", { userId: "u1" });
+    server.register(other);
+    const presence = makePresence({
+      getSocketIdsForUser: jest.fn().mockReturnValue(["s2"]),
+    });
+    const presenceRedis = makePresenceRedis();
+    const spacesPresence = {
+      onDisconnect: jest.fn().mockReturnValue({
+        userId: "u1",
+        spaceId: SPACE_ID,
+        wasActive: false,
+      }),
+      leaveByUserId: jest.fn(),
+      getMembersForSpace: jest.fn().mockReturnValue({
+        userIds: ["u1"],
+        pausedUserIds: [],
+        mutedUserIds: [],
+      }),
+      getLobbyCountsBySpaceId: jest.fn().mockReturnValue({ [SPACE_ID]: 1 }),
+    };
+    const handler = new SpacesGatewayHandler(
+      presence,
+      presenceRedis,
+      presenceRedis,
+      { getFollowListUsersByIds: jest.fn().mockResolvedValue([]) } as any,
+      { getOwnerIdForSpace: jest.fn() } as any,
+      spacesPresence as any,
+      { appendSystemMessage: jest.fn() } as any,
+      {} as any,
+      { setJson: jest.fn().mockResolvedValue(undefined) } as any,
+      new GatewayThrottleService(),
+      makeContext(presence, server),
+      { capture: jest.fn() } as any,
+    );
+
+    const socket = new FakeSocket("s1", { userId: "u1" });
+    server.register(socket);
+    handler.handleDisconnect(socket as any, "u1");
 
     expect(spacesPresence.leaveByUserId).not.toHaveBeenCalled();
     expect(presenceRedis.publishUserSpaceChanged).not.toHaveBeenCalled();

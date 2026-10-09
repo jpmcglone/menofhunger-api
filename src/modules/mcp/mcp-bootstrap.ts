@@ -1,13 +1,13 @@
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import type { Request, Response, RequestHandler } from 'express';
-import type { AuthService } from '../auth/auth.service';
+import type { AuthService } from '../auth/auth-public-api';
 import type { AppConfigService } from '../app/app-config.service';
 import type { RedisService } from '../redis/redis.service';
 import { getSessionCookie } from '../../common/session-cookie';
 import { localApiFetch } from './mcp-tools';
 import { isOwnAdminSession } from '../admin/admin-session';
-import type { SessionResult } from '../auth/auth.service';
+import type { SessionResult } from '../auth/auth-public-api';
 
 export type McpAccount = { id: string; username: string | null; audience: 'admin' | 'member' };
 

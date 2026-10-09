@@ -1,5 +1,4 @@
 import { Body, Controller, Get, NotFoundException, Param, Put, Req, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
 import { AdminGuard, type AdminRequest } from './admin.guard';
 import { EntitlementService } from '../billing/entitlement.service';
 import { BillingService } from '../billing/billing.service';
@@ -10,11 +9,7 @@ import { UsersPublicRealtimeService } from '../users/users-public-realtime.servi
 import { SlackService } from '../../common/slack/slack.service';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import type { AdminGrantSummaryDto } from '../../common/dto';
-
-const setGrantsSchema = z.object({
-  premiumMonths: z.number().int().min(0).max(1200).optional(),
-  premiumPlusMonths: z.number().int().min(0).max(1200).optional(),
-});
+import { setGrantsSchema } from './admin-billing.schemas';
 
 @UseGuards(AdminGuard)
 @Controller('admin/users/:id/subscription-grants')

@@ -1,11 +1,8 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { BadRequestException, Injectable } from '@nestjs/common';
-import type {
-  AutoVerifyApplyDto,
-  AutoVerifyPreviewDto,
-  SiteConfigAutoVerifyRecruiterDto,
-  SiteConfigDto,
-} from '../../common/dto';
+import type { AutoVerifyApplyDto, AutoVerifyPreviewDto, SiteConfigAutoVerifyRecruiterDto, SiteConfigDto } from '../../common/dto';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -124,9 +121,7 @@ export class AdminSiteConfigService {
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: AUTO_VERIFY_PREVIEW_LIMIT,
         select: {
-          id: true,
-          username: true,
-          name: true,
+          ...USER_BRIEF_SELECT,
           avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
           avatarUpdatedAt: true,
           createdAt: true,
@@ -188,7 +183,7 @@ export class AdminSiteConfigService {
     return {
       recruitedById: recruiterId,
       verifiedStatus: 'none' as const,
-      bannedAt: null,
+      ...NOT_BANNED_USER_WHERE,
       deletionScheduledAt: null,
     };
   }
@@ -197,7 +192,7 @@ export class AdminSiteConfigService {
     const normalized = code.trim().toUpperCase();
     const recruiter = await this.prisma.user.findFirst({
       where: { referralCode: normalized },
-      select: { id: true, username: true, name: true, referralCode: true },
+      select: { ...USER_BRIEF_SELECT, referralCode: true },
     });
     if (!recruiter) throw new BadRequestException('Unknown referral code.');
     return {
@@ -212,7 +207,7 @@ export class AdminSiteConfigService {
     if (!recruiterId) return null;
     const recruiter = await this.prisma.user.findUnique({
       where: { id: recruiterId },
-      select: { id: true, username: true, name: true, referralCode: true },
+      select: { ...USER_BRIEF_SELECT, referralCode: true },
     });
     if (!recruiter) return null;
     return {

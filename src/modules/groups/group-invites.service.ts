@@ -1,11 +1,6 @@
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
+import { isUniqueViolation } from '../../common/prisma/errors';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, type CommunityGroupMemberRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
@@ -14,15 +9,8 @@ import { SideEffectsService } from '../side-effects/side-effects.service';
 import { MarvinBotIdentityService } from '../marvin/services/marvin-bot-identity.service';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { toUserListDto, type UserListRow } from '../../common/dto/user.dto';
-import {
-  COMMUNITY_GROUP_INVITE_EXPIRY_DAYS,
-  COMMUNITY_GROUP_INVITE_REINVITE_AFTER_DECLINE_DAYS,
-  COMMUNITY_GROUP_INVITE_RENOTIFY_AFTER_HOURS,
-  toCommunityGroupInviteDto,
-  type CommunityGroupInvitableUserDto,
-  type CommunityGroupInvitableUserStatus,
-  type CommunityGroupInviteDto,
-} from '../../common/dto/community-group.dto';
+import { COMMUNITY_GROUP_INVITE_EXPIRY_DAYS, COMMUNITY_GROUP_INVITE_REINVITE_AFTER_DECLINE_DAYS, COMMUNITY_GROUP_INVITE_RENOTIFY_AFTER_HOURS, toCommunityGroupInviteDto, type CommunityGroupInvitableUserDto, type CommunityGroupInvitableUserStatus, type CommunityGroupInviteDto } from '../../common/dto/community-group.dto';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 const INVITE_INCLUDE = {
   group: true,
@@ -121,7 +109,7 @@ export class GroupInvitesService {
       inviteeUserId: viewerUserId,
       status: 'pending',
       expiresAt: { gt: new Date() },
-      group: { deletedAt: null },
+      group: NOT_DELETED,
     };
   }
 
@@ -158,7 +146,7 @@ export class GroupInvitesService {
     const q = (params.q ?? '').trim();
 
     const userWhere: Prisma.UserWhereInput = {
-      bannedAt: null,
+      ...NOT_BANNED_USER_WHERE,
       ...(q.length > 0
         ? {
             OR: [
@@ -287,7 +275,7 @@ export class GroupInvitesService {
     }
 
     const group = await this.prisma.communityGroup.findFirst({
-      where: { id: params.groupId, deletedAt: null },
+      where: { id: params.groupId, ...NOT_DELETED },
       select: { id: true },
     });
     if (!group) throw new NotFoundException('Group not found.');
@@ -583,7 +571,7 @@ export class GroupInvitesService {
     }
 
     const group = await this.prisma.communityGroup.findFirst({
-      where: { id: invite.groupId, deletedAt: null },
+      where: { id: invite.groupId, ...NOT_DELETED },
       select: { id: true, slug: true },
     });
     if (!group) {
@@ -632,7 +620,7 @@ export class GroupInvitesService {
         });
       });
     } catch (e) {
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+      if (isUniqueViolation(e)) {
         throw new ConflictException('You are already a member of this group.');
       }
       throw e;

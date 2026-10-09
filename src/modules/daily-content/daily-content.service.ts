@@ -1,20 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { Websters1828Service, type Websters1828WordOfDaySnapshot } from '../websters1828/websters1828.service';
 import { DAILY_QUOTES, type DailyQuote } from './daily-quotes';
 import type { DailyContentTodayDto, DailyQuoteDto } from '../../common/dto/daily-content.dto';
-import {
-  easternDayKey,
-  dayIndexEastern,
-  wordContentDayKey,
-  quoteContentDayKey,
-  nextPublishBoundaryUtcMs,
-  nextWordPublishUtcMs,
-  nextQuotePublishUtcMs,
-  dayKeyToDate,
-} from '../../common/time/eastern-day-key';
+import { easternDayKey, dayIndexEastern, wordContentDayKey, quoteContentDayKey, nextPublishBoundaryUtcMs, nextWordPublishUtcMs, nextQuotePublishUtcMs, dayKeyToDate } from '../../common/time/eastern-day-key';
 import { toIsoOrNull } from '../../common/time/to-iso';
+import { fromJsonValue } from '../../common/prisma/json';
 
 function pickDailyQuote(quotes: DailyQuote[], now: Date): DailyQuote | null {
   const list = Array.isArray(quotes) ? quotes.filter(Boolean) : [];
@@ -26,23 +19,24 @@ function pickDailyQuote(quotes: DailyQuote[], now: Date): DailyQuote | null {
 }
 
 function mapQuoteDto(q: unknown): DailyQuoteDto | null {
-  const qq = q as DailyQuote | null | undefined;
-  if (!qq || typeof qq !== 'object') return null;
-  const id = typeof (qq as any).id === 'string' ? (qq as any).id : '';
-  const kind = typeof (qq as any).kind === 'string' ? (qq as any).kind : '';
-  const author = typeof (qq as any).author === 'string' ? (qq as any).author : '';
-  const text = typeof (qq as any).text === 'string' ? (qq as any).text : '';
+  if (!q || typeof q !== 'object') return null;
+  const o = q as Record<string, unknown>;
+  const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+  const id = str(o.id) ?? '';
+  const kind = str(o.kind) ?? '';
+  const author = str(o.author) ?? '';
+  const text = str(o.text) ?? '';
   if (!id || !kind || !author || !text) return null;
   return {
     id,
-    kind: kind as any,
+    kind: kind as DailyQuoteDto['kind'],
     author,
-    reference: typeof (qq as any).reference === 'string' ? (qq as any).reference : null,
+    reference: str(o.reference) ?? null,
     text,
-    isParaphrase: Boolean((qq as any).isParaphrase),
-    tradition: typeof (qq as any).tradition === 'string' ? (qq as any).tradition : undefined,
-    note: typeof (qq as any).note === 'string' ? (qq as any).note : undefined,
-    sourceUrl: typeof (qq as any).sourceUrl === 'string' ? (qq as any).sourceUrl : undefined,
+    isParaphrase: Boolean(o.isParaphrase),
+    tradition: str(o.tradition),
+    note: str(o.note),
+    sourceUrl: str(o.sourceUrl),
   };
 }
 
@@ -94,7 +88,7 @@ export class DailyContentService {
       dayKey: todayKey,
       quote: mapQuoteDto(quoteSnap?.quote ?? null),
       quoteRefreshedAt: toIsoOrNull(quoteSnap?.quoteRefreshedAt ?? null),
-      websters1828: (wordSnap?.websters1828 ?? null) as any,
+      websters1828: fromJsonValue<DailyContentTodayDto['websters1828']>(wordSnap?.websters1828 ?? null),
       websters1828RefreshedAt: toIsoOrNull(wordSnap?.websters1828RefreshedAt ?? null),
       nextPublishAt,
       nextWordPublishAt,
@@ -136,7 +130,7 @@ export class DailyContentService {
     }
     const result = await this.prisma.dailyContentSnapshot.updateMany({
       where: { dayKey, OR: [{ websters1828RefreshedAt: null }, { websters1828RefreshedAt: new Date(1) }] },
-      data: { websters1828: wotd as any, websters1828RefreshedAt: new Date() },
+      data: { websters1828: wotd as Prisma.InputJsonValue, websters1828RefreshedAt: new Date() },
     });
     return { published: result.count > 0 };
   }
@@ -146,7 +140,7 @@ export class DailyContentService {
     if (!quote) throw new Error('[daily-content] No quotes available to publish');
     const result = await this.prisma.dailyContentSnapshot.updateMany({
       where: { dayKey, OR: [{ quoteRefreshedAt: null }, { quoteRefreshedAt: new Date(1) }] },
-      data: { quote: quote as any, quoteRefreshedAt: new Date() },
+      data: { quote: quote as Prisma.InputJsonValue, quoteRefreshedAt: new Date() },
     });
     return { published: result.count > 0 };
   }
@@ -178,8 +172,8 @@ export class DailyContentService {
       if (wotd?.word?.trim() && wotd.definition?.trim()) {
         await this.prisma.dailyContentSnapshot.upsert({
           where: { dayKey },
-          create: { dayKey, websters1828: wotd as any, websters1828RefreshedAt: now },
-          update: { websters1828: wotd as any, websters1828RefreshedAt: now },
+          create: { dayKey, websters1828: wotd as Prisma.InputJsonValue, websters1828RefreshedAt: now },
+          update: { websters1828: wotd as Prisma.InputJsonValue, websters1828RefreshedAt: now },
         });
         updated.push('word');
       }
@@ -191,8 +185,8 @@ export class DailyContentService {
       if (quote) {
         await this.prisma.dailyContentSnapshot.upsert({
           where: { dayKey },
-          create: { dayKey, quote: quote as any, quoteRefreshedAt: now },
-          update: { quote: quote as any, quoteRefreshedAt: now },
+          create: { dayKey, quote: quote as Prisma.InputJsonValue, quoteRefreshedAt: now },
+          update: { quote: quote as Prisma.InputJsonValue, quoteRefreshedAt: now },
         });
         updated.push('quote');
       }

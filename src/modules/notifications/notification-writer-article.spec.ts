@@ -1,37 +1,73 @@
-import { NotificationWriterService } from './notification-writer.service';
+import { makeNotificationWriter } from "./notification-writer.testing";
+import type { NotificationCreatorService } from "./notification-creator.service";
 
-import { PostsReadService } from '../posts-read/posts-read.service';
-function buildWriter(prisma: object, presenceRealtime: object, sideEffects: object): NotificationWriterService {
-  return new NotificationWriterService(prisma as never, new PostsReadService(prisma as never as never),
+import { PostsReadService } from "../posts-read/posts-read.service";
+function buildWriter(
+  prisma: object,
+  presenceRealtime: object,
+  sideEffects: object,
+): Pick<NotificationCreatorService, "create"> {
+  return makeNotificationWriter(
+    prisma as never,
+    new PostsReadService(prisma as never as never),
     presenceRealtime as never,
-    { isOnline: jest.fn(async () => false), isIdle: jest.fn(async () => false) } as never,
+    {
+      isOnline: jest.fn(async () => false),
+      isIdle: jest.fn(async () => false),
+    } as never,
     { enqueueCron: jest.fn() } as never,
     sideEffects as never,
     { buildNotificationDtoForRecipient: jest.fn(async () => null) } as never,
     {
       emitWaitingCountForUser: jest.fn(),
-      undeliveredBellWhere: (uid: string) => ({ recipientUserId: uid, deliveredAt: null }),      emitNavUnreadForUser: jest.fn(async () => undefined),
-    } as never);
+      undeliveredBellWhere: (uid: string) => ({
+        recipientUserId: uid,
+        deliveredAt: null,
+      }),
+      emitNavUnreadForUser: jest.fn(async () => undefined),
+    } as never,
+  );
 }
 
 function makeDeps() {
-  const notifCreate = jest.fn(async (args: { data: unknown }) => ({ id: 'notif-new', ...(args.data as object) }));
+  const notifCreate = jest.fn(async (args: { data: unknown }) => ({
+    id: "notif-new",
+    ...(args.data as object),
+  }));
   const notifCount = jest.fn(async () => 1);
   const notifFindFirst = jest.fn(async () => null);
   const userUpdate = jest.fn(async () => ({}));
-  const $transaction = jest.fn(async (fn: (tx: unknown) => Promise<unknown>) => {
-    const tx = {
-      notification: { create: notifCreate, count: notifCount, findFirst: notifFindFirst },
-      user: { update: userUpdate },
-    };
-    return fn(tx);
-  });
-  const presenceRealtime = { emitNotificationsUpdated: jest.fn(), emitNotificationNew: jest.fn() };
+  const $transaction = jest.fn(
+    async (fn: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        notification: {
+          create: notifCreate,
+          count: notifCount,
+          findFirst: notifFindFirst,
+        },
+        user: { update: userUpdate },
+      };
+      return fn(tx);
+    },
+  );
+  const presenceRealtime = {
+    emitNotificationsUpdated: jest.fn(),
+    emitNotificationNew: jest.fn(),
+  };
   const sideEffects = { dispatch: jest.fn() };
   const prisma = {
-    follow: { findUnique: jest.fn(async () => ({ notificationPreference: 'all', postNotificationsEnabled: true })) },
+    follow: {
+      findUnique: jest.fn(async () => ({
+        notificationPreference: "all",
+        postNotificationsEnabled: true,
+      })),
+    },
     $transaction,
-    notification: { create: notifCreate, count: notifCount, findFirst: notifFindFirst },
+    notification: {
+      create: notifCreate,
+      count: notifCount,
+      findFirst: notifFindFirst,
+    },
     user: { update: userUpdate },
     userPageOperator: { findUnique: jest.fn(async () => null) },
   };
@@ -42,40 +78,43 @@ function makeDeps() {
   };
 }
 
-describe('NotificationWriterService article click-through URLs', () => {
-  it('sends followed-article pushes to the article', async () => {
+describe("NotificationCreatorService article click-through URLs", () => {
+  it("sends followed-article pushes to the article", async () => {
     const { writer, sideEffects } = makeDeps();
 
     await writer.create({
-      recipientUserId: 'user-1',
-      kind: 'followed_article',
-      actorUserId: 'author-1',
-      subjectArticleId: 'article-1',
+      recipientUserId: "user-1",
+      kind: "followed_article",
+      actorUserId: "author-1",
+      subjectArticleId: "article-1",
     });
 
     expect(sideEffects.dispatch).toHaveBeenCalledWith(
-      'notification.push',
-      expect.objectContaining({ url: '/a/article-1', subjectArticleId: 'article-1' }),
+      "notification.push",
+      expect.objectContaining({
+        url: "/a/article-1",
+        subjectArticleId: "article-1",
+      }),
     );
   });
 
-  it('sends article comment pushes to the comment hash', async () => {
+  it("sends article comment pushes to the comment hash", async () => {
     const { writer, sideEffects } = makeDeps();
 
     await writer.create({
-      recipientUserId: 'user-1',
-      kind: 'comment',
-      actorUserId: 'actor-1',
-      subjectArticleId: 'article-1',
-      subjectArticleCommentId: 'c9',
-      title: 'replied to your article',
+      recipientUserId: "user-1",
+      kind: "comment",
+      actorUserId: "actor-1",
+      subjectArticleId: "article-1",
+      subjectArticleCommentId: "c9",
+      title: "replied to your article",
     });
 
     expect(sideEffects.dispatch).toHaveBeenCalledWith(
-      'notification.push',
+      "notification.push",
       expect.objectContaining({
-        url: '/a/article-1#comment-c9',
-        subjectArticleId: 'article-1',
+        url: "/a/article-1#comment-c9",
+        subjectArticleId: "article-1",
       }),
     );
   });

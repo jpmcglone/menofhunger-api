@@ -1,14 +1,17 @@
-import {ForbiddenException, Injectable} from "@nestjs/common";
-import {Prisma} from "@prisma/client";
-import type {PostVisibility} from "@prisma/client";
-import {PrismaService} from "../prisma/prisma.service";
-import {ViewerContextService} from "../viewer/viewer-context.service";
-import {POSTS_RANKING} from "./posts-ranking.config";
-import {excludeCommunityGroupPostsWhere, mediaOnlyWhere, notDeletedWhere, userNotBannedWhere} from "./posts-query-builders";
-import {feedPostInclude, mediaFeedPostInclude, type FeedPost, type PopularFeedResult} from "./posts-feed.types";
-import {PostsViewerEnrichmentService} from "./posts-viewer-enrichment.service";
-import {PostsFeedAccessService} from "./posts-feed-access.service";
-import {PostsRankingService} from "./posts-ranking.service";
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
+import { ForbiddenException, Injectable } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
+import type { PostVisibility } from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { ViewerContextService } from "../viewer/viewer-context.service";
+import { POSTS_RANKING } from "./posts-ranking.config";
+import { excludeCommunityGroupPostsWhere, mediaOnlyWhere, notDeletedWhere, userNotBannedWhere } from "./posts-query-builders";
+import { feedPostInclude, mediaFeedPostInclude, type FeedPost, type PopularFeedResult } from "./posts-feed.types";
+import { PostsViewerEnrichmentService } from "./posts-viewer-enrichment.service";
+import { PostsFeedAccessService } from "./posts-feed-access.service";
+import { PostsRankingService } from "./posts-ranking.service";
+import { toPage } from "../../common/pagination/page";
+import { createdAtIdBefore } from "../../common/pagination/created-at-id-cursor";
 
 @Injectable()
 export class PostsFeedPopularService {
@@ -89,7 +92,7 @@ export class PostsFeedPopularService {
 
     const baseAnd: Prisma.PostWhereInput[] = [
       { deletedAt: null },
-      { user: { bannedAt: null } },
+      { user: NOT_BANNED_USER_WHERE },
       communityScopeWhere,
       ...(kind ? ([{ kind }] as Prisma.PostWhereInput[]) : []),
       ...(authorUserIds?.length
@@ -111,17 +114,10 @@ export class PostsFeedPopularService {
     const chronologicalScoreWhere: Prisma.PostWhereInput = {
       OR: [{ trendingScore: 0 }, { trendingScore: null }],
     };
-    const chronologicalCursorWhere: Prisma.PostWhereInput =
+    const cursorBefore =
       cursorCreatedAt && cursorId
-        ? {
-            OR: [
-              { createdAt: { lt: cursorCreatedAt } },
-              {
-                AND: [{ createdAt: cursorCreatedAt }, { id: { lt: cursorId } }],
-              },
-            ],
-          }
-        : {};
+        ? createdAtIdBefore({ createdAt: cursorCreatedAt, id: cursorId })
+        : null;
 
     const toResult = (
       posts: FeedPost[],
@@ -144,39 +140,22 @@ export class PostsFeedPopularService {
     if (decodedCursor && (cursorScore == null || cursorScore <= 0)) {
       const fallbackPosts = (await this.prisma.post.findMany({
         where: {
-          AND: [...baseAnd, chronologicalScoreWhere, chronologicalCursorWhere],
+          AND: [...baseAnd, chronologicalScoreWhere, cursorBefore ?? {}],
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: limit + 1,
         include,
       })) as FeedPost[];
-      return toResult(
-        fallbackPosts.slice(0, limit),
-        fallbackPosts.length > limit,
-      );
+      const fallbackPage = toPage(fallbackPosts, limit, (p) => p.id);
+      return toResult(fallbackPage.items, fallbackPage.nextCursor !== null);
     }
 
     const trendingCursorWhere: Prisma.PostWhereInput =
-      decodedCursor && cursorScore != null && cursorCreatedAt && cursorId
+      decodedCursor && cursorScore != null && cursorBefore
         ? {
             OR: [
               { trendingScore: { lt: cursorScore } },
-              {
-                AND: [
-                  { trendingScore: cursorScore },
-                  {
-                    OR: [
-                      { createdAt: { lt: cursorCreatedAt } },
-                      {
-                        AND: [
-                          { createdAt: cursorCreatedAt },
-                          { id: { lt: cursorId } },
-                        ],
-                      },
-                    ],
-                  },
-                ],
-              },
+              { AND: [{ trendingScore: cursorScore }, cursorBefore] },
             ],
           }
         : {};
@@ -194,9 +173,9 @@ export class PostsFeedPopularService {
       include,
     })) as FeedPost[];
 
-    if (trendingPosts.length > limit) {
-      return toResult(trendingPosts.slice(0, limit), true);
-    }
+    const trendingPage = toPage(trendingPosts, limit, (p) => p.id);
+    if (trendingPage.nextCursor !== null)
+      return toResult(trendingPage.items, true);
 
     const remaining = limit - trendingPosts.length;
     const fallbackPosts = (await this.prisma.post.findMany({
@@ -783,10 +762,14 @@ export class PostsFeedPopularService {
       LIMIT ${limit + 1}
     `);
 
-    const sliceRows = rows.slice(0, limit);
+    const { items: sliceRows, nextCursor } = toPage(rows, limit, (r) =>
+      this.access.encodePopularCursor({
+        score: r.score,
+        createdAt: r.createdAt.toISOString(),
+        id: r.id,
+      }),
+    );
     const ids = sliceRows.map((r) => r.id);
-    const nextRow =
-      rows.length > limit ? (sliceRows[sliceRows.length - 1] ?? null) : null;
 
     const posts = ids.length
       ? await this.prisma.post.findMany({
@@ -798,15 +781,6 @@ export class PostsFeedPopularService {
     const ordered = ids
       .map((id) => byId.get(id))
       .filter((p): p is (typeof posts)[number] => Boolean(p));
-
-    const nextCursor =
-      rows.length > limit && nextRow
-        ? this.access.encodePopularCursor({
-            score: nextRow.score,
-            createdAt: nextRow.createdAt.toISOString(),
-            id: nextRow.id,
-          })
-        : null;
 
     const scoreByPostId = new Map<string, number>(
       sliceRows.map((r) => [r.id, r.score]),

@@ -11,7 +11,7 @@ import { POSTS_RANKING } from './posts-ranking.config';
  * formula, and single-post score refresh (cron + BullMQ entry points).
  *
  * Feed assembly (popular / featured / for-you ordering) still lives in
- * PostsService; this service owns the underlying score computation.
+ * the focused feed services; this service owns the underlying score computation.
  */
 @Injectable()
 export class PostsRankingService {

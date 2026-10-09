@@ -1,4 +1,6 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { Prisma } from '@prisma/client';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 /**
  * Shared Prisma where-clause builders for post queries. Centralized so every
@@ -10,7 +12,7 @@ import { Prisma } from '@prisma/client';
  * This prevents accidentally surfacing soft-deleted posts via new endpoints.
  */
 export function notDeletedWhere(): Prisma.PostWhereInput {
-  return { deletedAt: null };
+  return { ...NOT_DELETED };
 }
 
 /**
@@ -27,7 +29,7 @@ export function excludeBoardOnlyWhere(): Prisma.PostWhereInput {
 }
 
 export function mediaOnlyWhere(): Prisma.PostWhereInput {
-  return { media: { some: { deletedAt: null } } };
+  return { media: { some: NOT_DELETED } };
 }
 
 /**
@@ -35,5 +37,5 @@ export function mediaOnlyWhere(): Prisma.PostWhereInput {
  * Banned users' posts may still appear in single-post/thread context but are redacted in toPostDto.
  */
 export function userNotBannedWhere(): Prisma.PostWhereInput {
-  return { user: { bannedAt: null } };
+  return { user: NOT_BANNED_USER_WHERE };
 }

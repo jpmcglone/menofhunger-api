@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { ChannelMessagesService } from './channel-messages.service';
+import { makeChannelMessages } from './channel-messages.testing';
 
 function harness() {
   const channel = { id: 'channel', groupId: 'group', conversationId: 'conversation', defaultPurpose: null, privacy: 'normal', archivedAt: null, lastSequence: 0 };
@@ -11,11 +11,20 @@ function harness() {
   const prisma: any = { $transaction: jest.fn(async fn => fn(tx)) };
   const access: any = { lockGroup: jest.fn(), channel: jest.fn().mockResolvedValue({ channel, member: { role: 'member' } }) };
   const attention: any = { reconcile: jest.fn() };
-  const service = new ChannelMessagesService(prisma, access, {} as any, attention, { groupChannels: () => ({}) } as any, {} as any, {} as any, { dispatch: jest.fn() } as any);
+  const { reader, writer: service } = makeChannelMessages({
+    prisma,
+    access,
+    channels: {} as any,
+    attention,
+    config: { groupChannels: () => ({}) } as any,
+    realtime: {} as any,
+    media: {} as any,
+    effects: { dispatch: jest.fn() } as any,
+  });
   // Delivery/mapping is covered separately; isolate the transactional protocol here.
-  jest.spyOn(service as any, 'broadcast').mockResolvedValue(undefined);
-  jest.spyOn(service as any, 'present').mockImplementation(async (_u, _g, _c, rows) => rows);
-  return { service, tx, access, attention, channel };
+  jest.spyOn(reader, 'broadcast').mockResolvedValue(undefined);
+  jest.spyOn(reader, 'present').mockImplementation(async (_u, _g, _c, rows) => rows as never);
+  return { service, reader, tx, access, attention, channel };
 }
 
 describe('channel send protocol', () => {
@@ -85,7 +94,7 @@ describe('channel send protocol', () => {
       { id: 'theirs', senderId: 'a', deletedForAll: false, channelSequence: 2, threadRootId: null },
       { id: 'gone', senderId: 'viewer', deletedForAll: true, channelSequence: 1, threadRootId: null },
     ];
-    const receipts: Map<string, unknown> = await (h.service as any).receipts('viewer', 'group', { id: 'channel', privacy: 'normal' }, rows);
+    const receipts: Map<string, unknown> = await (h.reader as any).receipts('viewer', 'group', { id: 'channel', privacy: 'normal' }, rows);
     expect([...receipts.keys()]).toEqual(['mine']);
     expect(receipts.get('mine')).toEqual({ readCount: 3, recipientCount: 3 });
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
@@ -131,7 +140,7 @@ describe('group join row and Welcome', () => {
     expect(h.tx.message.create).toHaveBeenCalledWith({ data: expect.objectContaining({ kind: 'groupJoin', body: '', senderId: 'newbie', clientRequestId: 'join:2026-10-08T12:00:00.000Z', channelSequence: 1 }) });
     expect(h.attention.reconcile).not.toHaveBeenCalled();
     expect((h.service as any).effects.dispatch).not.toHaveBeenCalled();
-    expect((h.service as any).broadcast).toHaveBeenCalledWith('group', 'channel', 'join-row');
+    expect(h.reader.broadcast).toHaveBeenCalledWith('group', 'channel', 'join-row');
   });
   it('is idempotent on retry and skips inactive or banned members and channels that are gone', async () => {
     const h = joinHarness();
@@ -158,7 +167,7 @@ describe('group join row and Welcome', () => {
     jest.spyOn(h.service as any, 'advanceRevision').mockResolvedValue(undefined);
     await expect(h.service.welcome('viewer', 'group', 'channel', 'join-row')).resolves.toEqual({ id: 'welcome-msg' });
     expect(send).toHaveBeenCalledWith('viewer', 'group', 'channel', { body: 'Welcome, Chris 🤝', clientRequestId: 'welcome:join-row' });
-    expect((h.service as any).broadcast).toHaveBeenCalledWith('group', 'channel', 'join-row');
+    expect(h.reader.broadcast).toHaveBeenCalledWith('group', 'channel', 'join-row');
   });
   it('Welcome rejects welcoming yourself and non-join rows', async () => {
     const h = joinHarness();
@@ -171,9 +180,9 @@ describe('group join row and Welcome', () => {
   });
   it('shows the button only to others who have not welcomed, and never lets the joiner edit the row', () => {
     const h = joinHarness();
-    (h.service as any).config = { r2: () => null };
+    (h.reader as any).config = { r2: () => null };
     const base = { id: 'join-row', createdAt: new Date(), body: '', conversationId: 'conversation', sender: { id: 'newbie', username: 'chris', name: 'Chris', avatarKey: null }, kind: 'groupJoin', media: [], reactions: [], deletions: [], deletedForAll: false, channelPins: [], threadReplies: [], _count: { threadReplies: 0 }, channelRevision: 1, channelSequence: 1, hiddenPreviews: [], senderId: 'newbie', replyTo: null, threadRootId: null };
-    const render = (viewer: string, welcomed = new Set<string>()) => (h.service as any).render(viewer, 'member', 'group', h.channel, [base], new Set(), new Map(), welcomed)[0];
+    const render = (viewer: string, welcomed = new Set<string>()) => (h.reader as any).render(viewer, 'member', 'group', h.channel, [base], new Set(), new Map(), welcomed)[0];
     expect(render('viewer').joinWelcome).toEqual({ canWelcome: true });
     expect(render('viewer', new Set(['join-row'])).joinWelcome).toEqual({ canWelcome: false });
     const own = render('newbie');

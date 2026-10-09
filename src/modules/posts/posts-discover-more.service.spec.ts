@@ -92,6 +92,7 @@ describe('PostsDiscoverMoreService', () => {
       viewerContextService as any,
       enrichment as any,
       feedQuery as any,
+      feedQuery as any,
       cache as any,
       cacheInvalidation as any,
     );

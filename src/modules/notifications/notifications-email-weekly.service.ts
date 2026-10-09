@@ -1,3 +1,5 @@
+import { NotificationsEmailSupportService } from "./notifications-email-support.service";
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { Injectable } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
@@ -8,7 +10,6 @@ import { AppConfigService } from '../app/app-config.service';
 import { buildGreeting, getRecipientEmail } from '../email/email-send.helpers';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
-import { MessagesService } from '../messages/messages.service';
 import { EMAIL, escapeHtml, renderButton, renderCard, renderMohEmail, renderPill } from '../email/templates/moh-email';
 import { publicAssetUrl } from '../../common/assets/public-asset-url';
 import { computeCheckinRewards } from '../checkins/checkin-rewards';
@@ -17,8 +18,8 @@ import { SlackService } from '../../common/slack/slack.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
 
-import { NotificationsEmailSupportService } from "./notifications-email-support.service";
 import { safeBaseUrl, renderEmailAvatar, easternYmd, easternYmdHm, easternDayKey, easternUtcMsForLocal, truncate } from "./notifications-email.helpers";
+import { NOT_DELETED } from '../../common/prisma/where';
 
 @Injectable()
 export class NotificationsEmailWeeklyService {
@@ -27,7 +28,7 @@ export class NotificationsEmailWeeklyService {
     private readonly email: EmailService,
     private readonly appConfig: AppConfigService,
     private readonly jobs: JobsService,
-    private readonly messages: MessagesService,
+
     private readonly slack: SlackService,
     private readonly postsRead: PostsReadService,
     private readonly support: NotificationsEmailSupportService,
@@ -125,8 +126,8 @@ export class NotificationsEmailWeeklyService {
           checkinStreakDays: { gt: 0 },
           ...(cursorId ? { id: { gt: cursorId } } : {}),
           AND: [
-            { posts: { some: { kind: 'checkin', checkinDayKey: yesterdayKey, deletedAt: null } } },
-            { NOT: { posts: { some: { kind: 'checkin', checkinDayKey: todayKey, deletedAt: null } } } },
+            { posts: { some: { kind: 'checkin', checkinDayKey: yesterdayKey, ...NOT_DELETED } } },
+            { NOT: { posts: { some: { kind: 'checkin', checkinDayKey: todayKey, ...NOT_DELETED } } } },
             {
               OR: [
                 { notificationPreferences: { is: null } },
@@ -263,18 +264,18 @@ export class NotificationsEmailWeeklyService {
       const weeklyFeaturedSelect = { id: true, body: true, createdAt: true, user: { select: { username: true, name: true } } } satisfies Prisma.PostSelect;
       const weeklyCreatedAtWindow = { gte: weekWindowStart, lt: weekWindowEnd };
 
-      const weeklyFeaturedPostPublic = await this.postsRead.read.findFirst({
-        where: { deletedAt: null, parentId: null, kind: { not: 'board' }, visibility: { in: ['public'] }, createdAt: weeklyCreatedAtWindow },
+      const weeklyFeaturedPostPublic = await this.postsRead.findFirst({
+        where: { ...NOT_DELETED, parentId: null, kind: { not: 'board' }, visibility: { in: ['public'] }, createdAt: weeklyCreatedAtWindow },
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         select: weeklyFeaturedSelect,
       });
-      const weeklyFeaturedPostVerified = await this.postsRead.read.findFirst({
-        where: { deletedAt: null, parentId: null, kind: { not: 'board' }, visibility: { in: ['public', 'verifiedOnly'] }, createdAt: weeklyCreatedAtWindow },
+      const weeklyFeaturedPostVerified = await this.postsRead.findFirst({
+        where: { ...NOT_DELETED, parentId: null, kind: { not: 'board' }, visibility: { in: ['public', 'verifiedOnly'] }, createdAt: weeklyCreatedAtWindow },
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         select: weeklyFeaturedSelect,
       });
-      const weeklyFeaturedPostPremium = await this.postsRead.read.findFirst({
-        where: { deletedAt: null, parentId: null, kind: { not: 'board' }, visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] }, createdAt: weeklyCreatedAtWindow },
+      const weeklyFeaturedPostPremium = await this.postsRead.findFirst({
+        where: { ...NOT_DELETED, parentId: null, kind: { not: 'board' }, visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] }, createdAt: weeklyCreatedAtWindow },
         orderBy: [{ trendingScore: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
         select: weeklyFeaturedSelect,
       });
@@ -282,7 +283,7 @@ export class NotificationsEmailWeeklyService {
       const weeklyNewArticleCount = await this.prisma.article.count({
         where: {
           isDraft: false,
-          deletedAt: null,
+          ...NOT_DELETED,
           publishedAt: { gte: weekWindowStart, lt: weekWindowEnd },
         },
       });
@@ -296,7 +297,7 @@ export class NotificationsEmailWeeklyService {
       const weeklyTopArticlesPublic = await this.prisma.article.findMany({
         where: {
           isDraft: false,
-          deletedAt: null,
+          ...NOT_DELETED,
           visibility: { in: ['public'] },
           publishedAt: { gte: weekWindowStart, lt: weekWindowEnd },
         },
@@ -307,7 +308,7 @@ export class NotificationsEmailWeeklyService {
       const weeklyTopArticlesVerified = await this.prisma.article.findMany({
         where: {
           isDraft: false,
-          deletedAt: null,
+          ...NOT_DELETED,
           visibility: { in: ['public', 'verifiedOnly'] },
           publishedAt: { gte: weekWindowStart, lt: weekWindowEnd },
         },
@@ -318,7 +319,7 @@ export class NotificationsEmailWeeklyService {
       const weeklyTopArticlesPremium = await this.prisma.article.findMany({
         where: {
           isDraft: false,
-          deletedAt: null,
+          ...NOT_DELETED,
           visibility: { in: ['public', 'verifiedOnly', 'premiumOnly'] },
           publishedAt: { gte: weekWindowStart, lt: weekWindowEnd },
         },
@@ -335,16 +336,16 @@ export class NotificationsEmailWeeklyService {
         boardThread: { select: { title: true, domain: true } },
       } satisfies Prisma.PostSelect;
       const weeklyTopBoardFor = (visibilities: PostVisibility[]) =>
-        this.postsRead.read.findMany({
+        this.postsRead.findMany({
           where: {
             kind: 'board',
             parentId: null,
             articleId: null,
-            deletedAt: null,
+            ...NOT_DELETED,
             isDraft: false,
             visibility: { in: visibilities },
             createdAt: weeklyCreatedAtWindow,
-            user: { bannedAt: null },
+            user: NOT_BANNED_USER_WHERE,
           },
           orderBy: [{ boostCount: 'desc' }, { commentCount: 'desc' }, { createdAt: 'desc' }],
           take: 3,
@@ -394,10 +395,10 @@ export class NotificationsEmailWeeklyService {
         avatarUpdatedAt: true,
       } as const;
       const weeklyNewMembersTotal = await this.prisma.user.count({
-        where: { emailVerifiedAt: { not: null }, bannedAt: null, createdAt: { gte: weekWindowStart, lt: weekWindowEnd } },
+        where: { emailVerifiedAt: { not: null }, ...NOT_BANNED_USER_WHERE, createdAt: { gte: weekWindowStart, lt: weekWindowEnd } },
       });
       const weeklyNewMembers = await this.prisma.user.findMany({
-        where: { emailVerifiedAt: { not: null }, bannedAt: null, createdAt: { gte: weekWindowStart, lt: weekWindowEnd } },
+        where: { emailVerifiedAt: { not: null }, ...NOT_BANNED_USER_WHERE, createdAt: { gte: weekWindowStart, lt: weekWindowEnd } },
         orderBy: [{ createdAt: 'desc' }],
         take: 15,
         select: weeklyNewMembersUserSelect,
@@ -489,7 +490,7 @@ export class NotificationsEmailWeeklyService {
               this.prisma.article.findMany({
                 where: {
                   isDraft: false,
-                  deletedAt: null,
+                  ...NOT_DELETED,
                   visibility: { in: allowedVis },
                   publishedAt: { gte: weekWindowStart, lt: weekWindowEnd },
                   tags: { some: { tag: pref.tag } },
@@ -498,9 +499,9 @@ export class NotificationsEmailWeeklyService {
                 take: 6,
                 select: weeklyTopArticleSelect,
               }),
-              this.postsRead.read.findMany({
+              this.postsRead.findMany({
                 where: {
-                  deletedAt: null,
+                  ...NOT_DELETED,
                   parentId: null,
                   visibility: { in: allowedVis },
                   createdAt: { gte: weekWindowStart, lt: weekWindowEnd },

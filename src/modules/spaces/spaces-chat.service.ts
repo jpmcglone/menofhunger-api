@@ -36,13 +36,13 @@ export class SpacesChatService {
     const out: SpaceChatMediaItemDto[] = [];
     for (const item of raw.slice(0, this.maxMediaPerMessage)) {
       if (!item || typeof item !== 'object') continue;
-      const url = String((item as any).url ?? '').trim();
+      const url = String(item.url ?? '').trim();
       if (!url || url.length > 2048) continue;
       out.push({
         url,
-        width: typeof (item as any).width === 'number' ? Math.floor((item as any).width) : null,
-        height: typeof (item as any).height === 'number' ? Math.floor((item as any).height) : null,
-        alt: typeof (item as any).alt === 'string' ? (item as any).alt.slice(0, 300).trim() || null : null,
+        width: typeof item.width === 'number' ? Math.floor(item.width) : null,
+        height: typeof item.height === 'number' ? Math.floor(item.height) : null,
+        alt: typeof item.alt === 'string' ? item.alt.slice(0, 300).trim() || null : null,
       });
     }
     return out.length > 0 ? out : undefined;
@@ -116,7 +116,7 @@ export class SpacesChatService {
       existingLast.kind === 'system' &&
       existingLast.system?.userId === userId
     ) {
-      const prevLast = (existingLast.system as any)?.lastEvent ?? (existingLast.system as any)?.firstEvent ?? 'join';
+      const prevLast = existingLast.system?.lastEvent ?? existingLast.system?.firstEvent ?? 'join';
       const prevLastEvent = (prevLast === 'join' || prevLast === 'leave') ? prevLast : 'join';
       if (prevLastEvent === params.event) {
         return existingLast;

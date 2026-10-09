@@ -5,27 +5,16 @@ import { MarvinUsageService } from "../../marvin/services/marvin-usage.service";
 import { MarvinToolHandlersService } from "../../marvin/services/marvin-tool-handlers.service";
 import { sharedTools } from "../../mcp/mcp-tools";
 import { DelegationPolicyService } from "./delegation-policy.service";
-import {
-  DelegationActionsService,
-  publicationBody,
-  actionSubjectKey,
-} from "./delegation-actions.service";
+import { DelegationActionsService, publicationBody, actionSubjectKey } from "./delegation-actions.service";
 import { DelegationEvidenceService } from "./delegation-evidence.service";
-import {
-  DelegationService,
-  delegationJson,
-  type RunSnapshot,
-} from "./delegation.service";
-import {
-  actionSchema,
-  workflowOperations,
-  type DelegatedActionInput,
-} from "./delegation.schemas";
+import { DelegationService, delegationJson, type RunSnapshot } from "./delegation.service";
+import { actionSchema, workflowOperations, type DelegatedActionInput } from "./delegation.schemas";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { DelegationReadsService } from "./delegation-reads.service";
 import { scheduleSchema } from "./delegation.schemas";
 import { DelegationTriageService } from "./delegation-triage.service";
+import { fromJsonValue } from '../../../common/prisma/json';
 
 @Injectable()
 export class DelegationRunnerService {
@@ -54,7 +43,7 @@ export class DelegationRunnerService {
     });
     if (!claimed.count) return;
     const job = run.job;
-    const snapshot = run.jobSnapshot as unknown as RunSnapshot;
+    const snapshot = fromJsonValue<RunSnapshot>(run.jobSnapshot);
     const started = Date.now();
     this.service.notify(job.ownerId, job.id);
     const assertCurrent = async () => {

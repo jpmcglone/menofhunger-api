@@ -1,3 +1,5 @@
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
+import { toPage } from '../../common/pagination/page';
 import type { FeedbackCategory, FeedbackStatus, Prisma } from "@prisma/client";
 import { HttpException, HttpStatus, Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
@@ -148,9 +150,7 @@ export class FeedbackService {
       include: {
         user: {
           select: {
-            id: true,
-            username: true,
-            name: true,
+            ...USER_BRIEF_SELECT,
             avatarKey: true,
             avatarVideoKey: true,
             avatarVideoDurationMs: true,
@@ -160,11 +160,8 @@ export class FeedbackService {
       },
     });
 
-    const slice = rows.slice(0, params.limit);
-    const nextCursor =
-      rows.length > params.limit ? (slice[slice.length - 1]?.id ?? null) : null;
-
-    return { rows: slice, nextCursor };
+    const { items, nextCursor } = toPage(rows, params.limit, (last) => last.id);
+    return { rows: items, nextCursor };
   }
 
   async updateAdmin(
@@ -182,9 +179,7 @@ export class FeedbackService {
       include: {
         user: {
           select: {
-            id: true,
-            username: true,
-            name: true,
+            ...USER_BRIEF_SELECT,
             avatarKey: true,
             avatarVideoKey: true,
             avatarVideoDurationMs: true,

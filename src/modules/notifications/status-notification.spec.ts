@@ -1,3 +1,6 @@
+import { ViewerBlockSetsService } from "../viewer/viewer-block-sets.service";
+import { NotificationNudgesService } from "./notification-nudges.service";
+import { NotificationReadSubjectsService } from "./notification-read-subjects.service";
 /**
  * Unit tests for status_update notification fan-out.
  *
@@ -7,17 +10,23 @@
  * no push.
  */
 
-import { NotificationsService } from './notifications.service';
-import { NotificationPreferencesService } from './notification-preferences.service';
-import { NotificationPushService } from './notification-push.service';
-import { ApnsPushService } from './apns-push.service';
-import { NotificationReadStateService } from './notification-read-state.service';
-import { NotificationQueryService } from './notification-query.service';
-import { NotificationWriterService } from './notification-writer.service';
-import { PostVisibilityReadService } from '../viewer/post-visibility-read.service';
+import { NotificationQueryListService } from "./notification-query-list.service";
+import { makeNotificationWriterGraph } from "./notification-writer.testing";
+import { makeNotificationsTestApi } from "./notifications.testing";
+import { NotificationPreferencesService } from "./notification-preferences.service";
+import { makeNotificationPushService } from "./notification-push.testing";
+import { buildPushTag } from "./notification-push-copy";
+import { ApnsPushService } from "./apns-push.service";
+import { NotificationReadStateService } from "./notification-read-state.service";
+import { NotificationQueryService } from "./notification-query.service";
+import { PostVisibilityReadService } from "../viewer/post-visibility-read.service";
 
-import { PostsReadService } from '../posts-read/posts-read.service';
-const stubPresenceRedis = { isOnline: jest.fn(async () => false), isIdle: jest.fn(async () => false) };
+import { PostsReadService } from "../posts-read/posts-read.service";
+import { shouldSendPushForKind } from "./notification-push.rules";
+const stubPresenceRedis = {
+  isOnline: jest.fn(async () => false),
+  isIdle: jest.fn(async () => false),
+};
 const stubPresenceRealtime = {
   emitNotificationsUpdated: jest.fn(),
   emitNotificationNew: jest.fn(),
@@ -25,15 +34,28 @@ const stubPresenceRealtime = {
 };
 const stubJobs = { enqueueCron: jest.fn(async () => undefined) };
 const stubPosthog = { capture: jest.fn() };
-const stubViewerContext = { getViewer: jest.fn(async () => null), allowedPostVisibilities: jest.fn(() => ['public']) };
+const stubViewerContext = {
+  getViewer: jest.fn(async () => null),
+  allowedPostVisibilities: jest.fn(() => ["public"]),
+};
 const stubAppConfig = { r2: jest.fn(() => null) } as any;
 const stubPresence = { isUserViewingConversation: jest.fn(() => false) };
 
 function makeDefaultPrefs() {
   return {
-    pushComment: true, pushBoost: true, pushFollow: true, pushMention: true,
-    pushMessage: true, pushRepost: true, pushNudge: true, pushFollowedPost: true,
-    pushReplyNudge: true, pushCrewStreak: true, pushGroupActivity: true, pushDailyContent: true, pushCheckinReminder: true,
+    pushComment: true,
+    pushBoost: true,
+    pushFollow: true,
+    pushMention: true,
+    pushMessage: true,
+    pushRepost: true,
+    pushNudge: true,
+    pushFollowedPost: true,
+    pushReplyNudge: true,
+    pushCrewStreak: true,
+    pushGroupActivity: true,
+    pushDailyContent: true,
+    pushCheckinReminder: true,
   };
 }
 
@@ -41,7 +63,10 @@ function buildServices(prismaOverrides: Record<string, any>) {
   const prisma = {
     notification: {
       findFirst: jest.fn(async () => null),
-      create: jest.fn(async (args: any) => ({ id: 'notif-created', ...args.data })),
+      create: jest.fn(async (args: any) => ({
+        id: "notif-created",
+        ...args.data,
+      })),
       update: jest.fn(async () => ({})),
       count: jest.fn(async () => 1),
       findUnique: jest.fn(async () => null),
@@ -49,7 +74,7 @@ function buildServices(prismaOverrides: Record<string, any>) {
     },
     user: {
       update: jest.fn(async () => ({})),
-      findUnique: jest.fn(async () => ({ username: 'actor-user' })),
+      findUnique: jest.fn(async () => ({ username: "actor-user" })),
       findMany: jest.fn(async () => []),
     },
     follow: { findMany: jest.fn(async () => []) },
@@ -85,19 +110,75 @@ function buildServices(prismaOverrides: Record<string, any>) {
   };
   const preferences = new NotificationPreferencesService(prisma, noopCache);
   const apnsPush = new ApnsPushService(prisma, stubAppConfig, noopCache);
-  const push = new NotificationPushService(prisma, stubAppConfig, stubPresence as any, preferences, apnsPush, noopCache, new PostsReadService(prisma as never));
+  const push = makeNotificationPushService(
+    prisma,
+    stubAppConfig,
+    stubPresence as any,
+    preferences,
+    apnsPush,
+    noopCache,
+    new PostsReadService(prisma as never),
+  );
   // Stands in for the side-effects worker: runs the push handler inline so these tests keep
   // asserting the real push payload (url, coalesce tag) through the new dispatch seam.
   const sideEffects = {
     dispatch: (name: string, payload: any) => {
-      if (name === 'notification.push') void push.sendKindPushForActor(payload);
+      if (name === "notification.push") void push.sendKindPushForActor(payload);
     },
   } as any;
-  const readState = new NotificationReadStateService(prisma, stubPresenceRealtime as any, stubPosthog as any, sideEffects);
-  const postVisibility = new PostVisibilityReadService(prisma, new PostsReadService(prisma as never), stubAppConfig, stubViewerContext as any);
-  const query = new NotificationQueryService(prisma, new PostsReadService(prisma as never), stubAppConfig, postVisibility, readState);
-  const writer = new NotificationWriterService(prisma, new PostsReadService(prisma as never), stubPresenceRealtime as any, stubPresenceRedis as any, stubJobs as any, sideEffects, query, readState);
-  const svc = new NotificationsService(preferences, push, apnsPush, readState, query, writer);
+  const readState = new NotificationReadStateService(
+    prisma,
+    stubPresenceRealtime as any,
+    stubPosthog as any,
+    sideEffects,
+  );
+  const postVisibility = new PostVisibilityReadService(
+    prisma,
+    new PostsReadService(prisma as never),
+    stubAppConfig,
+    stubViewerContext as any,
+    new ViewerBlockSetsService(prisma, {
+      getJson: async () => null,
+      setJson: async () => true,
+    } as any),
+  );
+  const query = new NotificationQueryService(
+    prisma,
+    new PostsReadService(prisma as never),
+    stubAppConfig,
+    postVisibility,
+    readState,
+    new NotificationQueryListService(
+      prisma,
+      new PostsReadService(prisma as never),
+      stubAppConfig,
+      postVisibility,
+      readState,
+    ),
+  );
+  const { writer, community, invites, fanout } = makeNotificationWriterGraph(
+    prisma,
+    new PostsReadService(prisma as never),
+    stubPresenceRealtime as any,
+    stubPresenceRedis as any,
+    stubJobs as any,
+    sideEffects,
+    query,
+    readState,
+  );
+  const svc = makeNotificationsTestApi(
+    preferences,
+    push,
+    apnsPush,
+    readState,
+    query,
+    writer,
+    community,
+    invites,
+    fanout,
+    new NotificationNudgesService(prisma, readState),
+    new NotificationReadSubjectsService(prisma, readState),
+  );
   return { svc, prisma, push };
 }
 
@@ -105,81 +186,81 @@ function buildServices(prismaOverrides: Record<string, any>) {
 // fanOutStatusUpdateNotifications
 // ---------------------------------------------------------------------------
 
-describe('fanOutStatusUpdateNotifications', () => {
+describe("fanOutStatusUpdateNotifications", () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('sends a notification to each follower', async () => {
+  it("sends a notification to each follower", async () => {
     const followers = [
-      { followerId: 'follower-1' },
-      { followerId: 'follower-2' },
+      { followerId: "follower-1" },
+      { followerId: "follower-2" },
     ];
     const { svc, prisma } = buildServices({
       follow: { findMany: jest.fn(async () => followers) },
     });
 
     await svc.fanOutStatusUpdateNotifications({
-      actorUserId: 'actor-1',
-      text: 'Feeling great!',
+      actorUserId: "actor-1",
+      text: "Feeling great!",
       postId: null,
-      mode: 'created',
+      mode: "created",
     });
 
     // one create call per follower (via $transaction)
     expect(prisma.$transaction).toHaveBeenCalledTimes(2);
   });
 
-  it('does not notify the actor themselves', async () => {
+  it("does not notify the actor themselves", async () => {
     const followers = [
-      { followerId: 'actor-1' }, // self
-      { followerId: 'follower-1' },
+      { followerId: "actor-1" }, // self
+      { followerId: "follower-1" },
     ];
     const { svc, prisma } = buildServices({
       follow: { findMany: jest.fn(async () => followers) },
     });
 
     await svc.fanOutStatusUpdateNotifications({
-      actorUserId: 'actor-1',
-      text: 'Self check',
+      actorUserId: "actor-1",
+      text: "Self check",
       postId: null,
-      mode: 'created',
+      mode: "created",
     });
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
-  it('does not notify operators of the actor page', async () => {
+  it("does not notify operators of the actor page", async () => {
     const followers = [
-      { followerId: 'operator-1' },
-      { followerId: 'follower-1' },
+      { followerId: "operator-1" },
+      { followerId: "follower-1" },
     ];
     const { svc, prisma } = buildServices({
       follow: { findMany: jest.fn(async () => followers) },
       userPageOperator: {
-        findMany: jest.fn(async () => [{ operatorUserId: 'operator-1' }]),
+        findMany: jest.fn(async () => [{ operatorUserId: "operator-1" }]),
         findUnique: jest.fn(async () => null),
       },
     });
 
     await svc.fanOutStatusUpdateNotifications({
-      actorUserId: 'page-1',
-      text: 'Page status',
+      actorUserId: "page-1",
+      text: "Page status",
       postId: null,
-      mode: 'created',
+      mode: "created",
     });
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
-  it('does nothing when the actor has no followers', async () => {
+  it("does nothing when the actor has no followers", async () => {
     const { svc, prisma } = buildServices({
       follow: { findMany: jest.fn(async () => []) },
     });
 
     await svc.fanOutStatusUpdateNotifications({
-      actorUserId: 'actor-1',
-      text: 'No followers',
+      actorUserId: "actor-1",
+      text: "No followers",
       postId: null,
-      mode: 'created',
+      mode: "created",
     });
 
     expect(prisma.$transaction).not.toHaveBeenCalled();
@@ -190,7 +271,7 @@ describe('fanOutStatusUpdateNotifications', () => {
 // createStatusUpdateNotification – every new status is its own notification
 // ---------------------------------------------------------------------------
 
-describe('createStatusUpdateNotification', () => {
+describe("createStatusUpdateNotification", () => {
   beforeEach(() => jest.clearAllMocks());
 
   function build(existing: { id: string } | null = null) {
@@ -198,25 +279,27 @@ describe('createStatusUpdateNotification', () => {
     const { svc, prisma, push } = buildServices({
       notification: {
         findFirst: jest.fn(async () => existing),
-        create: jest.fn(async () => ({ id: 'new-notif' })),
+        create: jest.fn(async () => ({ id: "new-notif" })),
         update: jest.fn(async () => ({})),
         count: jest.fn(async () => 1),
         findUnique: jest.fn(async () => null),
         findMany: jest.fn(async () => []),
       },
     });
-    jest.spyOn(push, 'sendKindPushForActor').mockImplementation(sendKindPushSpy);
+    jest
+      .spyOn(push, "sendKindPushForActor")
+      .mockImplementation(sendKindPushSpy);
     return { svc, prisma, sendKindPushSpy };
   }
 
-  it('creates a row, increments the bell, and pushes', async () => {
+  it("creates a row, increments the bell, and pushes", async () => {
     const { svc, prisma, sendKindPushSpy } = build();
 
-    await svc['writer'].createStatusUpdateNotification({
-      recipientUserId: 'r1',
-      actorUserId: 'a1',
-      actorUsername: 'actor-user',
-      text: 'Fresh status',
+    await svc["fanout"].createStatusUpdateNotification({
+      recipientUserId: "r1",
+      actorUserId: "a1",
+      actorUsername: "actor-user",
+      text: "Fresh status",
       postId: null,
     });
 
@@ -224,22 +307,22 @@ describe('createStatusUpdateNotification', () => {
     expect(prisma.user.update).toHaveBeenCalledTimes(1); // bell increment
     await new Promise(setImmediate);
     expect(sendKindPushSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'status_update', recipientUserId: 'r1' }),
+      expect.objectContaining({ kind: "status_update", recipientUserId: "r1" }),
     );
   });
 
-  it('emits a non-silent event so clients announce the arrival', async () => {
+  it("emits a non-silent event so clients announce the arrival", async () => {
     const { svc } = build();
     stubPresenceRealtime.emitNotificationNew.mockClear();
     jest
-      .spyOn(svc['query'], 'buildNotificationDtoForRecipient')
-      .mockResolvedValue({ id: 'new-notif' } as any);
+      .spyOn(svc["query"], "buildNotificationDtoForRecipient")
+      .mockResolvedValue({ id: "new-notif" } as any);
 
-    await svc['writer'].createStatusUpdateNotification({
-      recipientUserId: 'r1',
-      actorUserId: 'a1',
-      actorUsername: 'actor-user',
-      text: 'Fresh status',
+    await svc["fanout"].createStatusUpdateNotification({
+      recipientUserId: "r1",
+      actorUserId: "a1",
+      actorUsername: "actor-user",
+      text: "Fresh status",
       postId: null,
     });
 
@@ -248,15 +331,17 @@ describe('createStatusUpdateNotification', () => {
     expect(stubPresenceRealtime.emitNotificationsUpdated).toHaveBeenCalled();
   });
 
-  it('creates a NEW row even when an earlier status notification exists', async () => {
-    const { svc, prisma, sendKindPushSpy } = build({ id: 'older-status-notif' });
+  it("creates a NEW row even when an earlier status notification exists", async () => {
+    const { svc, prisma, sendKindPushSpy } = build({
+      id: "older-status-notif",
+    });
 
-    await svc['writer'].createStatusUpdateNotification({
-      recipientUserId: 'r1',
-      actorUserId: 'a1',
-      actorUsername: 'actor-user',
-      text: 'Second status today',
-      postId: 'post-2',
+    await svc["fanout"].createStatusUpdateNotification({
+      recipientUserId: "r1",
+      actorUserId: "a1",
+      actorUsername: "actor-user",
+      text: "Second status today",
+      postId: "post-2",
     });
 
     expect(prisma.notification.create).toHaveBeenCalledTimes(1);
@@ -265,44 +350,48 @@ describe('createStatusUpdateNotification', () => {
     expect(sendKindPushSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('deep-links the push to the status post when one exists', async () => {
+  it("deep-links the push to the status post when one exists", async () => {
     const { svc, sendKindPushSpy } = build();
 
-    await svc['writer'].createStatusUpdateNotification({
-      recipientUserId: 'r1',
-      actorUserId: 'a1',
-      actorUsername: 'actor-user',
-      text: 'With a post',
-      postId: 'post-abc',
+    await svc["fanout"].createStatusUpdateNotification({
+      recipientUserId: "r1",
+      actorUserId: "a1",
+      actorUsername: "actor-user",
+      text: "With a post",
+      postId: "post-abc",
     });
 
     await new Promise(setImmediate);
-    expect(sendKindPushSpy).toHaveBeenCalledWith(expect.objectContaining({ url: '/p/post-abc' }));
+    expect(sendKindPushSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "/p/post-abc" }),
+    );
   });
 
-  it('falls back to the profile when the status made no post', async () => {
+  it("falls back to the profile when the status made no post", async () => {
     const { svc, sendKindPushSpy } = build();
 
-    await svc['writer'].createStatusUpdateNotification({
-      recipientUserId: 'r1',
-      actorUserId: 'a1',
-      actorUsername: 'actor-user',
-      text: 'No post',
+    await svc["fanout"].createStatusUpdateNotification({
+      recipientUserId: "r1",
+      actorUserId: "a1",
+      actorUsername: "actor-user",
+      text: "No post",
       postId: null,
     });
 
     await new Promise(setImmediate);
-    expect(sendKindPushSpy).toHaveBeenCalledWith(expect.objectContaining({ url: '/u/actor-user' }));
+    expect(sendKindPushSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "/u/actor-user" }),
+    );
   });
 
-  it('never notifies the actor about themselves', async () => {
+  it("never notifies the actor about themselves", async () => {
     const { svc, prisma, sendKindPushSpy } = build();
 
-    await svc['writer'].createStatusUpdateNotification({
-      recipientUserId: 'actor-self',
-      actorUserId: 'actor-self',
-      actorUsername: 'actor-user',
-      text: 'Should be no-op',
+    await svc["fanout"].createStatusUpdateNotification({
+      recipientUserId: "actor-self",
+      actorUserId: "actor-self",
+      actorUsername: "actor-user",
+      text: "Should be no-op",
       postId: null,
     });
 
@@ -317,16 +406,18 @@ describe('createStatusUpdateNotification', () => {
    * and `buildPushTag` prefers subjectPostId over subjectUserId — so passing subjectPostId
    * here would give every status its own tag and silently disable coalescing entirely.
    */
-  it('keeps the push coalesce tag actor-scoped so a burst of statuses collapses', async () => {
+  it("keeps the push coalesce tag actor-scoped so a burst of statuses collapses", async () => {
     const sendKindPushSpy = jest.fn(async (_args: any) => {});
     const { svc, push } = buildServices({});
-    jest.spyOn(push, 'sendKindPushForActor').mockImplementation(sendKindPushSpy);
+    jest
+      .spyOn(push, "sendKindPushForActor")
+      .mockImplementation(sendKindPushSpy);
 
-    for (const postId of ['post-1', 'post-2']) {
-      await svc['writer'].createStatusUpdateNotification({
-        recipientUserId: 'r1',
-        actorUserId: 'a1',
-        actorUsername: 'actor-user',
+    for (const postId of ["post-1", "post-2"]) {
+      await svc["fanout"].createStatusUpdateNotification({
+        recipientUserId: "r1",
+        actorUserId: "a1",
+        actorUsername: "actor-user",
         text: `Status for ${postId}`,
         postId,
       });
@@ -335,7 +426,7 @@ describe('createStatusUpdateNotification', () => {
 
     expect(sendKindPushSpy).toHaveBeenCalledTimes(2);
     const tags = sendKindPushSpy.mock.calls.map(([args]) =>
-      push.buildPushTag({
+      buildPushTag({
         recipientUserId: args.recipientUserId,
         kind: args.kind,
         actorUserId: args.actorUserId,
@@ -343,7 +434,7 @@ describe('createStatusUpdateNotification', () => {
         subjectUserId: args.subjectUserId ?? null,
       }),
     );
-    expect(tags[0]).toBe('notif-status_update-user-a1');
+    expect(tags[0]).toBe("notif-status_update-user-a1");
     expect(tags[1]).toBe(tags[0]);
   });
 });
@@ -352,7 +443,7 @@ describe('createStatusUpdateNotification', () => {
 // patchStatusUpdateNotification – editing a status is silent
 // ---------------------------------------------------------------------------
 
-describe('patchStatusUpdateNotification', () => {
+describe("patchStatusUpdateNotification", () => {
   beforeEach(() => jest.clearAllMocks());
 
   function build(existing: { id: string } | null) {
@@ -360,69 +451,73 @@ describe('patchStatusUpdateNotification', () => {
     const { svc, prisma, push } = buildServices({
       notification: {
         findFirst: jest.fn(async () => existing),
-        create: jest.fn(async () => ({ id: 'new-notif' })),
+        create: jest.fn(async () => ({ id: "new-notif" })),
         update: jest.fn(async () => ({})),
         count: jest.fn(async () => 1),
         findUnique: jest.fn(async () => null),
         findMany: jest.fn(async () => []),
       },
     });
-    jest.spyOn(push, 'sendKindPushForActor').mockImplementation(sendKindPushSpy);
+    jest
+      .spyOn(push, "sendKindPushForActor")
+      .mockImplementation(sendKindPushSpy);
     return { svc, prisma, sendKindPushSpy };
   }
 
-  it('patches the latest row in place with no bell and no push', async () => {
-    const { svc, prisma, sendKindPushSpy } = build({ id: 'existing-notif' });
+  it("patches the latest row in place with no bell and no push", async () => {
+    const { svc, prisma, sendKindPushSpy } = build({ id: "existing-notif" });
 
-    await svc['writer'].patchStatusUpdateNotification({
-      recipientUserId: 'r1',
-      actorUserId: 'a1',
-      text: 'Edited text',
-      postId: 'post-1',
+    await svc["fanout"].patchStatusUpdateNotification({
+      recipientUserId: "r1",
+      actorUserId: "a1",
+      text: "Edited text",
+      postId: "post-1",
     });
 
     expect(prisma.notification.update).toHaveBeenCalledTimes(1);
     const updateArgs = prisma.notification.update.mock.calls[0][0];
-    expect(updateArgs.where).toEqual({ id: 'existing-notif' });
-    expect(updateArgs.data).toMatchObject({ body: 'Edited text' });
+    expect(updateArgs.where).toEqual({ id: "existing-notif" });
+    expect(updateArgs.data).toMatchObject({ body: "Edited text" });
     // Unread state is untouched — an edit must not resurface the notification.
-    expect(updateArgs.data).not.toHaveProperty('deliveredAt');
-    expect(updateArgs.data).not.toHaveProperty('readAt');
+    expect(updateArgs.data).not.toHaveProperty("deliveredAt");
+    expect(updateArgs.data).not.toHaveProperty("readAt");
     expect(prisma.notification.create).not.toHaveBeenCalled();
     expect(prisma.user.update).not.toHaveBeenCalled();
     await new Promise(setImmediate);
     expect(sendKindPushSpy).not.toHaveBeenCalled();
   });
 
-  it('marks the realtime emit silent so clients skip the sound and badge', async () => {
-    const { svc } = build({ id: 'existing-notif' });
+  it("marks the realtime emit silent so clients skip the sound and badge", async () => {
+    const { svc } = build({ id: "existing-notif" });
     stubPresenceRealtime.emitNotificationNew.mockClear();
     jest
-      .spyOn(svc['query'], 'buildNotificationDtoForRecipient')
-      .mockResolvedValue({ id: 'existing-notif' } as any);
+      .spyOn(svc["query"], "buildNotificationDtoForRecipient")
+      .mockResolvedValue({ id: "existing-notif" } as any);
 
-    await svc['writer'].patchStatusUpdateNotification({
-      recipientUserId: 'r1',
-      actorUserId: 'a1',
-      text: 'Edited text',
+    await svc["fanout"].patchStatusUpdateNotification({
+      recipientUserId: "r1",
+      actorUserId: "a1",
+      text: "Edited text",
       postId: null,
     });
 
     expect(stubPresenceRealtime.emitNotificationNew).toHaveBeenCalledWith(
-      'r1',
+      "r1",
       expect.objectContaining({ silent: true }),
     );
     // A silent patch must never touch the bell count.
-    expect(stubPresenceRealtime.emitNotificationsUpdated).not.toHaveBeenCalled();
+    expect(
+      stubPresenceRealtime.emitNotificationsUpdated,
+    ).not.toHaveBeenCalled();
   });
 
-  it('is a no-op when the recipient has no status notification to patch', async () => {
+  it("is a no-op when the recipient has no status notification to patch", async () => {
     const { svc, prisma } = build(null);
 
-    await svc['writer'].patchStatusUpdateNotification({
-      recipientUserId: 'r1',
-      actorUserId: 'a1',
-      text: 'Edited text',
+    await svc["fanout"].patchStatusUpdateNotification({
+      recipientUserId: "r1",
+      actorUserId: "a1",
+      text: "Edited text",
       postId: null,
     });
 
@@ -435,16 +530,14 @@ describe('patchStatusUpdateNotification', () => {
 // shouldSendPushForKind – status_update gates on pushFollowedPost
 // ---------------------------------------------------------------------------
 
-describe('NotificationPushService.shouldSendPushForKind for status_update', () => {
-  it('returns true when pushFollowedPost is true', () => {
+describe("NotificationPushService.shouldSendPushForKind for status_update", () => {
+  it("returns true when pushFollowedPost is true", () => {
     const prefs = makeDefaultPrefs();
-    const { push } = buildServices({});
-    expect(push.shouldSendPushForKind(prefs, 'status_update')).toBe(true);
+    expect(shouldSendPushForKind(prefs, "status_update")).toBe(true);
   });
 
-  it('returns false when pushFollowedPost is false', () => {
+  it("returns false when pushFollowedPost is false", () => {
     const prefs = { ...makeDefaultPrefs(), pushFollowedPost: false };
-    const { push } = buildServices({});
-    expect(push.shouldSendPushForKind(prefs, 'status_update')).toBe(false);
+    expect(shouldSendPushForKind(prefs, "status_update")).toBe(false);
   });
 });

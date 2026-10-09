@@ -1,17 +1,8 @@
 import { toAvatarVideoDto } from "./avatar-video.dto";
 import type { AvatarVideoDto } from "./avatar-video.dto";
-import type {
-  AccountKind,
-  BirthdayVisibility,
-  FollowVisibility,
-  HeardAboutUs,
-  VerifiedStatus,
-} from "@prisma/client";
+import type { AccountKind, BirthdayVisibility, FollowVisibility, HeardAboutUs, VerifiedStatus } from "@prisma/client";
 import { publicAssetUrl } from "../assets/public-asset-url";
-import {
-  sanitizeFeatureToggles,
-  type AppFeatureToggle,
-} from "../feature-toggles";
+import { sanitizeFeatureToggles, type AppFeatureToggle } from "../feature-toggles";
 
 /** Minimal org account summary shown alongside affiliated users. */
 export type OrgAffiliationDto = {
@@ -21,6 +12,45 @@ export type OrgAffiliationDto = {
   avatarUrl: string | null;
   avatarVideo?: AvatarVideoDto | null;
 };
+
+export function toOrgAffiliationDto(
+  org: {
+    id: string;
+    username: string | null;
+    name: string | null;
+    avatarKey?: string | null;
+    avatarUpdatedAt?: Date | null;
+    avatarVideoKey?: string | null;
+    avatarVideoDurationMs?: number | null;
+  },
+  publicBaseUrl: string | null,
+): OrgAffiliationDto {
+  return {
+    id: org.id,
+    username: org.username,
+    name: org.name,
+    avatarUrl: publicAssetUrl({
+      publicBaseUrl,
+      key: org.avatarKey ?? null,
+      updatedAt: org.avatarUpdatedAt ?? null,
+    }),
+    avatarVideo: toAvatarVideoDto(org, publicBaseUrl),
+  };
+}
+
+/** Groups `userOrgMembership` rows (ordered upstream) into userId → affiliations. */
+export function groupOrgAffiliations(
+  memberships: { userId: string; org: Parameters<typeof toOrgAffiliationDto>[0] }[],
+  publicBaseUrl: string | null,
+): Map<string, OrgAffiliationDto[]> {
+  const map = new Map<string, OrgAffiliationDto[]>();
+  for (const m of memberships) {
+    const list = map.get(m.userId) ?? [];
+    list.push(toOrgAffiliationDto(m.org, publicBaseUrl));
+    map.set(m.userId, list);
+  }
+  return map;
+}
 
 /** Relationship fields for list-user DTOs (follows, search). */
 export type UserNotificationPreference = "all" | "posts" | "off";
@@ -167,12 +197,16 @@ export type UserDto = {
   usernameIsSet: boolean;
   name: string | null;
   bio: string | null;
+  /** @deprecated Use `links`/ProfileLink (legacyField 'website'); mirror written only by the links service. */
   website: string | null;
   /** Verified X handle. Written only when the member connects X. */
   xUsername: string | null;
   pickaxUsername: string | null;
+  /** @deprecated Use `links`/ProfileLink (legacyField 'rumble'); mirror written only by the links service. */
   rumbleUrl: string | null;
+  /** @deprecated Use `links`/ProfileLink (legacyField 'linkedin'); mirror written only by the links service. */
   linkedinUrl: string | null;
+  /** @deprecated Use `links`/ProfileLink (legacyField 'youtube'); mirror written only by the links service. */
   youtubeUrl: string | null;
   locationInput: string | null;
   locationDisplay: string | null;
@@ -311,12 +345,16 @@ export type UserDtoRow = {
   usernameIsSet: boolean;
   name: string | null;
   bio: string | null;
+  /** @deprecated Use `links`/ProfileLink (legacyField 'website'); mirror written only by the links service. */
   website: string | null;
   /** Verified X handle. Written only when the member connects X. */
   xUsername: string | null;
   pickaxUsername: string | null;
+  /** @deprecated Use `links`/ProfileLink (legacyField 'rumble'); mirror written only by the links service. */
   rumbleUrl: string | null;
+  /** @deprecated Use `links`/ProfileLink (legacyField 'linkedin'); mirror written only by the links service. */
   linkedinUrl: string | null;
+  /** @deprecated Use `links`/ProfileLink (legacyField 'youtube'); mirror written only by the links service. */
   youtubeUrl: string | null;
   locationInput: string | null;
   locationDisplay: string | null;
@@ -399,7 +437,7 @@ export function toUserDto(
     heardAboutUsOther: user.heardAboutUsOther ?? null,
     hasRecruiter: Boolean(user.recruitedById),
     siteAdmin: user.siteAdmin,
-    featureToggles: sanitizeFeatureToggles((user as any).featureToggles),
+    featureToggles: sanitizeFeatureToggles(user.featureToggles),
     bannedAt: user.bannedAt ? user.bannedAt.toISOString() : null,
     bannedReason: user.bannedReason ?? null,
     bannedByAdminId: user.bannedByAdminId ?? null,
@@ -424,28 +462,13 @@ export function toUserDto(
       updatedAt: user.bannerUpdatedAt ?? null,
     }),
     pinnedPostId: user.pinnedPostId ?? null,
-    coins:
-      typeof (user as any).coins === "number"
-        ? ((user as any).coins as number)
-        : 0,
-    checkinStreakDays:
-      typeof (user as any).checkinStreakDays === "number"
-        ? ((user as any).checkinStreakDays as number)
-        : 0,
-    lastCheckinDayKey: (user as any).lastCheckinDayKey
-      ? String((user as any).lastCheckinDayKey)
-      : null,
+    coins: user.coins ?? 0,
+    checkinStreakDays: user.checkinStreakDays ?? 0,
+    lastCheckinDayKey: user.lastCheckinDayKey ? String(user.lastCheckinDayKey) : null,
     // Invariant: longest streak can never be lower than current streak.
     // This also gracefully handles legacy users where `longestStreakDays` was introduced after streak tracking began.
-    longestStreakDays: Math.max(
-      typeof (user as any).longestStreakDays === "number"
-        ? ((user as any).longestStreakDays as number)
-        : 0,
-      typeof (user as any).checkinStreakDays === "number"
-        ? ((user as any).checkinStreakDays as number)
-        : 0,
-    ),
-    locationPromptSkipped: Boolean((user as any).locationPromptSkipped),
-    openToCrew: Boolean((user as any).openToCrewAt),
+    longestStreakDays: Math.max(user.longestStreakDays ?? 0, user.checkinStreakDays ?? 0),
+    locationPromptSkipped: Boolean(user.locationPromptSkipped),
+    openToCrew: Boolean(user.openToCrewAt),
   };
 }

@@ -1,5 +1,5 @@
+import { makeArticlesService } from './articles.testing';
 import { VerifiedStatus } from '@prisma/client';
-import { ArticlesService } from './articles.service';
 
 const author = {
   id: 'user-1',
@@ -61,7 +61,7 @@ function makeService() {
     allowedPostVisibilities: jest.fn().mockReturnValue(['public']),
   } as any;
 
-  const service = new ArticlesService(
+  const service = makeArticlesService(
     prisma,
     viewer,
     { r2: jest.fn().mockReturnValue({ publicBaseUrl: 'https://cdn.example.com' }) } as any,
@@ -72,7 +72,7 @@ function makeService() {
     { dispatch: jest.fn() } as any,
     { viewerViewedArticleIds: jest.fn() } as any,
     { syncArticleThread: jest.fn().mockResolvedValue(undefined), createArticleThread: jest.fn().mockResolvedValue(null) } as any,
-    { write: prisma.post } as any,
+    { createArticleShare: jest.fn() } as any,
   );
 
   return { service, prisma };

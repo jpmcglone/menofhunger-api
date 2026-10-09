@@ -1,6 +1,10 @@
 import { Module } from '@nestjs/common';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PresenceService } from '../presence/presence.service';
+import { PresenceAnonymousStateService } from '../presence/presence-anonymous-state.service';
+import { PresenceLobbyStateService } from '../presence/presence-lobby-state.service';
+import { PresenceRedisBusService } from '../presence/presence-redis-bus.service';
+import { PresenceRedisReadService } from '../presence/presence-redis-read.service';
 import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
 
 /**
@@ -11,8 +15,24 @@ import { PresenceRedisStateService } from '../presence/presence-redis-state.serv
  * This breaks circular dependencies between PresenceModule and domain modules.
  */
 @Module({
-  providers: [PresenceService, PresenceRealtimeService, PresenceRedisStateService],
-  exports: [PresenceService, PresenceRealtimeService, PresenceRedisStateService],
+  providers: [
+    PresenceService,
+    PresenceRealtimeService,
+    PresenceRedisBusService,
+    PresenceRedisReadService,
+    PresenceAnonymousStateService,
+    PresenceLobbyStateService,
+    PresenceRedisStateService,
+  ],
+  exports: [
+    PresenceService,
+    PresenceRealtimeService,
+    PresenceRedisStateService,
+    PresenceRedisBusService,
+    PresenceRedisReadService,
+    PresenceLobbyStateService,
+    PresenceAnonymousStateService,
+  ],
 })
 export class RealtimeModule {}
 

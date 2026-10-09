@@ -1,14 +1,13 @@
+import { PostsMutationWriteService } from '../../posts/posts-mutation-write.service';
 import { findGroupMemberStatus } from '../../viewer/group-membership.queries';
 import { MARV_NO_REPLY } from '../marvin-prompt-instructions';
 import { parseMentionsFromBody } from '../../../common/mentions/mention-regex';
 import { boardMarvReplyId } from '../services/board-marv-reply-id';
 import { marvinFailureReason, fitMarvinPost } from '../services/marvin-failure';
-import { Injectable, Logger, Optional } from '@nestjs/common';
-import { Prisma, type MarvinMode } from '@prisma/client';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { ResolvedMarvinMode } from '../services/marvin-routing.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppConfigService } from '../../app/app-config.service';
-import { PostsService } from '../../posts/posts.service';
 import { MarvinAIService, MarvinAINotConfiguredError } from '../services/marvin-ai.service';
 import { MarvinBotIdentityService } from '../services/marvin-bot-identity.service';
 import { MarvinCannedRepliesService } from '../services/marvin-canned-replies.service';
@@ -24,38 +23,15 @@ import { MARV_ERROR_CODES, buildMarvIdempotencyKey } from '../marvin.constants';
 import { JobsService } from '../../jobs/jobs.service';
 import { JOBS } from '../../jobs/jobs.constants';
 import { MarvinThreadSummaryService } from '../services/marvin-thread-summary.service';
-import {
-  MarvinThreadContextService,
-  type MarvGroupVenue,
-  type MarvThreadContextPost,
-} from '../services/marvin-thread-context.service';
+import { MarvinThreadContextService, type MarvGroupVenue } from '../services/marvin-thread-context.service';
 import { LinkMetadataService } from '../../link-metadata/link-metadata.service';
 import { fillVisionSlots } from '../services/marvin-vision-media';
 import { PostsReadService } from '../../posts-read/posts-read.service';
-import { USER_REF_SELECT } from '../../../common/prisma-selects/user.select';
-/**
- * How often to re-emit `posts:typing` while the AI call is in flight.
- * The web client expires the indicator after 7 000ms (`usePostTyping.TYPING_TTL_MS`),
- * so we heartbeat at half that to keep the indicator alive through long tool loops.
- */
-const TYPING_HEARTBEAT_MS = 3000;
-/** Jev must put the chance the author wants an answer below this before a mention goes unanswered. */
-const MENTION_NO_REPLY_THRESHOLD = 0.05;
-const MENTION_GATE_MAX_CHARS = 240;
-
-export type MarvinPublicReplyJobPayload = {
-  postId: string;
-  rootPostId: string;
-  requestingUserId: string;
-  /** Optional mode override (from `x-marv-mode` header on the post create call). */
-  requestedMode?: MarvinMode | null;
-  /** Snapshot of the original post body (used as Marv's question seed). */
-  bodySnippet?: string;
-  /** Visibility of the triggering post — informational; createPost mirrors parent visibility. */
-  visibility?: string;
-  /** Set when an untagged post was recognized as speaking to Marv, so the @mention check is waived. */
-  addressedBy?: 'jev';
-};
+import { USER_BRIEF_SELECT, USER_REF_SELECT } from '../../../common/prisma-selects/user.select';
+import { type MarvinPublicReplyJobPayload } from './marvin-public-reply.constants';
+import { MarvinPublicReplyContextService } from './marvin-public-reply-context.service';
+import { NOT_DELETED } from '../../../common/prisma/where';
+export type { MarvinPublicReplyJobPayload } from './marvin-public-reply.constants';
 
 /**
  * BullMQ "marvin.reply.public" worker.
@@ -68,18 +44,18 @@ export type MarvinPublicReplyJobPayload = {
  *  5. Pick a routed mode (Fast/Regular/Smart + sensitive-topic auto-upgrade).
  *  6. Credit gate — insufficient credits → out-of-credits DM (no AI call).
  *  7. Rate-limit gate — per-user/hour, per-user/day, per-thread cooldown.
- *  8. Build prompt → call MarvinAIService → post the reply via PostsService.createPost.
+ *  8. Build prompt → call MarvinAIService → post the reply via PostsMutationWriteService.createMarvReply.
  *  9. Spend credits + record MarvinUsageEvent + emit `marv:credits-updated`.
  */
 @Injectable()
 export class MarvinPublicReplyProcessor {
-  private readonly logger = new Logger(MarvinPublicReplyProcessor.name);
+  readonly logger = new Logger(MarvinPublicReplyProcessor.name);
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly identity: MarvinBotIdentityService,
-    private readonly posts: PostsService,
+    @Inject(PostsMutationWriteService) private readonly postsMutationWrite: Pick<PostsMutationWriteService, 'createMarvReply'>,
     private readonly credits: MarvinCreditService,
     private readonly routing: MarvinRoutingService,
     private readonly promptBuilder: MarvinPromptBuilderService,
@@ -94,54 +70,19 @@ export class MarvinPublicReplyProcessor {
     private readonly presenceRealtime: PresenceRealtimeService,
     private readonly postsRead: PostsReadService,
     private readonly platform: MarvinPlatformContextService,
+    private readonly replyContext: MarvinPublicReplyContextService,
     @Optional() private readonly jev?: MarvinJevService,
   ) {}
 
-  /**
-   * Conservative on purpose: a question mark, media, or a long message always gets a reply, and
-   * Jev must be very sure nothing is being asked. Jev being unavailable means reply as usual.
-   */
-  private async mentionNeedsNoReply(text: string, mediaCount: number, parentId: string | null): Promise<boolean> {
-    if (!this.jev || mediaCount > 0 || text.includes('?') || text.length > MENTION_GATE_MAX_CHARS) return false;
-    if (!this.jev.replyGateAvailable()) return false;
-    // "yes please" only makes sense next to what it answers, so give Jev the message being replied to.
-    const parent = parentId
-      ? await this.postsRead.read.findFirst({
-          where: { id: parentId, deletedAt: null },
-          select: { body: true, user: { select: { id: true } } },
-        })
-      : null;
-    const marvId = this.identity.cachedMarvUserId();
-    const probability = await this.jev.replyExpectedProbability({
-      text,
-      previous: parent ? { text: parent.body ?? '', fromMarv: Boolean(marvId && parent.user.id === marvId) } : null,
-    });
-    return probability !== null && probability < MENTION_NO_REPLY_THRESHOLD;
+  async mentionNeedsNoReply(text: string, mediaCount: number, parentId: string | null) : Promise<boolean> {
+    return this.replyContext.mentionNeedsNoReply(text, mediaCount, parentId);
   }
 
-  /** Parent post plus the tier of the Marv answer it replied to, when this turn is a correction. */
-  private async correctionContext(parentId: string | null): Promise<{
+  async correctionContext(parentId: string | null) : Promise<{
     replyingTo: { text: string; fromMarv: boolean } | null;
     priorEffectiveMode: ResolvedMarvinMode | null;
   }> {
-    if (!parentId) return { replyingTo: null, priorEffectiveMode: null };
-    const parent = await this.postsRead.read.findFirst({
-      where: { id: parentId, deletedAt: null },
-      select: { body: true, parentId: true, userId: true },
-    });
-    if (!parent) return { replyingTo: null, priorEffectiveMode: null };
-    const marvId = this.identity.cachedMarvUserId();
-    const fromMarv = Boolean(marvId && parent.userId === marvId);
-    let priorEffectiveMode: ResolvedMarvinMode | null = null;
-    if (fromMarv && parent.parentId) {
-      const prior = await this.prisma.marvinUsageEvent.findFirst({
-        where: { source: 'public_thread', sourceId: parent.parentId, errorCode: null },
-        orderBy: { createdAt: 'desc' },
-        select: { effectiveMode: true },
-      });
-      priorEffectiveMode = MarvinRoutingService.asResolvedMode(prior?.effectiveMode);
-    }
-    return { replyingTo: { text: parent.body ?? '', fromMarv }, priorEffectiveMode };
+    return this.replyContext.correctionContext(parentId);
   }
 
   async process(payload: MarvinPublicReplyJobPayload): Promise<void> {
@@ -204,8 +145,8 @@ export class MarvinPublicReplyProcessor {
     }
 
     // 3. Load the post + author + premium-flag + media + poll.
-    const post = await this.postsRead.read.findFirst({
-      where: { id: postId, deletedAt: null },
+    const post = await this.postsRead.findFirst({
+      where: { id: postId, ...NOT_DELETED },
       select: {
         id: true,
         body: true,
@@ -219,13 +160,13 @@ export class MarvinPublicReplyProcessor {
           select: { name: true, description: true, deletedAt: true },
         },
         user: {
-          select: { id: true, username: true, name: true, premium: true, premiumPlus: true, bannedAt: true },
+          select: { ...USER_BRIEF_SELECT, premium: true, premiumPlus: true, bannedAt: true },
         },
         mentions: {
           select: { user: { select: USER_REF_SELECT } },
         },
         media: {
-          where: { deletedAt: null },
+          where: NOT_DELETED,
           select: { id: true, kind: true, source: true, r2Key: true, url: true, thumbnailR2Key: true, position: true },
           orderBy: { position: 'asc' },
         },
@@ -251,7 +192,7 @@ export class MarvinPublicReplyProcessor {
       if (!marvUserIdForTyping || post.userId === marvUserIdForTyping ||
           !post.mentions.some(mention => mention.user.id === marvUserIdForTyping)) return;
       // A delivery may have committed before the worker lost its connection.
-      const existing = await this.postsRead.read.findUnique({ where: { id: boardMarvReplyId(postId) }, select: { id: true } });
+      const existing = await this.postsRead.findIncludingDeleted({ where: { id: boardMarvReplyId(postId) }, select: { id: true } });
       if (existing) return;
     }
     if (post.user.bannedAt) {
@@ -858,7 +799,7 @@ export class MarvinPublicReplyProcessor {
     );
     let createdPostId: string | null = null;
     try {
-      const created = await this.posts.createMarvReply({
+      const created = await this.postsMutationWrite.createMarvReply({
         botUserId: marvId,
         requestingUserId,
         body: replyText,
@@ -950,74 +891,11 @@ export class MarvinPublicReplyProcessor {
     }
   }
 
-  /**
-   * Show "@marv is replying…" on the triggering post via the same `posts:typing`
-   * event humans use. Queued / thinking / composing all emit `replying`. Always
-   * call `stop()` so the indicator never gets stuck.
-   */
-  private startTypingHeartbeat(args: {
-    postId: string;
-    marvUserId: string;
-    username: string;
-  }): { stop: () => void } {
-    const { postId, marvUserId, username } = args;
-    const noop = { stop: () => {} };
-    if (!postId || !marvUserId) return noop;
-
-    const marvUsername = username;
-    let stopped = false;
-
-    const emit = (typing: boolean): void => {
-      try {
-        this.presenceRealtime.emitPostsTyping(postId, {
-          postId,
-          user: {
-            id: marvUserId,
-            username: marvUsername,
-            verifiedStatus: 'manual',
-            premium: true,
-            premiumPlus: false,
-            isOrganization: false,
-          },
-          typing,
-          status: typing ? 'replying' : undefined,
-        });
-      } catch {
-        // best-effort: typing indicator is non-essential UX
-      }
-    };
-
-    emit(true);
-    const interval = setInterval(() => {
-      if (!stopped) emit(true);
-    }, TYPING_HEARTBEAT_MS);
-
-    return {
-      stop: () => {
-        if (stopped) return;
-        stopped = true;
-        clearInterval(interval);
-        emit(false);
-      },
-    };
+  startTypingHeartbeat(args: { postId: string; marvUserId: string; username: string }): { stop: () => void } {
+    return this.replyContext.startTypingHeartbeat(args);
   }
 
-  /**
-   * Collect the full public thread around the triggering post via
-   * {@link MarvinThreadContextService}, map it into the prompt builder's
-   * {@link MarvThreadPost} shape, and select vision images across that window.
-   *
-   * Returns:
-   *  - `ancestors`: posts before the triggering post in thread reading order (siblings included).
-   *  - `triggeringPost`: the post that mentioned Marv (undefined if it couldn't be loaded).
-   *  - `descendants`: posts after the triggering post in thread reading order (siblings included).
-   *  - `imageUrls`: up to `visionMaxImagesPerTurn` image/GIF URLs, chosen by proximity to the trigger.
-   *  - `hasGifAttached`: true when at least one selected URL came from a GIF.
-   */
-  private async fetchBidirectionalContext(
-    triggeringPostId: string,
-    openAICfg: ReturnType<AppConfigService['marvOpenAI']>,
-  ): Promise<{
+  async fetchBidirectionalContext(triggeringPostId: string, openAICfg: ReturnType<AppConfigService['marvOpenAI']>) : Promise<{
     ancestors: MarvThreadPost[];
     triggeringPost: MarvThreadPost | undefined;
     descendants: MarvThreadPost[];
@@ -1025,61 +903,10 @@ export class MarvinPublicReplyProcessor {
     hasGifAttached: boolean;
     group: MarvGroupVenue | null;
   }> {
-    const emptyResult = {
-      ancestors: [] as MarvThreadPost[],
-      triggeringPost: undefined as MarvThreadPost | undefined,
-      descendants: [] as MarvThreadPost[],
-      imageUrls: [] as string[],
-      hasGifAttached: false,
-      group: null as MarvGroupVenue | null,
-    };
-    try {
-      const context = await this.threadContext.collect({ focalPostId: triggeringPostId });
-
-      const toThreadPost = (p: MarvThreadContextPost): MarvThreadPost => ({
-        id: p.id,
-        authorUsername: p.authorUsername,
-        authorDisplayName: p.authorDisplayName,
-        body: p.body,
-        createdAt: p.createdAt.toISOString(),
-        isMarv: p.isMarv,
-        checkinPrompt: p.checkinPrompt,
-        poll: p.poll ?? null,
-        media: p.media,
-        urls: p.urls,
-      });
-
-      const ancestors = context.ancestors.map(toThreadPost);
-      const triggeringPost = context.focal ? toThreadPost(context.focal) : undefined;
-      const descendants = context.descendants.map(toThreadPost);
-
-      // Image selection across the whole collected conversation (shared with "Catch me up").
-      const { imageUrls, hasGifAttached } = this.threadContext.selectImageMedia(context, {
-        visionEnabled: openAICfg.visionEnabled,
-        visionMaxImagesPerTurn: openAICfg.visionMaxImagesPerTurn,
-        publicBaseUrl: this.appConfig.r2()?.publicBaseUrl ?? null,
-      });
-
-      return { ancestors, triggeringPost, descendants, imageUrls, hasGifAttached, group: context.group };
-    } catch (err) {
-      this.logger.warn(
-        `[marv] fetchBidirectionalContext failed for focal=${triggeringPostId}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return emptyResult;
-    }
+    return this.replyContext.fetchBidirectionalContext(triggeringPostId, openAICfg);
   }
 
-  /**
-   * Insert the idempotency key inside its own transaction; a `P2002` unique violation means
-   * another worker already claimed this job.
-   */
-  private async tryClaimIdempotency(key: string): Promise<boolean> {
-    try {
-      await this.prisma.marvinIdempotencyKey.create({ data: { key } });
-      return true;
-    } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return false;
-      throw err;
-    }
+  async tryClaimIdempotency(key: string) : Promise<boolean> {
+    return this.replyContext.tryClaimIdempotency(key);
   }
 }

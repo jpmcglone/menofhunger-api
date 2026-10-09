@@ -1,3 +1,4 @@
+import { clampLimit } from '../../common/pagination/page';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { PostVisibility } from '@prisma/client';
@@ -7,22 +8,14 @@ import { CacheService } from '../redis/cache.service';
 import { CacheInvalidationService } from '../redis/cache-invalidation.service';
 import { CacheTtl } from '../redis/cache-ttl';
 import { RedisKeys } from '../redis/redis-keys';
-import {
-  excludeCommunityGroupPostsWhere,
-  notDeletedWhere,
-  userNotBannedWhere,
-} from './posts-query-builders';
+import { excludeCommunityGroupPostsWhere, notDeletedWhere, userNotBannedWhere } from './posts-query-builders';
 import { feedPostInclude, type FeedPost } from './posts-feed.types';
 import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
-import { PostsFeedQueryService } from './posts-feed-query.service';
+import { PostsFeedComposeService } from './posts-feed-compose.service';
+import { PostsFeedListingsService } from './posts-feed-listings.service';
 import type { PostDto } from '../../common/dto/post.dto';
-import {
-  mergeDiscoverCandidates,
-  pageDiscoverIds,
-  rankDiscoverCandidates,
-  type DiscoverCandidate,
-  type DiscoverSeedSignals,
-} from './posts-discover-more.ranking';
+import { mergeDiscoverCandidates, pageDiscoverIds, rankDiscoverCandidates, type DiscoverCandidate, type DiscoverSeedSignals } from './posts-discover-more.ranking';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 const BUCKET_TAKE = 20;
 const CACHED_ID_CAP = 80;
@@ -59,7 +52,8 @@ export class PostsDiscoverMoreService {
     private readonly prisma: PrismaService,
     private readonly viewerContextService: ViewerContextService,
     private readonly enrichment: PostsViewerEnrichmentService,
-    private readonly feedQuery: PostsFeedQueryService,
+    private readonly compose: PostsFeedComposeService,
+    private readonly listings: PostsFeedListingsService,
     private readonly cache: CacheService,
     private readonly cacheInvalidation: CacheInvalidationService,
   ) {}
@@ -71,7 +65,7 @@ export class PostsDiscoverMoreService {
     cursor: string | null;
     shuffleSeed?: string | null;
   }): Promise<{ posts: PostDto[]; nextCursor: string | null }> {
-    const limit = Math.max(1, Math.min(50, Math.floor(params.limit || 8)));
+    const limit = clampLimit(params.limit, { default: 8, max: 50 });
     const viewerUserId = params.viewerUserId ?? null;
     const postId = (params.postId ?? '').trim();
     if (!postId) throw new NotFoundException('Post not found.');
@@ -211,7 +205,7 @@ export class PostsDiscoverMoreService {
     const byId = new Map(posts.map((p) => [p.id, p as FeedPost]));
     const ordered = pageIds.map((id) => byId.get(id)).filter((p): p is FeedPost => Boolean(p));
 
-    const dtos = await this.feedQuery.composeFeedPostDtos({
+    const dtos = await this.compose.composeFeedPostDtos({
       viewerUserId,
       filteredPosts: ordered,
       collapsedItemsByItemId: new Map(),
@@ -222,7 +216,7 @@ export class PostsDiscoverMoreService {
 
   private async loadSeed(postId: string, viewerUserId: string | null): Promise<SeedRow> {
     const post = await this.prisma.post.findFirst({
-      where: { id: postId, deletedAt: null },
+      where: { id: postId, ...NOT_DELETED },
       select: {
         id: true,
         userId: true,
@@ -244,7 +238,7 @@ export class PostsDiscoverMoreService {
 
     if (post.communityGroupId) {
       try {
-        await this.feedQuery.assertCanReadCommunityGroup(viewerUserId, post.communityGroupId);
+        await this.listings.assertCanReadCommunityGroup(viewerUserId, post.communityGroupId);
       } catch {
         throw new NotFoundException('Post not found.');
       }
@@ -265,7 +259,7 @@ export class PostsDiscoverMoreService {
       const rootLookupId = seed.rootId ?? seed.parentId;
       if (rootLookupId && rootLookupId !== seed.id) {
         const root = await this.prisma.post.findFirst({
-          where: { id: rootLookupId, deletedAt: null },
+          where: { id: rootLookupId, ...NOT_DELETED },
           select: { topics: true, hashtags: true, userId: true },
         });
         if (root) {

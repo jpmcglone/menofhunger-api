@@ -5,6 +5,7 @@ import { PostsModule } from '../posts/posts.module';
 import { HashtagsModule } from '../hashtags/hashtags.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { AuthModule } from '../auth/auth.module';
+import { AccountDeletionModule } from '../auth/account-deletion.module';
 import { SearchModule } from '../search/search.module';
 import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
 import { DailyContentModule } from '../daily-content/daily-content.module';
@@ -31,6 +32,7 @@ import { CallsModule } from '../calls/calls.module';
     HashtagsModule,
     NotificationsModule,
     AuthModule,
+    AccountDeletionModule,
     SearchModule,
     LinkMetadataModule,
     DailyContentModule,

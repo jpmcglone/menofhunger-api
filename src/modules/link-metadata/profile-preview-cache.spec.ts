@@ -1,6 +1,5 @@
 import { LinkMetadataService } from "./link-metadata.service";
 import { fetchPickaxProfile } from "./pickax-profile-metadata";
-import { PostsReadService } from '../posts-read/posts-read.service';
 jest.mock("./pickax-profile-metadata", () => ({
   ...jest.requireActual("./pickax-profile-metadata"),
   fetchPickaxProfile: jest.fn(),
@@ -40,7 +39,7 @@ describe("durable Pickax preview cache", () => {
     };
     const service = new LinkMetadataService(prisma as never,
       cache as never,
-      {} as never, new PostsReadService(prisma as never as never));
+      {} as never);
     jest.mocked(fetchPickaxProfile).mockResolvedValue(meta as never);
     expect(await service.getMetadata(meta.url, true)).toEqual(meta);
     expect(await service.getMetadata(meta.url, true)).toEqual(meta);

@@ -1,4 +1,5 @@
-import { NotificationWriterService } from './notification-writer.service';
+import { makeNotificationWriterGraph } from './notification-writer.testing';
+import { NotificationFanoutContentService } from './notification-fanout-content.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
 /**
@@ -27,7 +28,7 @@ type MockPrisma = {
   $executeRaw: jest.Mock;
 };
 
-function makeService(): { service: NotificationWriterService; prisma: MockPrisma; sideEffects: { dispatch: jest.Mock } } {
+function makeService(): { service: NotificationFanoutContentService; prisma: MockPrisma; sideEffects: { dispatch: jest.Mock } } {
   const prisma: MockPrisma = {
     dailyContentSnapshot: {
       findUnique: jest.fn(),
@@ -53,7 +54,7 @@ function makeService(): { service: NotificationWriterService; prisma: MockPrisma
     undeliveredBellWhere: jest.fn((userId: string) => ({ recipientUserId: userId, deliveredAt: null })),
   };
 
-  const service = new NotificationWriterService(prisma as never, new PostsReadService(prisma as never as never),
+  const { fanoutContent: service } = makeNotificationWriterGraph(prisma as never, new PostsReadService(prisma as never as never),
     presenceRealtime as never,
     presenceRedis as never,
     jobs as never,

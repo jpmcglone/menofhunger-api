@@ -1,16 +1,21 @@
+import { Inject } from '@nestjs/common';
+import { PostsViewerEnrichmentService } from '../posts/posts-viewer-enrichment.service';
+import { PostsRankingService } from '../posts/posts-ranking.service';
+import { PostsFeedComposeService } from '../posts/posts-feed-compose.service';
+import { PostsFeedListingsService } from '../posts/posts-feed-listings.service';
 import { Body, Controller, Delete, Get, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { RecentSearchesService } from './recent-searches.service';
 import { ArticleViewsService } from '../article-views/article-views.service';
 import { OptionalCurrentUserId, CurrentUserId } from '../users/users.decorator';
 import { z } from 'zod';
 import type { Response } from 'express';
-import { OptionalAuthGuard } from '../auth/optional-auth.guard';
-import { AuthGuard } from '../auth/auth.guard';
+import { OptionalAuthGuard } from '../auth/auth-public-api';
+import { AuthGuard } from '../auth/auth-public-api';
 import { AppConfigService } from '../app/app-config.service';
 import type { PostWithAuthorAndMedia } from '../../common/dto/post.dto';
 import type { ArticleWithAuthor } from '../../common/dto/article.dto';
 import { toArticleDto, toPostDto, toUserListDto } from '../../common/dto';
-import { PostsService } from '../posts/posts.service';
+
 import { SearchService } from './search.service';
 import { Throttle } from '@nestjs/throttler';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
@@ -20,31 +25,17 @@ import { CacheService } from '../redis/cache.service';
 import { CacheTtl } from '../redis/cache-ttl';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { TaxonomyService } from '../taxonomy/taxonomy.service';
-
-const searchSchema = z.object({
-  q: z.string().trim().max(200).optional(),
-  type: z.enum(['posts', 'users', 'bookmarks', 'all', 'articles', 'hashtags', 'taxonomy', 'cashtags', 'groups']).optional(),
-  // Source hint for analytics/search-history recording.
-  source: z.enum(['explore', 'external']).optional(),
-  // Set by the client only after debounce settles or the user submits the query.
-  record: z.enum(['1', 'true']).optional(),
-  // Posts-only: filter by kind (e.g. allow "check-ins only" in search UI)
-  kind: z.enum(['regular', 'checkin']).optional(),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
-  userCursor: z.string().optional(),
-  postCursor: z.string().optional(),
-  articleCursor: z.string().optional(),
-  collectionId: z.string().trim().min(1).optional(),
-  unorganized: z.string().trim().optional(),
-});
+import { searchSchema } from './search.schemas';
 
 @UseGuards(OptionalAuthGuard)
 @Controller('search')
 export class SearchController {
   constructor(
     private readonly search: SearchService,
-    private readonly posts: PostsService,
+    @Inject(PostsViewerEnrichmentService) private readonly postsEnrichment: Pick<PostsViewerEnrichmentService, 'viewerBoostedPostIds' | 'viewerBookmarksByPostId' | 'viewerContext'>,
+    @Inject(PostsRankingService) private readonly postsRanking: Pick<PostsRankingService, 'ensureBoostScoresFresh' | 'computeScoresForPostIds'>,
+    @Inject(PostsFeedComposeService) private readonly postsCompose: Pick<PostsFeedComposeService, 'communityGroupPreviewMapForFeed'>,
+    @Inject(PostsFeedListingsService) private readonly postsListings: Pick<PostsFeedListingsService, 'communityGroupPreviewForGroup'>,
     private readonly appConfig: AppConfigService,
     private readonly cache: CacheService,
     private readonly cacheInvalidation: CacheInvalidationService,
@@ -55,7 +46,7 @@ export class SearchController {
   ) {}
 
   private async toSearchArticleDtos(
-    articles: Array<{ id: string; viewerCanAccess?: boolean }>,
+    articles: Array<ArticleWithAuthor & { viewerCanAccess?: boolean }>,
     viewerUserId: string | null,
     publicBaseUrl: string | null,
   ) {
@@ -64,7 +55,7 @@ export class SearchController {
       articles.map((a) => a.id),
     );
     return articles.map((a) =>
-      toArticleDto(a as unknown as ArticleWithAuthor, publicBaseUrl, {
+      toArticleDto(a, publicBaseUrl, {
         viewerUserId,
         viewerCanAccess: a.viewerCanAccess,
         viewerHasViewed: viewerUserId ? viewed.has(a.id) : undefined,
@@ -154,24 +145,24 @@ export class SearchController {
             relationship: {
               viewerFollowsUser: u.relationship.viewerFollowsUser,
               userFollowsViewer: u.relationship.userFollowsViewer,
-              viewerPostNotificationsEnabled: (u.relationship as any).viewerPostNotificationsEnabled ?? false,
+              viewerPostNotificationsEnabled: u.relationship.viewerPostNotificationsEnabled ?? false,
               viewerNotificationPreference: u.relationship?.viewerNotificationPreference,
             },
             createdAt: u.createdAt,
           }),
         );
         const postIds = (res.posts ?? []).map((p) => p.id);
-        const boosted = viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds }) : new Set<string>();
+        const boosted = viewerUserId ? await this.postsEnrichment.viewerBoostedPostIds({ viewerUserId, postIds }) : new Set<string>();
         const bookmarksByPostId = viewerUserId
-          ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
+          ? await this.postsEnrichment.viewerBookmarksByPostId({ viewerUserId, postIds })
           : new Map<string, { collectionIds: string[] }>();
-        const viewerCtx = await this.posts.viewerContext(viewerUserId);
+        const viewerCtx = await this.postsEnrichment.viewerContext(viewerUserId);
         const viewerHasAdmin = Boolean(viewerCtx?.siteAdmin);
         const internalByPostId = viewerHasAdmin && postIds.length > 0
-          ? await this.posts.ensureBoostScoresFresh(postIds)
+          ? await this.postsRanking.ensureBoostScoresFresh(postIds)
           : null;
         const scoreByPostId = viewerHasAdmin && postIds.length > 0
-          ? await this.posts.computeScoresForPostIds(postIds)
+          ? await this.postsRanking.computeScoresForPostIds(postIds)
           : undefined;
         const groupIds = [
           ...new Set(
@@ -180,7 +171,7 @@ export class SearchController {
               .filter(Boolean),
           ),
         ];
-        const groupPreviewById = await this.posts.communityGroupPreviewMapForFeed(viewerUserId, groupIds);
+        const groupPreviewById = await this.postsCompose.communityGroupPreviewMapForFeed(viewerUserId, groupIds);
         const posts = (res.posts ?? []).map((p) => {
           const base = internalByPostId?.get(p.id);
           const score = scoreByPostId?.get(p.id);
@@ -248,7 +239,7 @@ export class SearchController {
           relationship: {
             viewerFollowsUser: u.relationship.viewerFollowsUser,
             userFollowsViewer: u.relationship.userFollowsViewer,
-            viewerPostNotificationsEnabled: (u.relationship as any).viewerPostNotificationsEnabled ?? false,
+            viewerPostNotificationsEnabled: u.relationship.viewerPostNotificationsEnabled ?? false,
               viewerNotificationPreference: u.relationship?.viewerNotificationPreference,
           },
           createdAt: u.createdAt,
@@ -269,10 +260,10 @@ export class SearchController {
 
       const postIds = (res.bookmarks ?? []).map((b) => b.post?.id).filter(Boolean) as string[];
       const boosted = viewerUserId
-        ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds })
+        ? await this.postsEnrichment.viewerBoostedPostIds({ viewerUserId, postIds })
         : new Set<string>();
       const bookmarksByPostId = viewerUserId
-        ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
+        ? await this.postsEnrichment.viewerBookmarksByPostId({ viewerUserId, postIds })
         : new Map<string, { collectionIds: string[] }>();
 
       const groupIds = [
@@ -282,21 +273,21 @@ export class SearchController {
             .filter(Boolean),
         ),
       ];
-      const groupPreviewById = new Map<string, Awaited<ReturnType<PostsService['communityGroupPreviewForGroup']>>>();
+      const groupPreviewById = new Map<string, Awaited<ReturnType<PostsFeedListingsService['communityGroupPreviewForGroup']>>>();
       await Promise.all(
         groupIds.map(async (gid) => {
-          const prev = await this.posts.communityGroupPreviewForGroup(gid, viewerUserId);
+          const prev = await this.postsListings.communityGroupPreviewForGroup(gid, viewerUserId);
           if (prev) groupPreviewById.set(gid, prev);
         }),
       );
 
-      const viewer = await this.posts.viewerContext(viewerUserId);
+      const viewer = await this.postsEnrichment.viewerContext(viewerUserId);
       const viewerHasAdmin = Boolean(viewer?.siteAdmin);
       const internalByPostId = viewerHasAdmin && postIds.length > 0
-        ? await this.posts.ensureBoostScoresFresh(postIds)
+        ? await this.postsRanking.ensureBoostScoresFresh(postIds)
         : null;
       const scoreByPostId = viewerHasAdmin && postIds.length > 0
-        ? await this.posts.computeScoresForPostIds(postIds)
+        ? await this.postsRanking.computeScoresForPostIds(postIds)
         : undefined;
 
       const bookmarks = (res.bookmarks ?? []).map((b) => {
@@ -343,18 +334,18 @@ export class SearchController {
       compute: async () => {
         const res = await this.search.searchPosts({ viewerUserId, q, limit, cursor, kind });
         const postIds = (res.posts ?? []).map((p) => p.id);
-        const boosted = viewerUserId ? await this.posts.viewerBoostedPostIds({ viewerUserId, postIds }) : new Set<string>();
+        const boosted = viewerUserId ? await this.postsEnrichment.viewerBoostedPostIds({ viewerUserId, postIds }) : new Set<string>();
         const bookmarksByPostId = viewerUserId
-          ? await this.posts.viewerBookmarksByPostId({ viewerUserId, postIds })
+          ? await this.postsEnrichment.viewerBookmarksByPostId({ viewerUserId, postIds })
           : new Map<string, { collectionIds: string[] }>();
 
-        const viewer = await this.posts.viewerContext(viewerUserId);
+        const viewer = await this.postsEnrichment.viewerContext(viewerUserId);
         const viewerHasAdmin = Boolean(viewer?.siteAdmin);
         const internalByPostId = viewerHasAdmin && postIds.length > 0
-          ? await this.posts.ensureBoostScoresFresh(postIds)
+          ? await this.postsRanking.ensureBoostScoresFresh(postIds)
           : null;
         const scoreByPostId = viewerHasAdmin && postIds.length > 0
-          ? await this.posts.computeScoresForPostIds(postIds)
+          ? await this.postsRanking.computeScoresForPostIds(postIds)
           : undefined;
 
         const searchGroupIds = [
@@ -364,7 +355,7 @@ export class SearchController {
               .filter(Boolean),
           ),
         ];
-        const groupPreviewById = await this.posts.communityGroupPreviewMapForFeed(viewerUserId, searchGroupIds);
+        const groupPreviewById = await this.postsCompose.communityGroupPreviewMapForFeed(viewerUserId, searchGroupIds);
 
         const posts = (res.posts ?? []).map((p) => {
           const base = internalByPostId?.get(p.id);

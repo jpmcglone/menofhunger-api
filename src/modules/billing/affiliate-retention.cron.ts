@@ -2,7 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
-import { AffiliateService, AFFILIATE_PREMIUM_RETENTION_DAYS } from './affiliate.service';
+import { AffiliateService } from './affiliate.service';
+import { AFFILIATE_PREMIUM_RETENTION_DAYS } from './affiliate.constants';
 
 @Injectable()
 export class AffiliateRetentionCron {

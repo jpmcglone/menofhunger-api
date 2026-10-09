@@ -1,6 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { PublicController } from './public.controller';
-import { PostsService } from '../posts/posts.service';
+import { TestPostsFacade as PostsService } from '../posts/posts-facade.testing';
 import { PublicProfilesService } from '../users/public-profiles.service';
 
 // Minimal PostDto shape for test assertions.

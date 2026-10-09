@@ -1,4 +1,4 @@
-import { FollowsService } from './follows.service';
+import { makeFollowsService } from "./follows.testing";
 
 function makeRow(overrides: Partial<any> = {}) {
   return {
@@ -38,7 +38,7 @@ function makeService(rows: any[]) {
     getJson: jest.fn(async () => null),
     setJson: jest.fn(async () => undefined),
   };
-  const service = new FollowsService(
+  const service = makeFollowsService(
     prisma,
     appConfig,
     {} as any,

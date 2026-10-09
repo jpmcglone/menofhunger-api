@@ -1,8 +1,10 @@
+import { isNotFound } from '../../common/prisma/errors';
+import { toPage } from '../../common/pagination/page';
 import { toAvatarVideoDto } from '../../common/dto/avatar-video.dto';
 import { ConversationsService } from '../posts/conversations.service';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
-import { Prisma } from '@prisma/client';
+
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
@@ -74,7 +76,7 @@ export class CoinsService {
 
     if (params.postId) {
       const readable = await this.conversations.readableWhere(senderUserId);
-      const post = await this.postsRead.read.findFirst({ where: { AND: [readable, { id: params.postId, userId: recipient.id, visibility: { not: 'onlyMe' }, kind: { not: 'repost' } }] }, select: { id: true } });
+      const post = await this.postsRead.findFirst({ where: { AND: [readable, { id: params.postId, userId: recipient.id, visibility: { not: 'onlyMe' }, kind: { not: 'repost' } }] }, select: { id: true } });
       if (!post) throw new NotFoundException('Post not found.');
     }
     const { senderAfter, transfer } = await this.prisma.$transaction(async (tx) => {
@@ -168,7 +170,7 @@ export class CoinsService {
           : { coins: { decrement: amount } },
         select: { coins: true },
       }).catch((error: unknown) => {
-        if (deltaInt < 0 && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        if (deltaInt < 0 && isNotFound(error)) {
           throw new BadRequestException('Cannot remove more coins than the user has.');
         }
         throw error;
@@ -274,8 +276,7 @@ export class CoinsService {
       },
     });
 
-    const hasNext = transfers.length > take;
-    const page = hasNext ? transfers.slice(0, take) : transfers;
+    const { items: page, nextCursor } = toPage(transfers, take, (t) => t.id);
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
@@ -343,8 +344,6 @@ export class CoinsService {
       };
     });
 
-    const lastItem = page[page.length - 1];
-    const nextCursor = hasNext && lastItem ? lastItem.id : null;
 
     return { items, nextCursor };
   }

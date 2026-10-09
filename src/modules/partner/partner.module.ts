@@ -13,7 +13,17 @@ import { AdminPartnersService } from './admin-partners.service';
 import { PartnerConnectionsService } from './partner-connections.service';
 @Module({
   imports: [AuthModule],
-  providers: [PartnerWebhooksService, PartnerAccessService, PartnerRateService, PartnerOAuthService, PartnerReadService, PartnerGuard, AdminGuard, AdminPartnersService, PartnerConnectionsService],
+  providers: [
+    PartnerWebhooksService,
+    PartnerAccessService,
+    PartnerRateService,
+    PartnerOAuthService,
+    PartnerReadService,
+    PartnerGuard,
+    AdminGuard,
+    AdminPartnersService,
+    PartnerConnectionsService,
+  ],
   controllers: [PartnerController, PartnerConnectionsController, AdminPartnersController],
   exports: [PartnerOAuthService],
 })

@@ -1,9 +1,10 @@
+import { adjustPostBookmarkCount } from '../posts-read/post-transaction.commands';
 import { findGroupMemberStatus } from '../viewer/group-membership.queries';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import type { PostVisibility, VerifiedStatus } from '@prisma/client';
+import type { PostVisibility } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import { ViewerContextService } from '../viewer/viewer-context.service';
+import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
 import { PostViewsService } from '../post-views/post-views.service';
 import { JobsService } from '../jobs/jobs.service';
 import { JOBS } from '../jobs/jobs.constants';
@@ -12,9 +13,10 @@ import { RedisKeys } from '../redis/redis-keys';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
 import { slugifyCollectionName } from '../../common/text/slugify';
+import { NOT_DELETED } from '../../common/prisma/where';
 const COLLECTIONS_CACHE_TTL_SECONDS = 60;
 
-type Viewer = { id: string; verifiedStatus: VerifiedStatus; premium: boolean };
+type Viewer = ViewerContext;
 
 const RESERVED_COLLECTION_SLUGS = new Set<string>(['unorganized']);
 
@@ -46,13 +48,13 @@ export class BookmarksService {
   }
 
   private async viewer(userId: string): Promise<Viewer> {
-    const u = (await this.viewerContext.getViewer(userId)) as any;
+    const u = await this.viewerContext.getViewer(userId);
     if (!u) throw new NotFoundException('User not found.');
     return u as Viewer;
   }
 
   private allowedVisibilitiesForViewer(viewer: Viewer): PostVisibility[] {
-    return this.viewerContext.allowedPostVisibilities(viewer as any);
+    return this.viewerContext.allowedPostVisibilities(viewer);
   }
 
   private visibleBookmarkPostWhere(userId: string) {
@@ -108,8 +110,8 @@ export class BookmarksService {
     const viewer = await this.viewer(viewerUserId);
     const allowed = this.allowedVisibilitiesForViewer(viewer);
 
-    const post = await this.postsRead.read.findFirst({
-      where: { id: postId, deletedAt: null },
+    const post = await this.postsRead.findFirst({
+      where: { id: postId, ...NOT_DELETED },
       select: { id: true, userId: true, visibility: true, communityGroupId: true },
     });
     if (!post) throw new NotFoundException('Post not found.');
@@ -308,10 +310,7 @@ export class BookmarksService {
 
       // Keep a fast counter on Post for UI + scoring.
       if (created.count > 0) {
-        await tx.post.update({
-          where: { id: postId },
-          data: { bookmarkCount: { increment: created.count } },
-        });
+        await adjustPostBookmarkCount(tx, postId, created.count);
       }
 
       const row = await tx.bookmark.findUnique({
@@ -343,7 +342,7 @@ export class BookmarksService {
 
     // Fetch updated bookmark count for realtime payload (keep REST response stable).
     try {
-      const post = await this.postsRead.read.findUnique({
+      const post = await this.postsRead.findUnique({
         where: { id: postId },
         select: { bookmarkCount: true },
       });
@@ -397,7 +396,7 @@ export class BookmarksService {
     // Best-effort: removing a bookmark should not require the post to still be visible.
     const postUserId =
       (
-        await this.postsRead.read.findUnique({
+        await this.postsRead.findUnique({
           where: { id: postId },
           select: { userId: true },
         })
@@ -406,16 +405,13 @@ export class BookmarksService {
     await this.prisma.$transaction(async (tx) => {
       const deleted = await tx.bookmark.deleteMany({ where: { userId, postId } });
       if (deleted.count > 0) {
-        await tx.post.update({
-          where: { id: postId },
-          data: { bookmarkCount: { decrement: deleted.count } },
-        });
+        await adjustPostBookmarkCount(tx, postId, -deleted.count);
       }
     });
 
     // Fetch updated bookmark count for realtime payload (keep REST response stable).
     try {
-      const post = await this.postsRead.read.findUnique({
+      const post = await this.postsRead.findUnique({
         where: { id: postId },
         select: { bookmarkCount: true },
       });

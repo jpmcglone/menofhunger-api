@@ -1,3 +1,4 @@
+import { NOT_BANNED_USER_WHERE } from '../../../common/prisma-selects/user.where';
 import { createHash } from 'node:crypto';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import type { MarvinPersonalAction, Prisma } from '@prisma/client';
@@ -11,6 +12,7 @@ import type { MarvAIToolCallContext } from './marvin-ai.service';
 import type { MarvinPersonalActionDto } from '../../../common/dto/marvin/marvin-personal.dto';
 
 import { PostsReadService } from '../../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../../common/prisma/where';
 @Injectable()
 export class MarvinPersonalService {
   constructor(
@@ -55,9 +57,9 @@ export class MarvinPersonalService {
     let preview: string;
     let before: Record<string, unknown> = {};
     if (action.kind === 'bookmark') {
-      const post = await this.postsRead.read.findFirst({ where: {
-        id: action.postId, visibility: 'public', communityGroupId: null, deletedAt: null, isDraft: false,
-        user: { bannedAt: null, blocksInitiated: { none: { blockedId: userId } }, blocksReceived: { none: { blockerId: userId } } },
+      const post = await this.postsRead.findFirst({ where: {
+        id: action.postId, visibility: 'public', communityGroupId: null, ...NOT_DELETED, isDraft: false,
+        user: { ...NOT_BANNED_USER_WHERE, blocksInitiated: { none: { blockedId: userId } }, blocksReceived: { none: { blockerId: userId } } },
       }, select: { body: true, user: { select: { username: true } } } });
       if (!post) throw new NotFoundException('Choose an available public post.');
       title = 'Save bookmark';

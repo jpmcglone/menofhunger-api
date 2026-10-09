@@ -3214,6 +3214,83 @@ export type PresenceOnlinePagePaginationDto = {
   membersVisible?: boolean;
 };
 
+// ─── src/common/dto/profile-links.dto.ts ───────────────────────────────────────
+
+/** Clients treat an unknown icon as 'website'. */
+export type ProfileLinkIcon =
+  | 'website'
+  | 'x'
+  | 'pickax'
+  | 'youtube'
+  | 'rumble'
+  | 'linkedin'
+  | 'substack'
+  | 'ghost'
+  | 'github'
+  | 'soundcloud'
+  | 'bandcamp'
+  | 'etsy'
+  | 'gumroad'
+  | 'sketchfab'
+  | 'tiktok'
+  | 'locals'
+  | 'facebook'
+  | 'instagram'
+  | 'spotify';
+
+export type ProfileLinkDto = { id: string; url: string; title: string; host: string; icon: ProfileLinkIcon };
+
+export type ConnectedAccountDto = {
+  network: 'x' | 'pickax';
+  handle: string;
+  url: string;
+  followerCount: number | null;
+};
+
+export type LinksPageRecentItemDto = {
+  kind: 'post' | 'article';
+  id: string;
+  title: string | null;
+  excerpt: string;
+  createdAt: string;
+};
+
+export type LinksPageDto = {
+  user: {
+    id: string;
+    username: string;
+    name: string | null;
+    bio: string | null;
+    locationDisplay: string | null;
+    verifiedStatus: VerifiedStatus;
+    isOrganization: boolean;
+    premium: boolean;
+    premiumPlus: boolean;
+    avatarUrl: string | null;
+    avatarVideo?: AvatarVideoDto | null;
+  };
+  connectedAccounts: ConnectedAccountDto[];
+  links: ProfileLinkDto[];
+  /** At most 3 items. */
+  recent: LinksPageRecentItemDto[];
+  referralCode: string | null;
+};
+
+export type MyProfileLinkDto = ProfileLinkDto & { grandfathered: boolean; hiddenUntilVerified: boolean };
+
+export type MyConnectedAccountDto = ConnectedAccountDto & {
+  supportsFollowerCount: boolean;
+  showFollowerCount: boolean;
+};
+
+export type MyProfileLinksDto = {
+  links: MyProfileLinkDto[];
+  connectedAccounts: MyConnectedAccountDto[];
+  canAddCustomLinks: boolean;
+  maxLinks: number;
+  path: string | null;
+};
+
 // ─── src/common/dto/radio.dto.ts ───────────────────────────────────────────────
 
 export type RadioStationDto = {
@@ -3375,11 +3452,16 @@ export type PublicProfileDto = {
   username: string | null;
   name: string | null;
   bio: string | null;
+  /** @deprecated Use `links` (legacyField 'website'); mirror written only by the links service. */
   website: string | null;
+  links: ProfileLinkDto[];
   xUsername: string | null;
   pickaxUsername: string | null;
+  /** @deprecated Use `links` (legacyField 'rumble'); mirror written only by the links service. */
   rumbleUrl: string | null;
+  /** @deprecated Use `links` (legacyField 'linkedin'); mirror written only by the links service. */
   linkedinUrl: string | null;
+  /** @deprecated Use `links` (legacyField 'youtube'); mirror written only by the links service. */
   youtubeUrl: string | null;
   locationDisplay: string | null;
   locationZip: string | null;
@@ -4269,12 +4351,16 @@ export type UserDto = {
   usernameIsSet: boolean;
   name: string | null;
   bio: string | null;
+  /** @deprecated Use `links`/ProfileLink (legacyField 'website'); mirror written only by the links service. */
   website: string | null;
   /** Verified X handle. Written only when the member connects X. */
   xUsername: string | null;
   pickaxUsername: string | null;
+  /** @deprecated Use `links`/ProfileLink (legacyField 'rumble'); mirror written only by the links service. */
   rumbleUrl: string | null;
+  /** @deprecated Use `links`/ProfileLink (legacyField 'linkedin'); mirror written only by the links service. */
   linkedinUrl: string | null;
+  /** @deprecated Use `links`/ProfileLink (legacyField 'youtube'); mirror written only by the links service. */
   youtubeUrl: string | null;
   locationInput: string | null;
   locationDisplay: string | null;

@@ -1,3 +1,4 @@
+import { clampLimit } from '../../common/pagination/page';
 import { createHash } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -7,6 +8,7 @@ import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 export type EmbeddingKind = 'post' | 'group' | 'user';
 
 const MIN_POST_CHARS = 24;
@@ -135,7 +137,7 @@ export class EmbeddingsService {
   async backfill(limit = BATCH_SIZE): Promise<{ posts: number; groups: number; users: number }> {
     const out = { posts: 0, groups: 0, users: 0 };
     if (!this.available()) return out;
-    const take = Math.max(1, Math.min(BATCH_SIZE, limit));
+    const take = clampLimit(limit, { default: BATCH_SIZE, max: BATCH_SIZE });
 
     const posts = await this.prisma.$queryRaw<Array<{ id: string; body: string | null; hashtags: string[] }>>`
       SELECT p."id", p."body", p."hashtags"
@@ -293,11 +295,11 @@ export class EmbeddingsService {
   }
 
   private async postCandidate(postId: string): Promise<Candidate | null> {
-    const post = await this.postsRead.read.findFirst({
-      where: { id: postId, deletedAt: null, isDraft: false, kind: { not: 'repost' }, visibility: { not: 'onlyMe' } },
+    const post = await this.postsRead.findFirst({
+      where: { id: postId, ...NOT_DELETED, isDraft: false, kind: { not: 'repost' }, visibility: { not: 'onlyMe' } },
       select: {
         id: true, body: true, hashtags: true,
-        media: { where: { deletedAt: null }, select: { r2Key: true, thumbnailR2Key: true }, orderBy: { position: 'asc' }, take: 8 },
+        media: { where: NOT_DELETED, select: { r2Key: true, thumbnailR2Key: true }, orderBy: { position: 'asc' }, take: 8 },
       },
     });
     if (!post) return null;
@@ -320,7 +322,7 @@ export class EmbeddingsService {
 
   private async groupCandidate(groupId: string): Promise<Candidate | null> {
     const group = await this.prisma.communityGroup.findFirst({
-      where: { id: groupId, deletedAt: null, joinPolicy: 'open' },
+      where: { id: groupId, ...NOT_DELETED, joinPolicy: 'open' },
       select: { id: true, name: true, description: true },
     });
     return group ? { id: group.id, text: groupText(group.name, group.description) } : null;

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sync canonical guidance to sibling repositories, or detect drift with --check.
 
-Byte-copied: engineering-policy.md, shared skills, and the web polish skill.
+Byte-copied: engineering-policy.md, Figma guidelines, shared skills, and the web polish skill.
 
 Shared Cursor rules (15-feed-surface, 20-deletion-deprecation,
 56-notification-seen-vs-read) are canonical in the API repository. Copies keep
@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import subprocess
+import sys
 
 ADDENDUM_MARKER = "<!-- guidance-addendum -->"
 SHARED_RULES = (
@@ -67,6 +69,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--repos-root", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument("--ios-root", type=Path, help="Use an explicit iOS checkout/worktree")
     parser.add_argument(
         "--allow-missing",
         nargs="*",
@@ -82,6 +85,10 @@ def collect_pairs(repos: dict[str, Path]) -> list[tuple[Path, Path]]:
     present = {name for name, path in repos.items() if name != "api"}
     for name in present:
         pairs.append((repos["api"] / "docs/engineering-policy.md", repos[name] / "docs/engineering-policy.md"))
+        source = repos["api"] / "docs/figma-guidelines"
+        for file in sorted(source.rglob("*")):
+            if file.is_file():
+                pairs.append((file, repos[name] / "docs/figma-guidelines" / file.relative_to(source)))
     for skill in SHARED_SKILLS:
         source = repos["api"] / ".agents/skills" / skill
         for file in sorted(source.rglob("*")):
@@ -116,7 +123,11 @@ def sync_bytes(source: Path, target: Path, check: bool, repos_root: Path) -> str
     if not check:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(source.read_bytes())
-    return str(target.relative_to(repos_root))
+    return display_path(target, repos_root)
+
+
+def display_path(target: Path, repos_root: Path) -> str:
+    return str(target.relative_to(repos_root)) if target.is_relative_to(repos_root) else str(target)
 
 
 def sync_shared_rule(source: Path, target: Path, check: bool, repos_root: Path) -> str | None:
@@ -128,19 +139,21 @@ def sync_shared_rule(source: Path, target: Path, check: bool, repos_root: Path) 
         if shared_rule_body(target_text) == source_body:
             return None
         if check:
-            return str(target.relative_to(repos_root))
+            return display_path(target, repos_root)
         target.write_text(compose_rule(frontmatter, source_body, addendum))
-        return str(target.relative_to(repos_root))
+        return display_path(target, repos_root)
     if check:
-        return str(target.relative_to(repos_root))
+        return display_path(target, repos_root)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(source.read_text())
-    return str(target.relative_to(repos_root))
+    return display_path(target, repos_root)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     repos = {name: args.repos_root / f"menofhunger-{name}" for name in ("api", "www", "ios")}
+    if args.ios_root:
+        repos["ios"] = args.ios_root.resolve()
     allow_missing = set(args.allow_missing)
     missing = [name for name, path in repos.items() if not (path / "AGENTS.md").is_file()]
     unexpected = [name for name in missing if name not in allow_missing]
@@ -164,13 +177,20 @@ def main(argv: list[str] | None = None) -> int:
             drift.append(rel)
 
     checked = len(byte_pairs) + len(collect_shared_rules(present))
+    figma_status = 0
+    figma_script = present["api"] / "scripts/sync-figma-guidelines.py"
+    if args.check and figma_script.is_file() and (present["api"] / "docs/figma-guidelines").is_dir():
+        figma_status = subprocess.run(
+            [sys.executable, str(figma_script), "--root", str(present["api"]), "--check"],
+            check=False,
+        ).returncode
     if drift:
         print(("Out of sync:\n" if args.check else "Updated:\n") + "\n".join(drift))
     else:
         skipped = ", ".join(sorted(allow_missing & set(missing)))
         suffix = f" Skipped missing: {skipped}." if skipped else ""
         print(f"Guidance synchronized ({checked} checked copies).{suffix}")
-    return 1 if args.check and drift else 0
+    return 1 if args.check and (drift or figma_status) else 0
 
 
 if __name__ == "__main__":

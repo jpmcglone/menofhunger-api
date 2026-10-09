@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
-import { VerifiedGuard } from '../auth/verified.guard';
+import { VerifiedGuard } from '../auth/auth-public-api';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { PostViewsModule } from '../post-views/post-views.module';
 import { RedisModule } from '../redis/redis.module';

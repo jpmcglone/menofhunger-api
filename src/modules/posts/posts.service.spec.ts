@@ -1,11 +1,13 @@
+import { ViewerBlockSetsService } from '../viewer/viewer-block-sets.service';
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { PostsService } from './posts.service';
+import { TestPostsFacade as PostsService } from './posts-facade.testing';
 import { PostsDraftsService } from './posts-drafts.service';
 import { PostsEngagementService } from './posts-engagement.service';
 import { PostsRankingService } from './posts-ranking.service';
 import { PostsViewerEnrichmentService } from './posts-viewer-enrichment.service';
-import { PostsFeedQueryService } from './posts-feed-query.service';
-import { PostsMutationService } from './posts-mutation.service';
+import { makePostsFeedServices } from './posts-feed.testing';
+import type { ConversationsService } from './conversations.service';
+import { makePostsMutationServices } from './posts-mutation.testing';
 import { CommunityGroupReadAccessService } from '../viewer/community-group-read-access.service';
 
 // ─── Deps factory ────────────────────────────────────────────────────────────
@@ -125,19 +127,20 @@ function makeService(
     deps.prisma,
     deps.requestCache,
     deps.viewerContext,
-    deps.redis,
+    new ViewerBlockSetsService(deps.prisma, deps.redis),
   );
-  const feedQuery = new PostsFeedQueryService(
-    deps.prisma,
-    deps.requestCache,
-    deps.viewerContext,
-    deps.appConfig,
+  const feed = makePostsFeedServices({
+    prisma: deps.prisma,
+    requestCache: deps.requestCache,
+    viewerContext: deps.viewerContext,
+    appConfig: deps.appConfig,
     enrichment,
     ranking,
-    new CommunityGroupReadAccessService(deps.prisma, deps.viewerContext),
-    deps.cache,
-    deps.cacheInvalidation,
-  );
+    groupReadAccess: new CommunityGroupReadAccessService(deps.prisma, deps.viewerContext),
+    cache: deps.cache,
+    cacheInvalidation: deps.cacheInvalidation,
+    conversations: { contexts: jest.fn(async () => new Map()) } as unknown as ConversationsService,
+  });
   const engagement = new PostsEngagementService(
     deps.prisma,
     deps.sideEffects,
@@ -147,9 +150,9 @@ function makeService(
     deps.postViews,
     deps.posthog,
     ranking,
-    feedQuery,
+    feed.lookup,
   );
-  const mutation = new PostsMutationService(
+  const { write, edits } = makePostsMutationServices(
     deps.prisma,
     deps.presenceRealtime,
     deps.cacheInvalidation,
@@ -183,12 +186,20 @@ function makeService(
     drafts,
     engagement,
     enrichment,
-    feedQuery,
+    feed.listings,
+    feed.compose,
+    feed.forYou,
+    feed.popular,
+    feed.featured,
+    feed.profile,
+    feed.media,
+    feed.lookup,
     { listDiscoverMore: jest.fn() } as any,
-    mutation,
+    write,
+    edits,
   );
 
-  return { service, deps, engagement, feedQuery, mutation };
+  return { service, deps, engagement, feed, write, edits };
 }
 
 // ─── listFeed ────────────────────────────────────────────────────────────────
@@ -921,17 +932,17 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
   }
 
   it('boostPost emits posts:liveUpdated to the post room with the new boostCount', async () => {
-    const { service, deps } = makeService();
+    const { service, deps, feed } = makeService();
     setupBoostMocks(deps, { boostCount: 7 });
     // getById is heavy; stub it to skip visibility/group resolution.
-    jest.spyOn((service as any).feedQuery, 'getById').mockResolvedValue({
+    jest.spyOn(feed.lookup, 'getById').mockResolvedValue({
       id: 'p1',
       userId: 'author',
       deletedAt: null,
       visibility: 'public',
       user: { id: 'author' },
       body: 'hi',
-    });
+    } as Awaited<ReturnType<typeof feed.lookup.getById>>);
 
     await service.boostPost({ userId: 'u1', postId: 'p1' });
 
@@ -948,9 +959,9 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
   });
 
   it('mirrors a Board comment boost to the thread root room', async () => {
-    const { service, deps } = makeService();
+    const { service, deps, feed } = makeService();
     setupBoostMocks(deps, { boostCount: 3 });
-    jest.spyOn((service as any).feedQuery, 'getById').mockResolvedValue({
+    jest.spyOn(feed.lookup, 'getById').mockResolvedValue({
       id: 'c2',
       userId: 'author',
       deletedAt: null,
@@ -959,7 +970,7 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
       parentId: 'c1',
       rootId: 't1',
       user: { id: 'author' },
-    });
+    } as Awaited<ReturnType<typeof feed.lookup.getById>>);
 
     await service.boostPost({ userId: 'u1', postId: 'c2' });
 
@@ -969,15 +980,15 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
   });
 
   it('unboostPost emits posts:liveUpdated to the post room with the new boostCount', async () => {
-    const { service, deps } = makeService();
+    const { service, deps, feed } = makeService();
     setupBoostMocks(deps, { boostCount: 6 });
-    jest.spyOn((service as any).feedQuery, 'getById').mockResolvedValue({
+    jest.spyOn(feed.lookup, 'getById').mockResolvedValue({
       id: 'p1',
       userId: 'author',
       deletedAt: null,
       visibility: 'public',
       user: { id: 'author' },
-    });
+    } as Awaited<ReturnType<typeof feed.lookup.getById>>);
 
     await service.unboostPost({ userId: 'u1', postId: 'p1' });
 
@@ -992,16 +1003,16 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
   });
 
   it('boostPost still emits posts:interaction to actor + author for viewerHasBoosted UX', async () => {
-    const { service, deps } = makeService();
+    const { service, deps, feed } = makeService();
     setupBoostMocks(deps, { boostCount: 7 });
     deps.presenceRealtime.emitPostsInteraction = jest.fn();
-    jest.spyOn((service as any).feedQuery, 'getById').mockResolvedValue({
+    jest.spyOn(feed.lookup, 'getById').mockResolvedValue({
       id: 'p1',
       userId: 'author',
       deletedAt: null,
       visibility: 'public',
       user: { id: 'author' },
-    });
+    } as Awaited<ReturnType<typeof feed.lookup.getById>>);
 
     await service.boostPost({ userId: 'u1', postId: 'p1' });
 
@@ -1263,18 +1274,18 @@ describe('PostsService — boost/unboost/repost room fan-out', () => {
   });
 
   it('boost room fan-out is best-effort: an emit failure does not break the boost', async () => {
-    const { service, deps } = makeService();
+    const { service, deps, feed } = makeService();
     setupBoostMocks(deps, { boostCount: 1 });
     deps.presenceRealtime.emitPostsLiveUpdated = jest.fn(() => {
       throw new Error('redis down');
     });
-    jest.spyOn((service as any).feedQuery, 'getById').mockResolvedValue({
+    jest.spyOn(feed.lookup, 'getById').mockResolvedValue({
       id: 'p1',
       userId: 'author',
       deletedAt: null,
       visibility: 'public',
       user: { id: 'author' },
-    });
+    } as Awaited<ReturnType<typeof feed.lookup.getById>>);
 
     await expect(service.boostPost({ userId: 'u1', postId: 'p1' })).resolves.toEqual(
       expect.objectContaining({ success: true, viewerHasBoosted: true, boostCount: 1 }),
@@ -3288,11 +3299,11 @@ describe('PostsService — unverified boost gating', () => {
   }
 
   it('lets an unverified user boost a public post', async () => {
-    const { service, deps } = makeService();
+    const { service, deps, feed } = makeService();
     mockBooster(deps, 'none');
-    jest.spyOn((service as any).feedQuery, 'getById').mockResolvedValue({
+    jest.spyOn(feed.lookup, 'getById').mockResolvedValue({
       id: 'p1', userId: 'author', deletedAt: null, visibility: 'public', user: { id: 'author' }, body: 'hi',
-    });
+    } as Awaited<ReturnType<typeof feed.lookup.getById>>);
 
     await expect(service.boostPost({ userId: 'u1', postId: 'p1' })).resolves.toEqual(
       expect.objectContaining({ success: true, viewerHasBoosted: true }),
@@ -3300,11 +3311,11 @@ describe('PostsService — unverified boost gating', () => {
   });
 
   it('blocks an unverified user from boosting a verified-only post', async () => {
-    const { service, deps } = makeService();
+    const { service, deps, feed } = makeService();
     mockBooster(deps, 'none');
-    jest.spyOn((service as any).feedQuery, 'getById').mockResolvedValue({
+    jest.spyOn(feed.lookup, 'getById').mockResolvedValue({
       id: 'p1', userId: 'author', deletedAt: null, visibility: 'verifiedOnly', user: { id: 'author' }, body: 'hi',
-    });
+    } as Awaited<ReturnType<typeof feed.lookup.getById>>);
 
     await expect(service.boostPost({ userId: 'u1', postId: 'p1' })).rejects.toThrow(ForbiddenException);
     await expect(service.boostPost({ userId: 'u1', postId: 'p1' })).rejects.toThrow(/verified-only/i);

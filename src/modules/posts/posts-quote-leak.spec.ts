@@ -224,7 +224,7 @@ describe('list include has no nested quotedPost', () => {
   const { POST_LIST_INCLUDE, POST_WITH_POLL_INCLUDE } = require('../../common/prisma-includes/post.include');
   const { feedPostInclude } = require('./posts-feed.types');
   const feedQuerySource = require('node:fs').readFileSync(
-    require('node:path').join(__dirname, 'posts-feed-listings.service.ts'),
+    require('node:path').join(__dirname, 'posts-feed-compose.service.ts'),
     'utf8',
   );
 

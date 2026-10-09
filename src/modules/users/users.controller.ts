@@ -1,8 +1,8 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query, Res, UseGuards } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
 import type { Response } from "express";
-import { AuthGuard } from "../auth/auth.guard";
-import { OptionalAuthGuard } from "../auth/optional-auth.guard";
+import { AuthGuard } from "../auth/auth-public-api";
+import { OptionalAuthGuard } from "../auth/auth-public-api";
 import { CurrentUserId, OptionalCurrentUserId } from "./users.decorator";
 import { Throttle } from "@nestjs/throttler";
 import { rateLimitLimit, rateLimitTtl } from "../../common/throttling/rate-limit.resolver";

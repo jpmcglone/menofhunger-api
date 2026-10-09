@@ -1,3 +1,5 @@
+import { USER_BRIEF_SELECT } from '../../../common/prisma-selects/user.select';
+import { toPage } from '../../../common/pagination/page';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { MarvinMode, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -154,9 +156,7 @@ export class MarvinAdminService {
       ...(args.cursorUserId ? { cursor: { id: args.cursorUserId }, skip: 1 } : {}),
       orderBy: { id: 'asc' },
       select: {
-        id: true,
-        username: true,
-        name: true,
+        ...USER_BRIEF_SELECT,
         premium: true,
         premiumPlus: true,
         isBot: true,
@@ -164,8 +164,7 @@ export class MarvinAdminService {
         marvinUserSettings: { select: { preferredMode: true, disabledByAdmin: true } },
       },
     });
-    const hasMore = users.length > take;
-    const trimmed = hasMore ? users.slice(0, take) : users;
+    const { items: trimmed, nextCursor: usersNextCursor } = toPage(users, take, (u) => u.id);
 
     const userIds = trimmed.map((u) => u.id);
     const aggregates = userIds.length
@@ -195,7 +194,7 @@ export class MarvinAdminService {
         totalEvents30d: agg?._count._all ?? 0,
       };
     });
-    return { rows, nextCursor: hasMore ? trimmed[trimmed.length - 1]!.id : null };
+    return { rows, nextCursor: usersNextCursor };
   }
 
   async setUserCredits(args: {
@@ -249,9 +248,8 @@ export class MarvinAdminService {
       ...(args.cursorEventId ? { cursor: { id: args.cursorEventId }, skip: 1 } : {}),
       orderBy: { createdAt: 'desc' },
     });
-    const hasMore = rows.length > take;
-    const trimmed = hasMore ? rows.slice(0, take) : rows;
-    return { rows: trimmed, nextCursor: hasMore ? trimmed[trimmed.length - 1]!.id : null };
+    const { items: trimmed, nextCursor } = toPage(rows, take, (r) => r.id);
+    return { rows: trimmed, nextCursor };
   }
 
   /**

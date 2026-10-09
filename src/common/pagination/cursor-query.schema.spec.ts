@@ -1,4 +1,4 @@
-import { cursorPageQuerySchema } from './cursor-query.schema';
+import { cursorPageQuerySchema, defaultedCursorPageQuerySchema } from './cursor-query.schema';
 
 describe('cursorPageQuerySchema', () => {
   it('coerces limit and keeps cursor optional', () => {
@@ -11,5 +11,15 @@ describe('cursorPageQuerySchema', () => {
     expect(() => cursorPageQuerySchema().parse({ limit: '0' })).toThrow();
     expect(() => cursorPageQuerySchema().parse({ limit: '1.5' })).toThrow();
     expect(cursorPageQuerySchema(100).parse({ limit: '100' })).toEqual({ limit: 100 });
+  });
+});
+
+describe('defaultedCursorPageQuerySchema', () => {
+  it('applies a default limit and bounds the cursor length', () => {
+    const schema = defaultedCursorPageQuerySchema({ maxLimit: 100, defaultLimit: 20, maxCursorLength: 5 });
+    expect(schema.parse({})).toEqual({ limit: 20 });
+    expect(schema.parse({ limit: '100', cursor: 'abcde' })).toEqual({ limit: 100, cursor: 'abcde' });
+    expect(() => schema.parse({ cursor: 'abcdef' })).toThrow();
+    expect(() => schema.parse({ limit: '101' })).toThrow();
   });
 });

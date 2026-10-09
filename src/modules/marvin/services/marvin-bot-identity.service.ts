@@ -132,14 +132,7 @@ export class MarvinBotIdentityService implements OnModuleInit {
     this.logger.log(`[marv] Seeded Marv bot user (id=${created.id}, username=${username}).`);
 
     // Seed an introductory post so Marv's profile isn't empty on first run.
-    await this.postsWrite.write.create({
-      data: {
-        userId: created.id,
-        body: 'Hello, men!',
-        visibility: 'verifiedOnly',
-        kind: 'regular',
-      },
-    });
+    await this.postsWrite.seedMarvIntroduction(created.id);
     this.logger.log(`[marv] Seeded Marv intro post.`);
 
     this.cachedUserId = created.id;

@@ -1,9 +1,9 @@
 import type { PrismaService } from '../prisma/prisma.service';
-import type { PostReadDelegate } from '../posts-read/posts-read.service';
+import type { PostsReadService } from '../posts-read/posts-read.service';
 
 /** Re-read preferences at delivery: queued fan-out and push jobs may predate a mute/unfollow. */
 export async function permitsFollowNotification(
-  db: { follow: PrismaService['follow']; post: PostReadDelegate },
+  db: { follow: PrismaService['follow']; post: Pick<PostsReadService, 'findUnique'> },
   input: { recipientUserId: string; actorUserId?: string | null; kind: string; actorPostId?: string | null; subjectPostId?: string | null },
 ): Promise<boolean> {
   if (!['followed_post', 'checkin_post', 'followed_article'].includes(input.kind)) return true;

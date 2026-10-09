@@ -1,77 +1,37 @@
-import { revokeAccountChannels, emitChannelAccessChange } from '../group-channels/channel-lifecycle';
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
+import { isUniqueViolation, isNotFound } from '../../common/prisma/errors';
+import { ORG_AFFILIATION_SELECT, USER_REF_SELECT } from "../../common/prisma-selects/user.select";
+import { revokeAccountChannels, emitChannelAccessChange } from "../group-channels/channel-lifecycle";
 import { publicPreviewUrl } from "../../common/urls/public-preview-url";
 import { normalizeSocialProfileUrl } from "../../common/urls/social-profile-url";
-import { toAvatarVideoDto } from "../../common/dto/avatar-video.dto";
 import { Injectable, BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { normalizePhone } from "../auth/auth.utils";
+import { normalizePhone } from "../auth/auth-public-api";
 import { AppConfigService } from "../app/app-config.service";
-import { toUserDto, type OrgAffiliationDto } from "../../common/dto";
-import { publicAssetUrl } from "../../common/assets/public-asset-url";
+import { groupOrgAffiliations, toUserDto, type OrgAffiliationDto } from "../../common/dto";
 import { PrismaService } from "../prisma/prisma.service";
 import { validateUsername } from "../users/users.utils";
 import { PublicProfileCacheService } from "../users/public-profile-cache.service";
 import type { AdminRequest } from "./admin.guard";
 import { UsersMeRealtimeService } from "../users/users-me-realtime.service";
 import { UsersPublicRealtimeService } from "../users/users-public-realtime.service";
-import { AuthService } from "../auth/auth.service";
+import { AuthService } from "../auth/auth-public-api";
 import { PresenceRealtimeService } from "../presence/presence-realtime.service";
 import { SlackService } from "../../common/slack/slack.service";
 import { EntitlementService } from "../billing/entitlement.service";
 import { BillingService } from "../billing/billing.service";
 import { sanitizeFeatureToggles } from "../../common/feature-toggles";
-import { createdAtIdCursorWhere } from "../../common/pagination/created-at-id-cursor";
 import { CoinsService } from "../coins/coins.service";
 import { UsersLocationService } from "../users/users-location.service";
 import { UploadsService } from "../uploads/uploads.service";
 import { UserVerificationService } from "../verification/user-verification.service";
+import { findUserByUsernameOrThrow } from "./admin-users.lookup";
 import { PagesService } from "../pages/pages.service";
-import { PostsReadService } from '../posts-read/posts-read.service';
-import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
-
-const paginatedSearchSchema = z.object({
-  q: z.string().optional(),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
-});
-
-const adminUsernameSchema = z.object({
-  username: z.string().optional(),
-});
-
-const banSchema = z.object({
-  reason: z.string().trim().max(500).optional(),
-});
-
-const updateUserSchema = z.object({
-  phone: z.string().trim().min(1).optional(),
-  username: z.union([z.string().trim().min(1), z.null()]).optional(),
-  name: z.string().trim().max(50).nullable().optional(),
-  bio: z.string().trim().max(160).nullable().optional(),
-  website: z.union([z.string().trim().max(200), z.literal("")]).optional(),
-  rumbleUrl: z.string().trim().max(300).optional(),
-  linkedinUrl: z.string().trim().max(300).optional(),
-  youtubeUrl: z.string().trim().max(300).optional(),
-  locationQuery: z.union([z.string().trim().max(80), z.literal("")]).optional(),
-  isOrganization: z.boolean().optional(),
-  verifiedStatus: z.enum(["none", "identity", "manual"]).optional(),
-  featureToggles: z.array(z.string()).max(50).optional(),
-});
-
-const adjustCoinsSchema = z.object({
-  delta: z
-    .number()
-    .int()
-    .refine((v) => v !== 0, "delta must be non-zero"),
-  reason: z.string().trim().max(200).optional().nullable(),
-});
-
-const usernameParamSchema = z.object({
-  username: z.string().trim().min(1),
-});
-
-const recentListSchema = cursorPageQuerySchema(100);
+import { ProfileLinksWriteService, type LegacyLinkField } from "../users/profile-links-write.service";
+import { PostsReadService } from "../posts-read/posts-read.service";
+import { paginatedSearchSchema, adminUsernameSchema, banSchema, updateUserSchema, adjustCoinsSchema, usernameParamSchema } from "./admin-users.constants";
+import { toPage } from "../../common/pagination/page";
 
 @Injectable()
 export class AdminUsersService {
@@ -79,9 +39,9 @@ export class AdminUsersService {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly publicProfileCache: PublicProfileCacheService<{
-        id: string;
-        username: string | null;
-      }>,
+      id: string;
+      username: string | null;
+    }>,
     private readonly usersMeRealtime: UsersMeRealtimeService,
     private readonly usersPublicRealtime: UsersPublicRealtimeService,
     private readonly auth: AuthService,
@@ -95,6 +55,7 @@ export class AdminUsersService {
     private readonly userVerification: UserVerificationService,
     private readonly pages: PagesService,
     private readonly postsRead: PostsReadService,
+    private readonly profileLinks: ProfileLinksWriteService,
   ) {}
 
   private get publicBaseUrl(): string | null {
@@ -133,35 +94,12 @@ export class AdminUsersService {
     return "****-**-**";
   }
 
-  private normalizeSearchQueryForDedupe(query: string): string {
-    return String(query ?? "")
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, " ");
-  }
-
-  private async findByUsernameOrThrow(usernameRaw: string) {
-    const username = usernameRaw.trim().toLowerCase();
-    const user = await this.prisma.user.findFirst({
-      where: {
-        username: {
-          equals: username,
-          mode: "insensitive",
-        },
-      },
-    });
-    if (!user) throw new NotFoundException("User not found.");
-    return user;
-  }
-
   /** Slice a take+1 user list into a paginated response with org affiliations. */
   private async paginatedUserResult(
     users: Parameters<typeof toUserDto>[0][],
     take: number,
   ) {
-    const slice = users.slice(0, take);
-    const nextCursor =
-      users.length > take ? (slice[slice.length - 1]?.id ?? null) : null;
+    const { items: slice, nextCursor } = toPage(users, take, (r) => r.id);
     const orgMap = await this.batchOrgAffiliations(slice.map((u) => u.id));
     return {
       data: slice.map((u) => ({
@@ -183,36 +121,12 @@ export class AdminUsersService {
       select: {
         userId: true,
         org: {
-          select: {
-            id: true,
-            username: true,
-            name: true,
-            avatarKey: true,
-            avatarVideoKey: true,
-            avatarVideoDurationMs: true,
-            avatarUpdatedAt: true,
-          },
+          select: ORG_AFFILIATION_SELECT,
         },
       },
       orderBy: { createdAt: "asc" },
     });
-    const map = new Map<string, OrgAffiliationDto[]>();
-    for (const m of memberships) {
-      const list = map.get(m.userId) ?? [];
-      list.push({
-        id: m.org.id,
-        username: m.org.username,
-        name: m.org.name,
-        avatarUrl: publicAssetUrl({
-          publicBaseUrl,
-          key: m.org.avatarKey ?? null,
-          updatedAt: m.org.avatarUpdatedAt ?? null,
-        }),
-        avatarVideo: toAvatarVideoDto(m.org, publicBaseUrl),
-      });
-      map.set(m.userId, list);
-    }
-    return map;
+    return groupOrgAffiliations(memberships, publicBaseUrl);
   }
   async listBanned(query: unknown) {
     const { q, limit, cursor } = paginatedSearchSchema.parse(query);
@@ -303,7 +217,10 @@ export class AdminUsersService {
   }
   async usernameAvailable(query: unknown) {
     const { username } = adminUsernameSchema.parse(query);
-    const parsed = validateUsername(username ?? "", { minLen: 2, allowReserved: true });
+    const parsed = validateUsername(username ?? "", {
+      minLen: 2,
+      allowReserved: true,
+    });
     if (!parsed.ok)
       return {
         data: { available: false, normalized: null, error: parsed.error },
@@ -321,11 +238,7 @@ export class AdminUsersService {
 
     return { data: { available: !exists, normalized: parsed.usernameLower } };
   }
-  async ban(
-    req: AdminRequest,
-    id: string,
-    body: unknown,
-  ) {
+  async ban(req: AdminRequest, id: string, body: unknown) {
     const { reason } = banSchema.parse(body);
     const adminId = String(req.user?.id ?? "").trim();
     if (!adminId) throw new NotFoundException();
@@ -339,19 +252,27 @@ export class AdminUsersService {
       throw new BadRequestException("Site admins cannot be banned.");
 
     const now = new Date();
-    const { updated, channelGroups } = await this.prisma.$transaction(async tx => {
-      const channelGroups = await revokeAccountChannels(tx, id);
-      const user = await tx.user.update({
-      where: { id },
-      data: {
-        bannedAt: now,
-        bannedReason: (reason ?? "").trim() || null,
-        bannedByAdminId: adminId,
+    const { updated, channelGroups } = await this.prisma.$transaction(
+      async (tx) => {
+        const channelGroups = await revokeAccountChannels(tx, id);
+        const user = await tx.user.update({
+          where: { id },
+          data: {
+            bannedAt: now,
+            bannedReason: (reason ?? "").trim() || null,
+            bannedByAdminId: adminId,
+          },
+        });
+        return { updated: user, channelGroups };
       },
-    });
-      return { updated: user, channelGroups };
-    });
-    for (const groupId of channelGroups) await emitChannelAccessChange(this.prisma, this.presenceRealtime, groupId, id);
+    );
+    for (const groupId of channelGroups)
+      await emitChannelAccessChange(
+        this.prisma,
+        this.presenceRealtime,
+        groupId,
+        id,
+      );
 
     // Revoke all active sessions immediately.
     await this.auth.revokeAllSessionsForUser(updated.id);
@@ -387,7 +308,7 @@ export class AdminUsersService {
     const updated = await this.prisma.user.update({
       where: { id },
       data: {
-        bannedAt: null,
+        ...NOT_BANNED_USER_WHERE,
         bannedReason: null,
         bannedByAdminId: null,
       },
@@ -419,7 +340,7 @@ export class AdminUsersService {
   }
   async getUserByUsername(params: unknown) {
     const { username } = usernameParamSchema.parse(params);
-    const user = await this.findByUsernameOrThrow(username);
+    const user = await findUserByUsernameOrThrow(this.prisma, username);
     const full = await this.toAdminUserDto(user);
 
     return {
@@ -436,7 +357,7 @@ export class AdminUsersService {
   }
   async revealSensitiveByUsername(params: unknown) {
     const { username } = usernameParamSchema.parse(params);
-    const user = await this.findByUsernameOrThrow(username);
+    const user = await findUserByUsernameOrThrow(this.prisma, username);
     const dto = toUserDto(user, this.publicBaseUrl);
     return {
       data: {
@@ -446,210 +367,13 @@ export class AdminUsersService {
       },
     };
   }
-  async recentPostsByUsername(
-    params: unknown,
-    query: unknown,
-  ) {
-    const { username } = usernameParamSchema.parse(params);
-    const { limit, cursor } = recentListSchema.parse(query);
-    const take = limit ?? 20;
-    const user = await this.findByUsernameOrThrow(username);
-
-    const cursorWhere = await createdAtIdCursorWhere({
-      cursor: cursor ?? null,
-      lookup: async (id) =>
-        this.postsRead.read.findUnique({
-          where: { id },
-          select: { id: true, createdAt: true, userId: true },
-        }),
-    });
-
-    const rows = await this.postsRead.read.findMany({
-      where: {
-        userId: user.id,
-        deletedAt: null,
-        ...(cursorWhere ?? {}),
-      },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: take + 1,
-      select: {
-        id: true,
-        createdAt: true,
-        body: true,
-        parentId: true,
-        rootId: true,
-        kind: true,
-        visibility: true,
-        commentCount: true,
-        boostCount: true,
-        bookmarkCount: true,
-      },
-    });
-
-    const slice = rows.slice(0, take);
-    const nextCursor =
-      rows.length > take ? (slice[slice.length - 1]?.id ?? null) : null;
-
-    return {
-      data: slice.map((row) => ({
-        id: row.id,
-        createdAt: row.createdAt.toISOString(),
-        body: row.body,
-        parentId: row.parentId,
-        rootId: row.rootId,
-        kind: row.kind,
-        visibility: row.visibility,
-        commentCount: row.commentCount,
-        boostCount: row.boostCount,
-        bookmarkCount: row.bookmarkCount,
-      })),
-      pagination: { nextCursor },
-    };
-  }
-  async recentArticlesByUsername(
-    params: unknown,
-    query: unknown,
-  ) {
-    const { username } = usernameParamSchema.parse(params);
-    const { limit, cursor } = recentListSchema.parse(query);
-    const take = limit ?? 20;
-    const user = await this.findByUsernameOrThrow(username);
-
-    const cursorWhere = await createdAtIdCursorWhere({
-      cursor: cursor ?? null,
-      lookup: async (id) =>
-        this.prisma.article.findUnique({
-          where: { id },
-          select: {
-            id: true,
-            publishedAt: true,
-            createdAt: true,
-            authorId: true,
-          },
-        }),
-    });
-
-    const rows = await this.prisma.article.findMany({
-      where: {
-        authorId: user.id,
-        deletedAt: null,
-        ...(cursorWhere ?? {}),
-      },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: take + 1,
-      select: {
-        id: true,
-        title: true,
-        slug: true,
-        excerpt: true,
-        createdAt: true,
-        publishedAt: true,
-        isDraft: true,
-        visibility: true,
-        viewCount: true,
-        totalViewCount: true,
-        boostCount: true,
-        commentCount: true,
-      },
-    });
-
-    const slice = rows.slice(0, take);
-    const nextCursor =
-      rows.length > take ? (slice[slice.length - 1]?.id ?? null) : null;
-
-    return {
-      data: slice.map((row) => ({
-        id: row.id,
-        title: row.title,
-        slug: row.slug,
-        excerpt: row.excerpt,
-        createdAt: row.createdAt.toISOString(),
-        publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
-        isDraft: row.isDraft,
-        visibility: row.visibility,
-        viewCount: row.viewCount,
-        totalViewCount: row.totalViewCount ?? row.viewCount,
-        boostCount: row.boostCount,
-        commentCount: row.commentCount,
-      })),
-      pagination: { nextCursor },
-    };
-  }
-  async recentSearchesByUsername(
-    params: unknown,
-    query: unknown,
-  ) {
-    const { username } = usernameParamSchema.parse(params);
-    const { limit, cursor } = recentListSchema.parse(query);
-    const take = limit ?? 20;
-    const user = await this.findByUsernameOrThrow(username);
-
-    const cursorWhere = await createdAtIdCursorWhere({
-      cursor: cursor ?? null,
-      lookup: async (id) =>
-        this.prisma.userSearch.findUnique({
-          where: { id },
-          select: { id: true, createdAt: true, userId: true },
-        }),
-    });
-
-    const rows = await this.prisma.userSearch.findMany({
-      where: {
-        userId: user.id,
-        // Exclude profile/group-tap entries — admin list is for typed queries only.
-        targetUserId: null,
-        targetGroupId: null,
-        ...(cursorWhere ?? {}),
-      },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: Math.max(take * 5, take + 1),
-      select: {
-        id: true,
-        query: true,
-        createdAt: true,
-      },
-    });
-
-    const uniqueRows: Array<{ id: string; query: string; createdAt: Date }> =
-      [];
-    const seen = new Set<string>();
-    for (const row of rows) {
-      const key = this.normalizeSearchQueryForDedupe(row.query);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      uniqueRows.push(row);
-      if (uniqueRows.length >= take + 1) break;
-    }
-
-    const slice = uniqueRows.slice(0, take);
-    const nextCursor =
-      uniqueRows.length > take
-        ? (slice[slice.length - 1]?.id ?? null)
-        : rows.length >= Math.max(take * 5, take + 1)
-          ? (slice[slice.length - 1]?.id ?? null)
-          : null;
-
-    return {
-      data: slice.map((row) => ({
-        id: row.id,
-        query: row.query,
-        createdAt: row.createdAt.toISOString(),
-      })),
-      pagination: { nextCursor },
-    };
-  }
-  async updateUser(
-    id: string,
-    body: unknown,
-    req: AdminRequest,
-  ) {
+  async updateUser(id: string, body: unknown, req: AdminRequest) {
     const parsed = updateUserSchema.parse(body);
 
     const current = await this.prisma.user.findUnique({
       where: { id },
       select: {
-        id: true,
-        username: true,
+        ...USER_REF_SELECT,
         verifiedStatus: true,
         verifiedAt: true,
         unverifiedAt: true,
@@ -676,7 +400,10 @@ export class AdminUsersService {
         data.username = null;
         data.usernameIsSet = false;
       } else {
-        const validated = validateUsername(parsed.username, { minLen: 2, allowReserved: true });
+        const validated = validateUsername(parsed.username, {
+          minLen: 2,
+          allowReserved: true,
+        });
         if (!validated.ok) throw new BadRequestException(validated.error);
         data.username = validated.username;
         data.usernameIsSet = true;
@@ -691,18 +418,23 @@ export class AdminUsersService {
       data.bio = parsed.bio === null ? null : parsed.bio || null;
     }
 
-    for (const [field, provider] of [
-      ["rumbleUrl", "rumble"],
-      ["linkedinUrl", "linkedin"],
-      ["youtubeUrl", "youtube"],
+    // Link fields are written through the links service (rows + mirror columns); admin edits skip the verified gate.
+    const legacyLinks: Partial<Record<LegacyLinkField, string | null>> = {};
+    for (const [field, provider, legacy] of [
+      ["rumbleUrl", "rumble", "rumble"],
+      ["linkedinUrl", "linkedin", "linkedin"],
+      ["youtubeUrl", "youtube", "youtube"],
     ] as const) {
       if (parsed[field] !== undefined)
-        data[field] = normalizeSocialProfileUrl(parsed[field], provider);
+        legacyLinks[legacy] = normalizeSocialProfileUrl(
+          parsed[field],
+          provider,
+        );
     }
     if (parsed.website !== undefined) {
       const raw = (parsed.website ?? "").trim();
       if (!raw) {
-        data.website = null;
+        legacyLinks.website = null;
       } else {
         const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
         try {
@@ -713,13 +445,12 @@ export class AdminUsersService {
             );
           const u = new URL(safe);
           u.hash = "";
-          data.website = u.toString();
+          legacyLinks.website = u.toString();
         } catch {
           throw new BadRequestException("Website must be a valid URL.");
         }
       }
     }
-
     if (parsed.locationQuery !== undefined) {
       const q = (parsed.locationQuery ?? "").trim();
       if (!q) {
@@ -788,6 +519,13 @@ export class AdminUsersService {
     }
 
     try {
+      if (Object.keys(legacyLinks).length > 0) {
+        await this.profileLinks.setLegacyFields(id, legacyLinks, {
+          skipVerifyGate: true,
+          emit: false, // the admin update below invalidates caches and emits.
+        });
+      }
+
       await this.prisma.user.update({ where: { id }, data });
 
       if (parsed.verifiedStatus !== undefined) {
@@ -855,14 +593,12 @@ export class AdminUsersService {
       return { data: await this.toAdminUserDto(updated) };
     } catch (err: unknown) {
       if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === "P2025"
+        isNotFound(err)
       ) {
         throw new NotFoundException("User not found.");
       }
       if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === "P2002"
+        isUniqueViolation(err)
       ) {
         // Unique constraint violation (phone or username lower-ci index).
         throw new ConflictException("That value is already in use.");
@@ -902,11 +638,7 @@ export class AdminUsersService {
     const result = await this.uploads.deleteBannerForUser(id);
     return { data: result };
   }
-  async adjustCoins(
-    req: AdminRequest,
-    id: string,
-    body: unknown,
-  ) {
+  async adjustCoins(req: AdminRequest, id: string, body: unknown) {
     const adminId = String(req.user?.id ?? "").trim();
     if (!adminId) throw new NotFoundException();
     const parsed = adjustCoinsSchema.parse(body);
@@ -917,152 +649,6 @@ export class AdminUsersService {
       reason: parsed.reason ?? null,
     });
     return { data };
-  }
-  async listOrgMemberships(id: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id },
-      select: { id: true },
-    });
-    if (!user) throw new NotFoundException("User not found.");
-
-    const memberships = await this.prisma.userOrgMembership.findMany({
-      where: { userId: id },
-      include: {
-        org: {
-          select: {
-            id: true,
-            username: true,
-            name: true,
-            avatarKey: true,
-            avatarVideoKey: true,
-            avatarVideoDurationMs: true,
-            avatarUpdatedAt: true,
-          },
-        },
-      },
-      orderBy: { createdAt: "asc" },
-    });
-
-    const data: OrgAffiliationDto[] = memberships.map((m) => ({
-      id: m.org.id,
-      username: m.org.username,
-      name: m.org.name,
-      avatarUrl: publicAssetUrl({
-        publicBaseUrl: this.publicBaseUrl,
-        key: m.org.avatarKey ?? null,
-        updatedAt: m.org.avatarUpdatedAt ?? null,
-      }),
-      avatarVideo: toAvatarVideoDto(m.org, this.publicBaseUrl),
-    }));
-
-    return { data };
-  }
-  async addOrgMembership(id: string, body: unknown) {
-    const { orgId } = z.object({ orgId: z.string().min(1) }).parse(body);
-
-    const [user, org] = await Promise.all([
-      this.prisma.user.findUnique({
-        where: { id },
-        select: { id: true, isOrganization: true },
-      }),
-      this.prisma.user.findUnique({
-        where: { id: orgId },
-        select: { id: true, isOrganization: true },
-      }),
-    ]);
-
-    if (!user) throw new NotFoundException("User not found.");
-    if (!org) throw new NotFoundException("Org user not found.");
-    if (!org.isOrganization)
-      throw new BadRequestException("Target account is not an organization.");
-    if (user.isOrganization)
-      throw new BadRequestException(
-        "Organization accounts cannot be members of other orgs.",
-      );
-    if (user.id === org.id)
-      throw new BadRequestException(
-        "A user cannot be affiliated with themselves.",
-      );
-
-    try {
-      await this.prisma.userOrgMembership.create({
-        data: { userId: id, orgId },
-      });
-    } catch (err: unknown) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === "P2002"
-      ) {
-        throw new ConflictException("Membership already exists.");
-      }
-      throw err;
-    }
-
-    const orgFull = await this.prisma.user.findUniqueOrThrow({
-      where: { id: orgId },
-      select: {
-        id: true,
-        username: true,
-        name: true,
-        avatarKey: true,
-        avatarVideoKey: true,
-        avatarVideoDurationMs: true,
-        avatarUpdatedAt: true,
-      },
-    });
-
-    const data: OrgAffiliationDto = {
-      id: orgFull.id,
-      username: orgFull.username,
-      name: orgFull.name,
-      avatarUrl: publicAssetUrl({
-        publicBaseUrl: this.publicBaseUrl,
-        key: orgFull.avatarKey ?? null,
-        updatedAt: orgFull.avatarUpdatedAt ?? null,
-      }),
-      avatarVideo: toAvatarVideoDto(orgFull, this.publicBaseUrl),
-    };
-
-    return { data };
-  }
-  async removeOrgMembership(
-    id: string,
-    orgId: string,
-  ) {
-    const deleted = await this.prisma.userOrgMembership.deleteMany({
-      where: { userId: id, orgId },
-    });
-
-    if (deleted.count === 0)
-      throw new NotFoundException("Membership not found.");
-
-    return { data: { success: true } };
-  }
-  async convertToPage(id: string, body: unknown) {
-    const { operatorUserId } = z
-      .object({ operatorUserId: z.string().min(1) })
-      .parse(body);
-    const data = await this.pages.convertToPage(id, operatorUserId);
-    return { data };
-  }
-  async listOperators(id: string) {
-    return { data: await this.pages.listOperators(id) };
-  }
-  async addOperator(id: string, body: unknown) {
-    const { operatorUserId } = z
-      .object({ operatorUserId: z.string().min(1) })
-      .parse(body);
-    return { data: await this.pages.addOperator(id, operatorUserId) };
-  }
-  async removeOperator(
-    id: string,
-    operatorUserId: string,
-  ) {
-    await this.pages.removeOperator(id, operatorUserId);
-    return { data: { success: true } };
-  }
-  async listOperatedPages(id: string) {
-    return { data: await this.pages.listOperatedPages(id) };
   }
   async unverifyEmail(id: string) {
     const now = new Date();

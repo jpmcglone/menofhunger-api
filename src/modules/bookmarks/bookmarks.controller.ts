@@ -1,31 +1,11 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { z } from 'zod';
-import { AuthGuard } from '../auth/auth.guard';
-import { VerifiedGuard } from '../auth/verified.guard';
+import { AuthGuard } from '../auth/auth-public-api';
+import { VerifiedGuard } from '../auth/auth-public-api';
 import { CurrentUserId } from '../users/users.decorator';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
 import { BookmarksService } from './bookmarks.service';
-
-const createCollectionSchema = z.object({
-  name: z.string().trim().min(1).max(40),
-});
-
-const renameCollectionSchema = z.object({
-  name: z.string().trim().min(1).max(40),
-});
-
-const setBookmarkSchema = z.object({
-  // Folder membership follows a strict mutual-exclusivity invariant:
-  //   - omitted / null  → keep the bookmark's current folder state unchanged
-  //   - []              → explicitly "unorganized": removes the bookmark from ALL folders
-  //   - [...ids]        → full replace: bookmark is in exactly these folders (no longer unorganized)
-  //
-  // Prefer `collectionIds` (multi-folder). `collectionId` is kept for backwards compatibility
-  // and is treated as `collectionIds: [collectionId]` when `collectionIds` is not provided.
-  collectionIds: z.array(z.string().trim().min(1)).max(40).optional().nullable(),
-  collectionId: z.string().trim().min(1).optional().nullable(),
-});
+import { createCollectionSchema, renameCollectionSchema, setBookmarkSchema } from './bookmarks.schemas';
 
 @Controller('bookmarks')
 export class BookmarksController {

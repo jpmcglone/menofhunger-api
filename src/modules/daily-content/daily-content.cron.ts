@@ -5,10 +5,7 @@ import { JOBS } from '../jobs/jobs.constants';
 import { AppConfigService } from '../app/app-config.service';
 import { DailyContentService } from './daily-content.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-import {
-  easternDayKey,
-  easternMinuteOfDay,
-} from '../../common/time/eastern-day-key';
+import { easternDayKey, easternMinuteOfDay } from '../../common/time/eastern-day-key';
 
 @Injectable()
 export class DailyContentCron {

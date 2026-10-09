@@ -1,11 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { AppConfigService } from '../../app/app-config.service';
-import { PostsService } from '../../posts/posts.service';
-import { MessagesService } from '../../messages/messages.service';
-import { MarvinBotIdentityService } from './marvin-bot-identity.service';
-import { MarvinCreditService } from './marvin-credit.service';
-import { MarvinNonPremiumRepliesService } from './marvin-non-premium-replies.service';
-import { MarvinPrivateCannedRepliesService } from './marvin-private-canned-replies.service';
+import { Inject, Injectable, Logger } from "@nestjs/common";
+import { MessagesBotDeliveryService } from "../../messages/messages-bot-delivery.service";
+
+import { PostsMutationWriteService } from "../../posts/posts-mutation-write.service";
+
+import { AppConfigService } from "../../app/app-config.service";
+
+import { MarvinBotIdentityService } from "./marvin-bot-identity.service";
+import { MarvinCreditService } from "./marvin-credit.service";
+import { MarvinNonPremiumRepliesService } from "./marvin-non-premium-replies.service";
+import { MarvinPrivateCannedRepliesService } from "./marvin-private-canned-replies.service";
 
 /**
  * Builds + posts the non-AI replies Marv produces for hard error states. All flows
@@ -36,15 +39,23 @@ export class MarvinCannedRepliesService {
   constructor(
     private readonly appConfig: AppConfigService,
     private readonly identity: MarvinBotIdentityService,
-    private readonly posts: PostsService,
-    private readonly messages: MessagesService,
+    @Inject(PostsMutationWriteService)
+    private readonly postsMutationWrite: Pick<
+      PostsMutationWriteService,
+      "createMarvReply"
+    >,
+    @Inject(MessagesBotDeliveryService)
+    private readonly messages: Pick<
+      MessagesBotDeliveryService,
+      "sendBotDirectMessage" | "ensureBotDirectConversation"
+    >,
     private readonly nonPremium: MarvinNonPremiumRepliesService,
     private readonly privateCanned: MarvinPrivateCannedRepliesService,
     private readonly credits: MarvinCreditService,
   ) {}
 
   private siteBaseUrl(): string {
-    return (this.appConfig.frontendBaseUrl() ?? '').replace(/\/+$/, '');
+    return (this.appConfig.frontendBaseUrl() ?? "").replace(/\/+$/, "");
   }
 
   private postUrl(postId: string): string {
@@ -65,9 +76,9 @@ export class MarvinCannedRepliesService {
       requestingUserId: args.requestingUserId,
       triggeringPostId: args.triggeringPostId,
       rootPostId: args.rootPostId,
-      reason: 'not_premium',
+      reason: "not_premium",
       // No upgrade link: this post is also read in the iOS app, where purchases must stay in-app.
-      body: 'I only reply to Premium members right now.',
+      body: "I only reply to Premium members right now.",
     });
   }
 
@@ -85,9 +96,8 @@ export class MarvinCannedRepliesService {
       requestingUserId: args.requestingUserId,
       triggeringPostId: args.triggeringPostId,
       rootPostId: args.rootPostId,
-      reason: 'ai_not_configured',
-      body:
-        "I'd love to help, but I'm not fully set up yet. A site administrator can finish configuring me — try again soon.",
+      reason: "ai_not_configured",
+      body: "I'd love to help, but I'm not fully set up yet. A site administrator can finish configuring me — try again soon.",
     });
   }
 
@@ -96,7 +106,7 @@ export class MarvinCannedRepliesService {
     requestingUserId: string;
     triggeringPostId: string;
     rootPostId: string;
-    reason: 'not_premium' | 'ai_not_configured' | 'transient_error';
+    reason: "not_premium" | "ai_not_configured" | "transient_error";
     body: string;
   }): Promise<string | null> {
     const claimed = await this.nonPremium.tryClaim({
@@ -120,7 +130,7 @@ export class MarvinCannedRepliesService {
     }
 
     try {
-      const result = await this.posts.createMarvReply({
+      const result = await this.postsMutationWrite.createMarvReply({
         botUserId: marvId,
         requestingUserId: args.requestingUserId,
         body: args.body,
@@ -161,23 +171,30 @@ export class MarvinCannedRepliesService {
   }): Promise<{ conversationId: string | null; messageId: string | null }> {
     const marvId = await this.identity.getMarvUserId();
     if (!marvId) {
-      this.logger.warn('[marv] Cannot send out-of-credits DM — Marv user not resolved.');
+      this.logger.warn(
+        "[marv] Cannot send out-of-credits DM — Marv user not resolved.",
+      );
       return { conversationId: null, messageId: null };
     }
     if (args.userId === marvId) {
       return { conversationId: null, messageId: null };
     }
 
-    const eta = this.credits.msUntilCredits(args.currentCredits, args.requiredCredits);
+    const eta = this.credits.msUntilCredits(
+      args.currentCredits,
+      args.requiredCredits,
+    );
     const etaText = MarvinCreditService.humanizeMs(eta);
     const lines = [
       `You're out of Marv credits — I'd reply, but I can't right now.`,
       `Credits refill over time; you'll have enough again in about ${etaText}.`,
     ];
     if (args.triggeringPostId) {
-      lines.push(`The thread you mentioned me in: ${this.postUrl(args.triggeringPostId)}`);
+      lines.push(
+        `The thread you mentioned me in: ${this.postUrl(args.triggeringPostId)}`,
+      );
     }
-    const body = lines.join('\n');
+    const body = lines.join("\n");
 
     try {
       const result = await this.messages.sendBotDirectMessage({
@@ -193,9 +210,12 @@ export class MarvinCannedRepliesService {
         return { conversationId: null, messageId: null };
       }
       this.logger.log(
-        `[marv-canned] out-of-credits DM SENT user=${args.userId} convo=${result.conversationId} msg=${result.message?.id ?? '?'}`,
+        `[marv-canned] out-of-credits DM SENT user=${args.userId} convo=${result.conversationId} msg=${result.message?.id ?? "?"}`,
       );
-      return { conversationId: result.conversationId, messageId: result.message?.id ?? null };
+      return {
+        conversationId: result.conversationId,
+        messageId: result.message?.id ?? null,
+      };
     } catch (err) {
       this.logger.error(
         `[marv-canned] out-of-credits DM FAILED: ${err instanceof Error ? err.message : String(err)}`,
@@ -220,7 +240,7 @@ export class MarvinCannedRepliesService {
    */
   async sendRateLimitedDm(args: {
     userId: string;
-    kind: 'daily' | 'per10min' | 'thread_cooldown';
+    kind: "daily" | "per10min" | "thread_cooldown";
     triggeringPostId?: string | null;
   }): Promise<void> {
     const marvId = await this.identity.getMarvUserId();
@@ -230,15 +250,15 @@ export class MarvinCannedRepliesService {
     if (args.triggeringPostId) {
       const postLink = this.postUrl(args.triggeringPostId);
       const reason =
-        args.kind === 'daily'
+        args.kind === "daily"
           ? "you've hit your daily Marv limit. Try again tomorrow — the counter resets at midnight."
-          : args.kind === 'thread_cooldown'
+          : args.kind === "thread_cooldown"
             ? "we've gone back and forth in that thread a lot in the last minute. Give it a beat and try again."
             : "you've sent a lot of mentions in a short window. Try again in a bit.";
       body = `I saw your [post](${postLink}) but couldn't reply — ${reason}`;
     } else {
       body =
-        args.kind === 'daily'
+        args.kind === "daily"
           ? "You've hit your daily message limit with me. Try again tomorrow — the counter resets at midnight."
           : "You've sent a lot of messages in a short window. Give it a few minutes and try again.";
     }
@@ -251,7 +271,7 @@ export class MarvinCannedRepliesService {
         media: [],
       });
       this.logger.log(
-        `[marv-canned] rate-limited DM SENT kind=${args.kind} post=${args.triggeringPostId ?? 'dm'} user=${args.userId} msg=${result?.message?.id ?? '?'}`,
+        `[marv-canned] rate-limited DM SENT kind=${args.kind} post=${args.triggeringPostId ?? "dm"} user=${args.userId} msg=${result?.message?.id ?? "?"}`,
       );
     } catch (err) {
       this.logger.error(
@@ -266,13 +286,12 @@ export class MarvinCannedRepliesService {
    * after retry, or an unexpected empty completion) so the user isn't left
    * in silence. No dedup — each failed attempt gets its own message.
    */
-  async sendTransientErrorDm(args: {
-    userId: string;
-  }): Promise<void> {
+  async sendTransientErrorDm(args: { userId: string }): Promise<void> {
     const marvId = await this.identity.getMarvUserId();
     if (!marvId || args.userId === marvId) return;
 
-    const body = "Something went sideways on my end — give it another shot in a moment.";
+    const body =
+      "Something went sideways on my end — give it another shot in a moment.";
     try {
       const result = await this.messages.sendBotDirectMessage({
         botUserId: marvId,
@@ -281,7 +300,7 @@ export class MarvinCannedRepliesService {
         media: [],
       });
       this.logger.log(
-        `[marv-canned] transient-error DM SENT user=${args.userId} msg=${result?.message?.id ?? '?'}`,
+        `[marv-canned] transient-error DM SENT user=${args.userId} msg=${result?.message?.id ?? "?"}`,
       );
     } catch (err) {
       this.logger.error(
@@ -304,7 +323,7 @@ export class MarvinCannedRepliesService {
       requestingUserId: args.requestingUserId,
       triggeringPostId: args.triggeringPostId,
       rootPostId: args.rootPostId,
-      reason: 'transient_error',
+      reason: "transient_error",
       body: "Something went sideways on my end — give it another shot in a moment.",
     });
   }
@@ -314,14 +333,18 @@ export class MarvinCannedRepliesService {
    * Claimed on `(userId, conversationId, premium_welcome)` before send so worker
    * retries cannot double-deliver.
    */
-  async sendPremiumWelcomeDm(userId: string): Promise<{ conversationId: string | null; messageId: string | null }> {
+  async sendPremiumWelcomeDm(
+    userId: string,
+  ): Promise<{ conversationId: string | null; messageId: string | null }> {
     if (!this.appConfig.marvBot().enabled) {
       return { conversationId: null, messageId: null };
     }
 
     const marvId = await this.identity.getMarvUserId();
     if (!marvId) {
-      this.logger.warn('[marv-canned] premium-welcome DM SKIPPED — Marv user not resolved.');
+      this.logger.warn(
+        "[marv-canned] premium-welcome DM SKIPPED — Marv user not resolved.",
+      );
       return { conversationId: null, messageId: null };
     }
     if (userId === marvId) {
@@ -342,14 +365,16 @@ export class MarvinCannedRepliesService {
       return { conversationId: null, messageId: null };
     }
     if (!conversationId) {
-      this.logger.debug(`[marv-canned] premium-welcome DM SKIPPED user=${userId} (no conversation).`);
+      this.logger.debug(
+        `[marv-canned] premium-welcome DM SKIPPED user=${userId} (no conversation).`,
+      );
       return { conversationId: null, messageId: null };
     }
 
     const claimed = await this.privateCanned.tryClaim({
       userId,
       conversationId,
-      reason: 'premium_welcome',
+      reason: "premium_welcome",
     });
     if (!claimed) {
       this.logger.debug(
@@ -360,9 +385,9 @@ export class MarvinCannedRepliesService {
 
     const body = [
       "Welcome to Premium — I'm Marv.",
-      'Tag @marv in a thread, message me here, or tap Catch me up on a long conversation.',
-      'Ask about members, or a Bible passage if you want one.',
-    ].join('\n');
+      "Tag @marv in a thread, message me here, or tap Catch me up on a long conversation.",
+      "Ask about members, or a Bible passage if you want one.",
+    ].join("\n");
 
     try {
       const result = await this.messages.sendBotDirectMessage({
@@ -382,12 +407,12 @@ export class MarvinCannedRepliesService {
         await this.privateCanned.setMarvinMessageId({
           userId,
           conversationId: result.conversationId,
-          reason: 'premium_welcome',
+          reason: "premium_welcome",
           marvinMessageId: messageId,
         });
       }
       this.logger.log(
-        `[marv-canned] premium-welcome DM SENT user=${userId} convo=${result.conversationId} msg=${messageId ?? '?'}`,
+        `[marv-canned] premium-welcome DM SENT user=${userId} convo=${result.conversationId} msg=${messageId ?? "?"}`,
       );
       return { conversationId: result.conversationId, messageId };
     } catch (err) {
@@ -416,7 +441,9 @@ export class MarvinCannedRepliesService {
   }): Promise<{ conversationId: string | null; messageId: string | null }> {
     const marvId = await this.identity.getMarvUserId();
     if (!marvId) {
-      this.logger.warn('[marv-canned] not-configured DM SKIPPED — Marv user not resolved.');
+      this.logger.warn(
+        "[marv-canned] not-configured DM SKIPPED — Marv user not resolved.",
+      );
       return { conversationId: null, messageId: null };
     }
     if (args.userId === marvId) {
@@ -440,9 +467,12 @@ export class MarvinCannedRepliesService {
         return { conversationId: null, messageId: null };
       }
       this.logger.log(
-        `[marv-canned] not-configured DM SENT user=${args.userId} convo=${result.conversationId} msg=${result.message?.id ?? '?'}`,
+        `[marv-canned] not-configured DM SENT user=${args.userId} convo=${result.conversationId} msg=${result.message?.id ?? "?"}`,
       );
-      return { conversationId: result.conversationId, messageId: result.message?.id ?? null };
+      return {
+        conversationId: result.conversationId,
+        messageId: result.message?.id ?? null,
+      };
     } catch (err) {
       this.logger.error(
         `[marv-canned] not-configured DM FAILED: ${err instanceof Error ? err.message : String(err)}`,

@@ -1,6 +1,6 @@
 import { Body, Controller, ForbiddenException, Get, Header, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
-import { AuthGuard, type AuthedRequest } from '../auth/auth.guard';
+import { AuthGuard, type AuthedRequest } from '../auth/auth-public-api';
 import { MarvinPersonalService } from './services/marvin-personal.service';
 import { MarvinParticipationService } from './services/marvin-participation.service';
 

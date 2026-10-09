@@ -1,16 +1,20 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
-import { Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-import { AppConfigService } from '../app/app-config.service';
-import { JobsService } from '../jobs/jobs.service';
-import { JOBS } from '../jobs/jobs.constants';
-import { NotificationsService } from '../notifications/notifications.service';
-import { ArticlesRankingService } from './articles-ranking.service';
+import { NotificationCreatorService } from "../notifications";
+import { Injectable, Logger, Inject } from "@nestjs/common";
+import { Cron } from "@nestjs/schedule";
+import { Prisma } from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { AppConfigService } from "../app/app-config.service";
+import { JobsService } from "../jobs/jobs.service";
+import { JOBS } from "../jobs/jobs.constants";
+import { ArticlesRankingService } from "./articles-ranking.service";
+import { NOT_DELETED } from "../../common/prisma/where";
 
 const VIEW_MILESTONES = [50, 100, 500, 1000] as const;
 
-function nextMilestone(currentCount: number, lastNotified: number | null): number | null {
+function nextMilestone(
+  currentCount: number,
+  lastNotified: number | null,
+): number | null {
   const alreadyNotified = lastNotified ?? 0;
   for (const m of VIEW_MILESTONES) {
     if (currentCount >= m && m > alreadyNotified) return m;
@@ -28,7 +32,8 @@ export class ArticlesTrendingScoreCron {
     private readonly prisma: PrismaService,
     private readonly appConfig: AppConfigService,
     private readonly jobs: JobsService,
-    private readonly notifications: NotificationsService,
+    @Inject(NotificationCreatorService)
+    private readonly notifications: Pick<NotificationCreatorService, "create">,
     private readonly ranking: ArticlesRankingService,
   ) {}
 
@@ -39,7 +44,7 @@ export class ArticlesTrendingScoreCron {
    * where weightedBoost is the tier-weighted boost total (premium 1.25 / verified 1 / everyone else 0.5).
    * We use a logarithmic view term so views inform ranking without overpowering stronger engagement signals.
    */
-  @Cron('*/10 * * * *')
+  @Cron("*/10 * * * *")
   async refreshTrendingScores() {
     if (!this.appConfig.runSchedulers()) return;
     if (this.running) return;
@@ -49,21 +54,27 @@ export class ArticlesTrendingScoreCron {
     try {
       const asOf = new Date();
       const lookbackDays = 14;
-      const minPublishedAt = new Date(asOf.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
+      const minPublishedAt = new Date(
+        asOf.getTime() - lookbackDays * 24 * 60 * 60 * 1000,
+      );
 
       // Refresh tier-weighted boost scores for the candidate set so the boost term
       // below reads a fresh `boostScore` (premium 1.25 / verified 1 / everyone else 0.5).
       const candidates = await this.prisma.article.findMany({
         where: {
           isDraft: false,
-          deletedAt: null,
+          ...NOT_DELETED,
           publishedAt: { not: null, gte: minPublishedAt },
         },
         select: { id: true },
       });
-      await this.ranking.ensureArticleBoostScoresFresh(candidates.map((c) => c.id));
+      await this.ranking.ensureArticleBoostScoresFresh(
+        candidates.map((c) => c.id),
+      );
 
-      const rows = await this.prisma.$queryRaw<Array<{ id: string; score: number }>>(Prisma.sql`
+      const rows = await this.prisma.$queryRaw<
+        Array<{ id: string; score: number }>
+      >(Prisma.sql`
         WITH share_counts AS (
           SELECT
             p."articleId" as "articleId",
@@ -104,7 +115,10 @@ export class ArticlesTrendingScoreCron {
             batch.map((row) =>
               this.prisma.article.update({
                 where: { id: row.id },
-                data: { trendingScore: row.score, trendingScoreUpdatedAt: asOf },
+                data: {
+                  trendingScore: row.score,
+                  trendingScoreUpdatedAt: asOf,
+                },
               }),
             ),
           );
@@ -144,14 +158,19 @@ export class ArticlesTrendingScoreCron {
   }
 
   /** Enqueue article view milestone sweep every 30 minutes. */
-  @Cron('*/30 * * * *')
+  @Cron("*/30 * * * *")
   async scheduleViewMilestoneSweep() {
     if (!this.appConfig.runSchedulers()) return;
     try {
-      await this.jobs.enqueueCron(JOBS.articlesViewMilestoneSweep, {}, 'cron-articlesViewMilestoneSweep', {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5 * 60_000 },
-      });
+      await this.jobs.enqueueCron(
+        JOBS.articlesViewMilestoneSweep,
+        {},
+        "cron-articlesViewMilestoneSweep",
+        {
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5 * 60_000 },
+        },
+      );
     } catch {
       // likely duplicate jobId; treat as no-op
     }
@@ -173,7 +192,7 @@ export class ArticlesTrendingScoreCron {
       const articles = await this.prisma.article.findMany({
         where: {
           isDraft: false,
-          deletedAt: null,
+          ...NOT_DELETED,
           publishedAt: { not: null },
           viewCount: { gte: VIEW_MILESTONES[0] },
         },
@@ -187,7 +206,10 @@ export class ArticlesTrendingScoreCron {
       });
 
       for (const article of articles) {
-        const milestone = nextMilestone(article.viewCount, article.viewMilestoneNotified);
+        const milestone = nextMilestone(
+          article.viewCount,
+          article.viewMilestoneNotified,
+        );
         if (!milestone) continue;
 
         // Atomically mark this milestone so concurrent runs don't double-notify.
@@ -203,13 +225,15 @@ export class ArticlesTrendingScoreCron {
         });
         if (updated.count !== 1) continue; // already handled by another run
 
-        const titleSnippet = (article.title ?? 'Your article').slice(0, 80).trim();
-        const body = `${titleSnippet} has been read by ${milestone.toLocaleString()} ${milestone === 1 ? 'person' : 'people'}.`;
+        const titleSnippet = (article.title ?? "Your article")
+          .slice(0, 80)
+          .trim();
+        const body = `${titleSnippet} has been read by ${milestone.toLocaleString()} ${milestone === 1 ? "person" : "people"}.`;
 
         await this.notifications.create({
           recipientUserId: article.authorId,
           actorUserId: null,
-          kind: 'generic',
+          kind: "generic",
           title: `${milestone.toLocaleString()} people`,
           body,
           subjectArticleId: article.id,
@@ -220,7 +244,9 @@ export class ArticlesTrendingScoreCron {
       }
 
       if (total > 0) {
-        this.logger.log(`[article-milestones] Notified authors for ${total} milestone(s) in ${Date.now() - startedAt}ms`);
+        this.logger.log(
+          `[article-milestones] Notified authors for ${total} milestone(s) in ${Date.now() - startedAt}ms`,
+        );
       }
     } catch (err) {
       this.logger.error(

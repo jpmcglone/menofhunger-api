@@ -1,4 +1,4 @@
-import { BoardService } from "./board.service";
+import { makeBoardService } from "./board.testing";
 
 import { PostsReadService } from '../posts-read/posts-read.service';
 import { PostsWriteService } from '../posts-read/posts-write.service';
@@ -115,7 +115,7 @@ function setup(viewer: Record<string, unknown> | null, row = threadRow()) {
   };
   const sideEffects = { dispatch: jest.fn() };
   const mutes = { mutedIds: jest.fn().mockResolvedValue(new Set()) };
-  const service = new BoardService(prisma as any,
+  const service = makeBoardService(prisma as any,
     posts as any,
     viewerContext as any,
     {

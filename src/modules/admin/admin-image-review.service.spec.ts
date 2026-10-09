@@ -1,4 +1,4 @@
-import { AdminImageReviewService } from "./admin-image-review.service";
+import { makeAdminImageReviewService } from "./admin-image-review.testing";
 import { PrismaService } from "../prisma/prisma.service";
 import { AppConfigService } from "../app/app-config.service";
 import { PublicProfileCacheService } from "../users/public-profile-cache.service";
@@ -31,7 +31,7 @@ describe("profile and publication media ownership", () => {
       newsletter: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(),
     };
-    const service = new AdminImageReviewService(
+    const service = makeAdminImageReviewService(
       prisma as unknown as PrismaService,
       { r2: () => null } as unknown as AppConfigService,
       { invalidateForUser: jest.fn() } as unknown as PublicProfileCacheService<{
@@ -196,7 +196,7 @@ describe("profile and publication media ownership", () => {
     const { prisma, service } = setup("avatars/user/photo.webp");
     const send = jest.fn(async () => ({}));
     jest
-      .spyOn(service as any, "requireR2")
+      .spyOn((service as any).storage, "requireR2")
       .mockReturnValue({ s3: { send }, bucket: "synthetic" });
     (prisma as any).mediaContentHash = {
       deleteMany: jest.fn(async () => ({ count: 1 })),
@@ -230,7 +230,7 @@ describe("profile and publication media ownership", () => {
 
   it("leaves external deletion failures retryable instead of dropping the ownership index", async () => {
     const { prisma, service } = setup();
-    jest.spyOn(service as any, "requireR2").mockReturnValue({
+    jest.spyOn((service as any).storage, "requireR2").mockReturnValue({
       s3: {
         send: jest.fn(async () => {
           throw new Error("synthetic offline");

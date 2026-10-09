@@ -8,22 +8,10 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { z } from 'zod';
 import { AdminGuard } from './admin.guard';
 import { AdminCrewsService } from './admin-crews.service';
 import { CrewService } from '../crew/crew.service';
-import { queryBoolean } from '../../common/validation/query-boolean';
-
-const listSchema = z.object({
-  q: z.string().trim().max(200).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-  offset: z.coerce.number().int().min(0).max(10_000).optional(),
-  includeDisbanded: queryBoolean().optional(),
-});
-
-const transferSchema = z.object({
-  newOwnerUserId: z.string().trim().min(1),
-});
+import { listSchema, transferSchema } from './admin-crews.schemas';
 
 @UseGuards(AdminGuard)
 @Controller('admin/crews')

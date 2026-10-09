@@ -1,3 +1,4 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { PresenceRealtimeService } from '../presence/presence-realtime.service';
@@ -14,7 +15,7 @@ export async function prepareChannelDeparture(tx: Prisma.TransactionClient, grou
   for (const channel of privateChannels) {
     const remainingLeaders = await tx.communityGroupMember.count({ where: {
       groupId, status: 'active', role: { in: ['owner', 'moderator'] }, userId: { not: userId },
-      user: { bannedAt: null, isBot: false, verifiedStatus: { not: 'none' }, channelAccess: { some: { channelId: channel.id } } },
+      user: { ...NOT_BANNED_USER_WHERE, isBot: false, verifiedStatus: { not: 'none' }, channelAccess: { some: { channelId: channel.id } } },
     } });
     if (remainingLeaders) continue;
     if (!options.forced) throw new BadRequestException('Add another group leader to your private channels before leaving or changing roles.');

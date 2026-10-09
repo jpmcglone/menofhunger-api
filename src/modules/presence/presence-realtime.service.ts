@@ -2,7 +2,7 @@ import type { GroupChannelChangedPayloadDto, GroupChannelMessagesPayloadDto, Gro
 import { Injectable, Logger } from '@nestjs/common';
 import type { Server } from 'socket.io';
 import { PresenceService } from './presence.service';
-import { PresenceRedisStateService } from './presence-redis-state.service';
+import { PresenceRedisBusService } from './presence-redis-bus.service';
 import { WsEventNames } from '../../common/dto';
 import { channelRoom } from './gateway/gateway-rooms';
 import type {
@@ -56,7 +56,7 @@ export class PresenceRealtimeService {
 
   constructor(
     private readonly presence: PresenceService,
-    private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presenceRedis: PresenceRedisBusService,
   ) {}
 
   /**

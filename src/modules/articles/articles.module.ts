@@ -1,3 +1,10 @@
+import { PostsModule } from '../posts/posts.module';
+import { ArticleDiscoveryService } from './article-discovery.service';
+import { ArticleEngagementService } from './article-engagement.service';
+import { ArticleCommentsService } from './article-comments.service';
+import { ArticleAccessService } from './article-access.service';
+import { ArticleFeedService } from './article-feed.service';
+import { ArticleCommentWriterService } from './article-comment-writer.service';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -13,9 +20,9 @@ import { ArticlesSideEffectsHandler } from './articles-side-effects.handler';
 import { ArticlesTrendingScoreCron } from './articles-trending-score.cron';
 
 @Module({
-  imports: [AuthModule, NotificationsModule, RealtimeModule, ArticleViewsModule, BoardModule, PickaxModule, XModule],
+  imports: [PostsModule, AuthModule, NotificationsModule, RealtimeModule, ArticleViewsModule, BoardModule, PickaxModule, XModule],
   controllers: [ArticlesController],
-  providers: [ArticlesService, ArticlesRankingService, ArticlesSideEffectsHandler, ArticlesTrendingScoreCron],
+  providers: [ArticleAccessService, ArticleFeedService, ArticleCommentWriterService, ArticleDiscoveryService, ArticleEngagementService, ArticleCommentsService, ArticlesService, ArticlesRankingService, ArticlesSideEffectsHandler, ArticlesTrendingScoreCron],
   exports: [ArticlesService, ArticlesRankingService, ArticlesTrendingScoreCron],
 })
 export class ArticlesModule {}

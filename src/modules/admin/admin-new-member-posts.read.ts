@@ -1,5 +1,8 @@
-import type { PostReadDelegate } from '../posts-read/posts-read.service';
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
+import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
+import type { PostsReadService } from '../posts-read/posts-read.service';
 import type { AdminNewMemberPostsDto } from '../../common/dto';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 const SNIPPET_MAX = 160;
 
@@ -8,7 +11,7 @@ const SNIPPET_MAX = 160;
  * `minAgeMinutes` leaves a grace period before a post counts as waiting.
  */
 export async function readUnansweredNewMemberPosts(
-  posts: PostReadDelegate,
+  posts: PostsReadService,
   opts: { newMemberDays: number; minAgeMinutes: number; limit: number },
   now: Date = new Date(),
 ): Promise<AdminNewMemberPostsDto> {
@@ -18,7 +21,7 @@ export async function readUnansweredNewMemberPosts(
   const rows = await posts.findMany({
     where: {
       parentId: null,
-      deletedAt: null,
+      ...NOT_DELETED,
       isDraft: false,
       kind: 'regular',
       visibility: { not: 'onlyMe' },
@@ -26,7 +29,7 @@ export async function readUnansweredNewMemberPosts(
       createdAt: { lt: postedBefore, gte: postedAfter },
       user: {
         createdAt: { gte: joinedAfter },
-        bannedAt: null,
+        ...NOT_BANNED_USER_WHERE,
         isBot: false,
         isOrganization: false,
       },
@@ -38,7 +41,7 @@ export async function readUnansweredNewMemberPosts(
       createdAt: true,
       body: true,
       visibility: true,
-      user: { select: { id: true, username: true, name: true, createdAt: true } },
+      user: { select: { ...USER_BRIEF_SELECT, createdAt: true } },
     },
   });
   return {

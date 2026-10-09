@@ -4,7 +4,7 @@ import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import { AuthService } from '../auth/auth.service';
 import { PostViewsController } from '../post-views/post-views.controller';
-import { PostViewsService } from '../post-views/post-views.service';
+import { PostViewsBatchService } from '../post-views/post-views-batch.service';
 import { ArticleViewsController } from '../article-views/article-views.controller';
 import { ArticleViewsService } from '../article-views/article-views.service';
 
@@ -20,7 +20,7 @@ describe.each(['posts', 'articles'])('%s view identity HTTP boundary', (resource
     const module = await Test.createTestingModule({
       controllers: [PostViewsController, ArticleViewsController],
       providers: [
-        { provide: PostViewsService, useValue: views },
+        { provide: PostViewsBatchService, useValue: views },
         { provide: ArticleViewsService, useValue: views },
         {
           provide: AuthService,

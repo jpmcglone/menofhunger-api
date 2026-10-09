@@ -36,8 +36,11 @@ for (const file of sourceFiles(join(ROOT, 'src'))) {
   const text = readFileSync(file, 'utf8')
   for (const pattern of READERS) for (const match of text.matchAll(pattern)) note(match[1], file)
 }
-const envSchema = join(ROOT, 'src/modules/app/env.ts')
-for (const match of readFileSync(envSchema, 'utf8').matchAll(SCHEMA_KEY)) note(match[1], envSchema)
+const appDir = join(ROOT, 'src/modules/app')
+for (const name of readdirSync(appDir).filter((f) => f === 'env.ts' || /^env-.*\.shape\.ts$/.test(f))) {
+  const envSchema = join(appDir, name)
+  for (const match of readFileSync(envSchema, 'utf8').matchAll(SCHEMA_KEY)) note(match[1], envSchema)
+}
 
 const documented = new Set(
   [...readFileSync(join(ROOT, 'env.example'), 'utf8').matchAll(new RegExp(`^#?\\s*${NAME}=`, 'gm'))].map((m) => m[1]),

@@ -1,12 +1,13 @@
-import { Injectable, type OnModuleInit } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { NotificationsService } from '../notifications/notifications.service';
-import type { SideEffectPayloads } from '../side-effects/side-effects.constants';
-import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
-import { SideEffectsService } from '../side-effects/side-effects.service';
-import { BillingService } from './billing.service';
-import { ReferralService } from './referral.service';
-import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
+import { NotificationWriterFanoutService } from "../notifications";
+import { NotificationCreatorService } from "../notifications/notification-creator.service";
+import { Injectable, type OnModuleInit, Inject } from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import type { SideEffectPayloads } from "../side-effects/side-effects.constants";
+import { SideEffectsRegistry } from "../side-effects/side-effects.registry";
+import { SideEffectsService } from "../side-effects/side-effects.service";
+import { BillingService } from "./billing.service";
+import { ReferralService } from "./referral.service";
+import { USER_BRIEF_SELECT } from "../../common/prisma-selects/user.select";
 
 /**
  * Billing side effects: sends a bell notification when the user's premium access
@@ -23,7 +24,16 @@ import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
 export class BillingSideEffectsHandler implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly notifications: NotificationsService,
+    @Inject(NotificationWriterFanoutService)
+    private readonly notificationWriterFanoutService: Pick<
+      NotificationWriterFanoutService,
+      "upsertPremiumStatusNotification"
+    >,
+    @Inject(NotificationCreatorService)
+    private readonly notificationCreatorService: Pick<
+      NotificationCreatorService,
+      "create"
+    >,
     private readonly registry: SideEffectsRegistry,
     private readonly billing: BillingService,
     private readonly sideEffects: SideEffectsService,
@@ -31,13 +41,19 @@ export class BillingSideEffectsHandler implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    this.registry.register('billing.premium.changed', (p) => this.onPremiumChanged(p));
-    this.registry.register('referral.bonus.granted', (p) => this.onReferralBonusGranted(p));
-    this.registry.register('referral.verified', (p) => this.onReferralVerified(p));
+    this.registry.register("billing.premium.changed", (p) =>
+      this.onPremiumChanged(p),
+    );
+    this.registry.register("referral.bonus.granted", (p) =>
+      this.onReferralBonusGranted(p),
+    );
+    this.registry.register("referral.verified", (p) =>
+      this.onReferralVerified(p),
+    );
   }
 
   private async onPremiumChanged(
-    payload: SideEffectPayloads['billing.premium.changed'],
+    payload: SideEffectPayloads["billing.premium.changed"],
   ): Promise<void> {
     const { userId, direction } = payload;
 
@@ -50,17 +66,17 @@ export class BillingSideEffectsHandler implements OnModuleInit {
     // Idempotency guard: skip if current state contradicts the direction.
     // e.g. direction='started' but user.premium is now false means the user
     // has already lost premium again — don't send a stale "you're premium" bell.
-    if (direction === 'started' && !user.premium) return;
-    if (direction === 'ended' && user.premium) return;
+    if (direction === "started" && !user.premium) return;
+    if (direction === "ended" && user.premium) return;
 
-    await this.notifications.upsertPremiumStatusNotification({
+    await this.notificationWriterFanoutService.upsertPremiumStatusNotification({
       recipientUserId: userId,
-      kind: direction === 'started' ? 'premium_started' : 'premium_ended',
+      kind: direction === "started" ? "premium_started" : "premium_ended",
       isPremiumPlus: user.premiumPlus,
     });
 
-    if (direction === 'started') {
-      this.sideEffects.dispatch('marv.premium.welcome', { userId });
+    if (direction === "started") {
+      this.sideEffects.dispatch("marv.premium.welcome", { userId });
     }
   }
 
@@ -71,7 +87,7 @@ export class BillingSideEffectsHandler implements OnModuleInit {
    * user has no active Stripe subscription.
    */
   private async onReferralBonusGranted(
-    payload: SideEffectPayloads['referral.bonus.granted'],
+    payload: SideEffectPayloads["referral.bonus.granted"],
   ): Promise<void> {
     const { recruitId, recruiterId } = payload;
     await this.billing.syncGrantTrialToSubscription(recruiterId);
@@ -80,33 +96,39 @@ export class BillingSideEffectsHandler implements OnModuleInit {
   }
 
   /** Tells both men about the free month. Re-reads names so a delayed retry stays current. */
-  private async notifyReferralBonus(recruitId: string, recruiterId: string): Promise<void> {
+  private async notifyReferralBonus(
+    recruitId: string,
+    recruiterId: string,
+  ): Promise<void> {
     const people = await this.prisma.user.findMany({
       where: { id: { in: [recruitId, recruiterId] } },
       select: USER_BRIEF_SELECT,
     });
     const label = (id: string) => {
       const person = people.find((p) => p.id === id);
-      return person?.name?.trim() || (person?.username ? `@${person.username}` : 'Your friend');
+      return (
+        person?.name?.trim() ||
+        (person?.username ? `@${person.username}` : "Your friend")
+      );
     };
-    await this.notifications.create({
+    await this.notificationCreatorService.create({
       recipientUserId: recruiterId,
-      kind: 'generic',
+      kind: "generic",
       subjectUserId: recruitId,
       title: `${label(recruitId)} verified. You both got a free month`,
-      body: 'A free month of Premium is on your account.',
+      body: "A free month of Premium is on your account.",
     });
-    await this.notifications.create({
+    await this.notificationCreatorService.create({
       recipientUserId: recruitId,
-      kind: 'generic',
+      kind: "generic",
       subjectUserId: recruiterId,
-      title: 'Welcome. You got a free month of Premium',
+      title: "Welcome. You got a free month of Premium",
       body: `You and ${label(recruiterId)} both got a free month.`,
     });
   }
 
   private async onReferralVerified(
-    payload: SideEffectPayloads['referral.verified'],
+    payload: SideEffectPayloads["referral.verified"],
   ): Promise<void> {
     await this.referral.onMemberVerified(payload.userId);
   }

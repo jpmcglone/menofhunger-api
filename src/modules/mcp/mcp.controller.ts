@@ -1,7 +1,10 @@
 import { Controller, Delete, Get, NotFoundException, Param, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { AuthGuard } from '../auth/auth.guard';
-import { AuthService } from '../auth/auth.service';
+import { AuthGuard } from '../auth/auth-public-api';
+import {  } from '../auth/auth-public-api';
+import {  } from '../auth/auth-public-api';
+import {  } from '../auth/auth-public-api';
+import { AuthService } from '../auth/auth-public-api';
 import { getSessionCookie } from '../../common/session-cookie';
 import type { McpConnectionDto, McpRevokeResultDto } from '../../common/dto/mcp.dto';
 import { mcpAccountFor } from './mcp-bootstrap';

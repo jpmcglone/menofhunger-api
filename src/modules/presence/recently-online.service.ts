@@ -1,6 +1,9 @@
+import { decodeJsonCursor, encodeJsonCursor } from '../../common/pagination/json-cursor';
+import { toPage } from '../../common/pagination/page';
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { viewerCanSeeMembers } from '../auth/member-visibility';
+import { viewerCanSeeMembers } from '../auth/auth-public-api';
 
 const RECENTLY_ONLINE_WINDOW_MS = 60 * 60_000;
 
@@ -9,11 +12,11 @@ export type RecentlyOnlineCursor =
   | { section: 'never'; cMs: number | null; id: string | null };
 
 function encodeCursor(params: { tMs: number; id: string }): string {
-  return Buffer.from(JSON.stringify(params), 'utf8').toString('base64url');
+  return encodeJsonCursor(params);
 }
 
-function encodeNeverCursor(params: { cMs: number; id: string }): string {
-  return Buffer.from(JSON.stringify({ section: 'never', cMs: params.cMs, id: params.id }), 'utf8').toString('base64url');
+function encodeNeverCursor(params: { cMs: number | null; id: string | null }): string {
+  return encodeJsonCursor({ section: 'never', cMs: params.cMs, id: params.id });
 }
 
 /**
@@ -21,24 +24,18 @@ function encodeNeverCursor(params: { cMs: number; id: string }): string {
  * section-B cursor { section: 'never', cMs, id }.
  */
 export function decodeRecentlyOnlineCursor(raw: string): RecentlyOnlineCursor | null {
-  const s = (raw ?? '').trim();
-  if (!s) return null;
-  try {
-    const json = Buffer.from(s, 'base64url').toString('utf8');
-    const parsed = JSON.parse(json) as Record<string, unknown>;
-    if (parsed?.section === 'never') {
-      const cMs = typeof parsed.cMs === 'number' && Number.isFinite(parsed.cMs) ? Math.floor(parsed.cMs) : null;
-      const id = typeof parsed.id === 'string' ? parsed.id.trim() || null : null;
-      return { section: 'never', cMs, id };
-    }
-    // Section A (recent online): backward-compat format { tMs, id }
-    const tMs = typeof parsed?.tMs === 'number' && Number.isFinite(parsed.tMs) ? Math.floor(parsed.tMs) : null;
-    const id = typeof parsed?.id === 'string' ? parsed.id.trim() : '';
-    if (!tMs || !id) return null;
-    return { section: 'recent', tMs, id };
-  } catch {
-    return null;
+  const parsed = decodeJsonCursor(raw);
+  if (!parsed) return null;
+  if (parsed.section === 'never') {
+    const cMs = typeof parsed.cMs === 'number' && Number.isFinite(parsed.cMs) ? Math.floor(parsed.cMs) : null;
+    const id = typeof parsed.id === 'string' ? parsed.id.trim() || null : null;
+    return { section: 'never', cMs, id };
   }
+  // Section A (recent online): backward-compat format { tMs, id }
+  const tMs = typeof parsed.tMs === 'number' && Number.isFinite(parsed.tMs) ? Math.floor(parsed.tMs) : null;
+  const id = typeof parsed.id === 'string' ? parsed.id.trim() : '';
+  if (!tMs || !id) return null;
+  return { section: 'recent', tMs, id };
 }
 
 /** User reads behind "Recently online": member visibility, counts, and the two-section cursor page. */
@@ -55,7 +52,7 @@ export class RecentlyOnlineService {
     return this.prisma.user.count({
       where: {
         usernameIsSet: true,
-        bannedAt: null,
+        ...NOT_BANNED_USER_WHERE,
         lastOnlineAt: { gte: new Date(Date.now() - RECENTLY_ONLINE_WINDOW_MS) },
         ...(excludeIds.length ? { id: { notIn: excludeIds } } : {}),
       },
@@ -80,7 +77,7 @@ export class RecentlyOnlineService {
       const aItems = await this.prisma.user.findMany({
         where: {
           usernameIsSet: true,
-          bannedAt: null,
+          ...NOT_BANNED_USER_WHERE,
           lastOnlineAt: { not: null },
           ...onlineFilter,
           ...(cursor
@@ -97,19 +94,18 @@ export class RecentlyOnlineService {
         select: { id: true, lastOnlineAt: true },
       });
 
-      const aHasMore = aItems.length > limit;
-      const aPage = aItems.slice(0, limit);
+      const a = toPage(aItems, limit, (r) => encodeCursor({ tMs: r.lastOnlineAt!.getTime(), id: r.id }));
+      const aMapped = a.items.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null }));
 
-      if (aHasMore) {
-        const aNext = aItems[limit];
-        nextCursor = encodeCursor({ tMs: aNext.lastOnlineAt!.getTime(), id: aNext.id });
-        pageItems = aPage.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null }));
+      if (a.nextCursor) {
+        nextCursor = a.nextCursor;
+        pageItems = aMapped;
       } else {
-        const remaining = limit - aPage.length;
+        const remaining = limit - a.items.length;
         const bItems = await this.prisma.user.findMany({
           where: {
             usernameIsSet: true,
-            bannedAt: null,
+            ...NOT_BANNED_USER_WHERE,
             lastOnlineAt: null,
             ...onlineFilter,
           },
@@ -118,25 +114,17 @@ export class RecentlyOnlineService {
           select: { id: true, createdAt: true },
         });
 
-        const bHasMore = bItems.length > remaining;
-        const bPage = bItems.slice(0, remaining);
-
-        if (bHasMore) {
-          const bNext = bItems[remaining];
-          nextCursor = encodeNeverCursor({ cMs: bNext.createdAt.getTime(), id: bNext.id });
-        }
-
-        pageItems = [
-          ...aPage.map((r) => ({ id: r.id, lastOnlineAt: r.lastOnlineAt ? r.lastOnlineAt.toISOString() : null })),
-          ...bPage.map((r) => ({ id: r.id, lastOnlineAt: r.createdAt.toISOString() })),
-        ];
+        const b = toPage(bItems, remaining, (r) => encodeNeverCursor({ cMs: r.createdAt.getTime(), id: r.id }));
+        // A full section A page leaves no room for section B: resume at the start of B.
+        nextCursor = remaining === 0 && bItems.length > 0 ? encodeNeverCursor({ cMs: null, id: null }) : b.nextCursor;
+        pageItems = [...aMapped, ...b.items.map((r) => ({ id: r.id, lastOnlineAt: r.createdAt.toISOString() }))];
       }
     } else {
       const { cMs, id: cId } = cursor;
       const bItems = await this.prisma.user.findMany({
         where: {
           usernameIsSet: true,
-          bannedAt: null,
+          ...NOT_BANNED_USER_WHERE,
           lastOnlineAt: null,
           ...onlineFilter,
           ...(cMs != null && cId != null
@@ -153,15 +141,9 @@ export class RecentlyOnlineService {
         select: { id: true, createdAt: true },
       });
 
-      const bHasMore = bItems.length > limit;
-      const bPage = bItems.slice(0, limit);
-
-      if (bHasMore) {
-        const bNext = bItems[limit];
-        nextCursor = encodeNeverCursor({ cMs: bNext.createdAt.getTime(), id: bNext.id });
-      }
-
-      pageItems = bPage.map((r) => ({ id: r.id, lastOnlineAt: r.createdAt.toISOString() }));
+      const b = toPage(bItems, limit, (r) => encodeNeverCursor({ cMs: r.createdAt.getTime(), id: r.id }));
+      nextCursor = b.nextCursor;
+      pageItems = b.items.map((r) => ({ id: r.id, lastOnlineAt: r.createdAt.toISOString() }));
     }
 
     return { items: pageItems, nextCursor };

@@ -1,18 +1,7 @@
 import { siteOriginFromUrl } from "../email/email-rich-text";
-import {
-  EMAIL,
-  EMAIL_CLASS,
-  emailFooterLink,
-  escapeHtml,
-  renderButton,
-  renderMohEmail,
-} from "../email/templates/moh-email";
+import { EMAIL, EMAIL_CLASS, emailFooterLink, escapeHtml, renderButton, renderMohEmail } from "../email/templates/moh-email";
 import { renderTiptapEmailHtml } from "../email/email-content-article";
-import {
-  interpolateTemplate,
-  interpolateTiptapJson,
-  type NewsletterVars,
-} from "./newsletter-vars";
+import { interpolateTemplate, interpolateTiptapJson, type NewsletterVars } from "./newsletter-vars";
 
 export type NewsletterRenderInput = {
   subject: string;

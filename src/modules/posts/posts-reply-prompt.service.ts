@@ -6,6 +6,7 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import type { SideEffectPayloads } from '../side-effects/side-effects.constants';
 import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
 import { TypeSafeService } from '../typesafe/typesafe.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 const NEITHER = 'neither';
 const JEV_BUDGET_MS = 4_000;
@@ -43,7 +44,7 @@ export class PostsReplyPromptService implements OnModuleInit {
     if (!postId || !this.typeSafe.isConfigured()) return;
     const post = await this.prisma.post.findFirst({
       where: {
-        id: postId, deletedAt: null, isDraft: false, kind: 'regular', parentId: null,
+        id: postId, ...NOT_DELETED, isDraft: false, kind: 'regular', parentId: null,
         visibility: 'public', communityGroupId: null, replyPromptClassifiedAt: null,
       },
       select: { id: true, body: true, createdAt: true },
@@ -76,7 +77,7 @@ export class PostsReplyPromptService implements OnModuleInit {
   private async save(postId: string, body: string, prompt: PostReplyPrompt | null): Promise<void> {
     // The body is part of the guard so a concurrent edit (which clears the prompt) wins.
     const result = await this.prisma.post.updateMany({
-      where: { id: postId, body, deletedAt: null, replyPromptClassifiedAt: null },
+      where: { id: postId, body, ...NOT_DELETED, replyPromptClassifiedAt: null },
       data: { replyPrompt: prompt, replyPromptClassifiedAt: new Date() },
     });
     if (!result.count || !prompt) return;

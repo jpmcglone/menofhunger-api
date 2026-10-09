@@ -10,7 +10,7 @@ import { OnModuleDestroy } from '@nestjs/common';
 import { Server, type Socket } from 'socket.io';
 import { PresenceService } from './presence.service';
 import { PresenceRealtimeService } from './presence-realtime.service';
-import { PresenceRedisStateService } from './presence-redis-state.service';
+import { PresenceRedisBusService } from './presence-redis-bus.service';
 import type {
   ArticlesSubscribePayloadDto,
   GroupsSubscribePayloadDto,
@@ -47,7 +47,7 @@ export class PresenceGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
   constructor(
     private readonly presence: PresenceService,
-    private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presenceRedis: PresenceRedisBusService,
     private readonly realtime: PresenceRealtimeService,
     private readonly context: GatewayContextService,
     private readonly presenceHandler: PresenceStatusHandler,

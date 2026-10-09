@@ -278,7 +278,7 @@ export function toPostPollDto(
   const endsAtIso =
     poll.endsAt instanceof Date
       ? poll.endsAt.toISOString()
-      : new Date(poll.endsAt as unknown as string | number).toISOString();
+      : new Date(poll.endsAt as string | number).toISOString();
   const ended = new Date(endsAtIso).getTime() <= Date.now();
   const totalVoteCount = Number.isFinite(poll.totalVoteCount)
     ? Math.max(0, Math.floor(poll.totalVoteCount))
@@ -600,7 +600,7 @@ export function toPostDto(
     topics: Array.isArray(post.topics) ? post.topics : [],
     replyPrompt: isPostDeleted || post.parentId ? null : ((post as { replyPrompt?: 'question' | 'discussion' | null }).replyPrompt ?? null),
     hashtags: isPostDeleted ? [] : (Array.isArray(post.hashtags) ? post.hashtags : []),
-    cashtags: isPostDeleted ? [] : (Array.isArray((post as any).cashtags) ? (post as any).cashtags : []),
+    cashtags: isPostDeleted ? [] : (Array.isArray(post.cashtags) ? post.cashtags : []),
     boostCount: post.boostCount,
     bookmarkCount: post.bookmarkCount ?? 0,
     commentCount: post.commentCount ?? 0,

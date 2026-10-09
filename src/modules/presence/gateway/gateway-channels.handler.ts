@@ -1,9 +1,10 @@
+import { socketData } from './gateway-socket-data';
 import { Injectable } from '@nestjs/common';
 import type { Socket } from 'socket.io';
 import { WsEventNames, type GroupChannelTypingPayloadDto } from '../../../common/dto';
 import { ChannelAccessService } from '../../group-channels/channel-access.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { PresenceRedisStateService } from '../presence-redis-state.service';
+import { PresenceRedisBusService } from '../presence-redis-bus.service';
 import { PresenceService } from '../presence.service';
 import { GatewayThrottleService } from './gateway-throttle.service';
 import { MAX_CHANNEL_SUBSCRIPTIONS_PER_SOCKET, channelRoom } from './gateway-rooms';
@@ -19,7 +20,7 @@ type ChannelSubs = Map<string, Map<string, string>>;
 export class ChannelsGatewayHandler {
   constructor(
     private readonly presence: PresenceService,
-    private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presenceRedis: PresenceRedisBusService,
     private readonly access: ChannelAccessService,
     private readonly prisma: PrismaService,
     private readonly throttle: GatewayThrottleService,
@@ -73,7 +74,7 @@ export class ChannelsGatewayHandler {
     const rawThread = typeof payload?.threadRootId === 'string' ? payload.threadRootId.trim() : '';
     const threadRootId = /^[A-Za-z0-9_-]{1,64}$/.test(rawThread) ? rawThread : null;
     if (!this.throttle.shouldEmitTyping(`channel:${userId}:${channelId}:${threadRootId ?? ''}:${typing ? '1' : '0'}`, 700)) return;
-    const sender = ((client.data as any)?.spaceChatUser ?? null) as { id: string; username: string | null; verifiedStatus: string; premium: boolean; premiumPlus: boolean; isOrganization: boolean } | null;
+    const sender = (socketData(client).spaceChatUser ?? null) as { id: string; username: string | null; verifiedStatus: string; premium: boolean; premiumPlus: boolean; isOrganization: boolean } | null;
     if (!sender?.id) return;
     const room = channelRoom(channelId);
     const out: GroupChannelTypingPayloadDto = {

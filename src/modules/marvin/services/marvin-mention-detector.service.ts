@@ -10,7 +10,7 @@ import { MarvinBotIdentityService } from './marvin-bot-identity.service';
  * compare the parsed usernames against the configured Marv username (case-insensitive).
  *
  * IMPORTANT: this is a lightweight text check, not a database lookup. Resolving the
- * username to a User row is the caller's job (PostsService already does that).
+ * username to a User row is the caller's job (PostsMutationWriteService already does that).
  */
 @Injectable()
 export class MarvinMentionDetectorService {

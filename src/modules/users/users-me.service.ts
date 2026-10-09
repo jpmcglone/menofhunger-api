@@ -1,11 +1,13 @@
+import { isUniqueViolation } from '../../common/prisma/errors';
 import { publicPreviewUrl } from "../../common/urls/public-preview-url";
 import { normalizeSocialProfileUrl } from "../../common/urls/social-profile-url";
+import { ProfileLinksWriteService, type LegacyLinkField } from "./profile-links-write.service";
 import { UsersProfileWriteService } from "./users-profile-write.service";
 import { Injectable, BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { PrismaService } from "../prisma/prisma.service";
-import { AuthService } from "../auth/auth.service";
+import { AuthService } from "../auth/auth-public-api";
 import { AppConfigService } from "../app/app-config.service";
 import { FollowsService } from "../follows/follows.service";
 import { validateUsername } from "./users.utils";
@@ -24,6 +26,7 @@ import { PresenceService } from "../presence/presence.service";
 import { MEMBERS_MAP_SNAPSHOT_SELECT, MembersMapRealtimeService } from "./members-map-realtime.service";
 import { PostsReadService } from '../posts-read/posts-read.service';
 import { USER_REF_SELECT } from '../../common/prisma-selects/user.select';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 const setUsernameSchema = z.object({
   username: z.string().min(1),
@@ -132,6 +135,7 @@ export class UsersMeService {
     private readonly profileWrite: UsersProfileWriteService,
     private readonly membersMapRealtime: MembersMapRealtimeService,
     private readonly postsRead: PostsReadService,
+    private readonly profileLinks: ProfileLinksWriteService,
   ) {}
 
   /**
@@ -271,8 +275,7 @@ export class UsersMeService {
       };
     } catch (err: unknown) {
       if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === "P2002"
+        isUniqueViolation(err)
       ) {
         throw new ConflictException("That username is taken.");
       }
@@ -311,24 +314,27 @@ export class UsersMeService {
           : null;
         nextEmail = cleaned;
         emailChanged = (existing.email ?? null) !== cleaned;
-        (update as any).email = cleaned;
+        update.email = cleaned;
         if (emailChanged) {
-          (update as any).emailVerifiedAt = null;
-          (update as any).emailVerificationRequestedAt = cleaned ? now : null;
+          update.emailVerifiedAt = null;
+          update.emailVerificationRequestedAt = cleaned ? now : null;
         }
       }
 
-      for (const [field, provider] of [
-        ["rumbleUrl", "rumble"],
-        ["linkedinUrl", "linkedin"],
-        ["youtubeUrl", "youtube"],
+      // Link fields go through the links service (ProfileLink rows + mirror columns),
+      // which applies URL safety and the verified-member gate.
+      const legacyLinks: Partial<Record<LegacyLinkField, string | null>> = {};
+      for (const [field, provider, legacy] of [
+        ["rumbleUrl", "rumble", "rumble"],
+        ["linkedinUrl", "linkedin", "linkedin"],
+        ["youtubeUrl", "youtube", "youtube"],
       ] as const) {
         if (parsed[field] !== undefined)
-          update[field] = normalizeSocialProfileUrl(parsed[field], provider);
+          legacyLinks[legacy] = normalizeSocialProfileUrl(parsed[field], provider);
       }
       if (parsed.website !== undefined) {
         const raw = (parsed.website ?? "").trim();
-        update.website = raw ? normalizeWebsite(raw) : null;
+        legacyLinks.website = raw ? normalizeWebsite(raw) : null;
       }
 
       if (parsed.locationQuery !== undefined) {
@@ -370,6 +376,9 @@ export class UsersMeService {
         update.interests = mapped;
       }
 
+      await this.profileLinks.setLegacyFields(userId, legacyLinks, {
+        emit: false, // profileWrite.commit below invalidates caches and emits.
+      });
       const updated = await this.profileWrite.commit(
         userId,
         update,
@@ -397,8 +406,7 @@ export class UsersMeService {
       };
     } catch (err: unknown) {
       if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === "P2002"
+        isUniqueViolation(err)
       ) {
         throw new ConflictException("That email is already in use.");
       }
@@ -410,8 +418,8 @@ export class UsersMeService {
     const postId = (parsed.postId ?? "").trim();
     if (!postId) throw new BadRequestException("postId is required.");
 
-    const post = await this.postsRead.read.findFirst({
-      where: { id: postId, deletedAt: null },
+    const post = await this.postsRead.findFirst({
+      where: { id: postId, ...NOT_DELETED },
       select: { id: true, userId: true, visibility: true },
     });
     if (!post) throw new NotFoundException("Post not found.");
@@ -478,10 +486,10 @@ export class UsersMeService {
         : null;
       emailChanged = (user.email ?? null) !== cleaned;
       nextEmail = cleaned;
-      (data as any).email = cleaned;
+      data.email = cleaned;
       if (emailChanged) {
-        (data as any).emailVerifiedAt = null;
-        (data as any).emailVerificationRequestedAt = cleaned ? now : null;
+        data.emailVerifiedAt = null;
+        data.emailVerificationRequestedAt = cleaned ? now : null;
       }
     }
 
@@ -632,8 +640,7 @@ export class UsersMeService {
       };
     } catch (err: unknown) {
       if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === "P2002"
+        isUniqueViolation(err)
       ) {
         // Could be username or email unique violations; keep it generic here.
         throw new ConflictException("That value is already in use.");

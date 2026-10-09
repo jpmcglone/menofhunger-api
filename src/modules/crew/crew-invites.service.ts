@@ -1,22 +1,12 @@
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { isNotFound, isUniqueViolation } from '../../common/prisma/errors';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
-import {
-  CREW_INVITE_EXPIRY_DAYS,
-  CREW_MEMBER_CAP,
-  toCrewInviteDto,
-  type CrewInviteDto,
-} from '../../common/dto/crew.dto';
+import { CREW_INVITE_EXPIRY_DAYS, CREW_MEMBER_CAP, toCrewInviteDto, type CrewInviteDto } from '../../common/dto/crew.dto';
 import { CrewService } from './crew.service';
 import { ensureUniqueCrewSlug } from './crew.utils';
 import { slugifyCrewHandle } from '../../common/text/slugify';
@@ -391,13 +381,10 @@ export class CrewInvitesService {
         });
       });
     } catch (e) {
-      if (e instanceof Prisma.PrismaClientKnownRequestError) {
-        // P2002: unique violation (CrewMember.userId race).
-        // P2025: guarded update missed (e.g. solo crew gained a second member
-        // between our pre-check and the tx).
-        if (e.code === 'P2002' || e.code === 'P2025') {
-          throw new ConflictException('You are already in a crew.');
-        }
+      // Unique violation (CrewMember.userId race) or guarded update missed (solo crew gained a
+      // second member between our pre-check and the tx).
+      if (isUniqueViolation(e) || isNotFound(e)) {
+        throw new ConflictException('You are already in a crew.');
       }
       throw e;
     }
@@ -549,17 +536,10 @@ export class CrewInvitesService {
         return crew.id;
       });
     } catch (e) {
-      if (e instanceof Prisma.PrismaClientKnownRequestError) {
-        if (e.code === 'P2002') {
-          // CrewMember.userId or Crew.slug unique violation — bubble as conflict.
-          throw new ConflictException('Could not create crew; please retry.');
-        }
-        if (e.code === 'P2025') {
-          // The guarded solo-disband update missed (someone joined the solo
-          // crew concurrently). Treat as the existing-crew conflict.
-          throw new ConflictException('You are already in a crew.');
-        }
-      }
+      // CrewMember.userId or Crew.slug unique violation.
+      if (isUniqueViolation(e)) throw new ConflictException('Could not create crew; please retry.');
+      // The guarded solo-disband update missed (someone joined the solo crew concurrently).
+      if (isNotFound(e)) throw new ConflictException('You are already in a crew.');
       throw e;
     }
 

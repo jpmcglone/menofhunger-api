@@ -1,114 +1,108 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
-import { z } from 'zod';
-import { ApiTags } from '@nestjs/swagger';
-import { AuthGuard } from '../auth/auth.guard';
-import { CurrentUserId, IsImpersonating } from '../users/users.decorator';
-import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import { ALLOWED_REACTIONS } from '../../common/constants/reactions';
-import { MessagesService, type MessageMediaInput } from './messages.service';
-import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
+import { MessagesQueryService } from "./messages-query.service";
+import { MessagesWriteService } from "./messages-write.service";
+import { MessagesReactionsEditsService } from "./messages-reactions-edits.service";
+import { MessagesConversationStateService } from "./messages-conversation-state.service";
+import { limitQuery } from "../../common/pagination/cursor-query.schema";
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+  Inject,
+} from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
+import { z } from "zod";
+import { ApiTags } from "@nestjs/swagger";
+import { AuthGuard } from "../auth/auth-public-api";
+import { CurrentUserId, IsImpersonating } from "../users/users.decorator";
+import {
+  rateLimitLimit,
+  rateLimitTtl,
+} from "../../common/throttling/rate-limit.resolver";
+import { ALLOWED_REACTIONS } from "../../common/constants/reactions";
+import type { MessageMediaInput } from "./messages.models";
+import {
+  listConversationsSchema,
+  searchConversationsSchema,
+  listMessagesSchema,
+  createConversationSchema,
+  sendMessageSchema,
+  voicemailSchema,
+  blockUserSchema,
+  lookupConversationSchema,
+  addReactionSchema,
+} from "./messages.schemas";
 
-const listConversationsSchema = z.object({
-  tab: z.enum(['primary', 'requests']).optional(),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-  cursor: z.string().optional(),
-});
-
-const searchConversationsSchema = z.object({
-  q: z.string().trim().min(1).max(200),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-});
-
-const listMessagesSchema = cursorPageQuerySchema();
-
-const messageMediaSchema = z.discriminatedUnion('source', [
-  z.object({
-    source: z.literal('upload'),
-    kind: z.enum(['image', 'gif', 'video', 'audio']),
-    r2Key: z.string().min(1),
-    thumbnailR2Key: z.string().optional().nullable(),
-    width: z.coerce.number().int().positive().optional().nullable(),
-    height: z.coerce.number().int().positive().optional().nullable(),
-    durationSeconds: z.coerce.number().min(0).optional().nullable(),
-    alt: z.string().max(500).optional().nullable(),
-  }),
-  z.object({
-    source: z.literal('giphy'),
-    kind: z.literal('gif'),
-    url: z.string().url(),
-    mp4Url: z.string().url().optional().nullable(),
-    width: z.coerce.number().int().positive().optional().nullable(),
-    height: z.coerce.number().int().positive().optional().nullable(),
-    alt: z.string().max(500).optional().nullable(),
-  }),
-]);
-
-const createConversationSchema = z
-  .object({
-    user_ids: z.array(z.string().trim().min(1)).min(1).max(50),
-    title: z.string().trim().max(120).optional(),
-    body: z.string().trim().max(2000).optional(),
-    media: z.array(messageMediaSchema).max(1).optional(),
-  })
-  .refine((val) => (val.body?.trim()?.length ?? 0) > 0 || (val.media?.length ?? 0) > 0, {
-    message: 'Message must have a body or media.',
-  });
-
-const sendMessageSchema = z
-  .object({
-    body: z.string().trim().max(2000).optional(),
-    replyToId: z.string().trim().min(1).optional(),
-    media: z.array(messageMediaSchema).max(1).optional(),
-  })
-  .refine((val) => (val.body?.trim()?.length ?? 0) > 0 || (val.media?.length ?? 0) > 0, {
-    message: 'Message must have a body or media.',
-  });
-
-const voicemailSchema = z.object({
-  source: z.literal('upload'),
-  kind: z.literal('video'),
-  r2Key: z.string().min(1),
-  thumbnailR2Key: z.string().optional().nullable(),
-  width: z.coerce.number().int().positive().optional().nullable(),
-  height: z.coerce.number().int().positive().optional().nullable(),
-  durationSeconds: z.coerce.number().min(0).max(60).optional().nullable(),
-  alt: z.string().max(500).optional().nullable(),
-});
-
-const blockUserSchema = z.object({
-  user_id: z.string().trim().min(1),
-});
-
-const lookupConversationSchema = z.object({
-  user_ids: z.array(z.string().trim().min(1)).min(1).max(50),
-});
-
-const addReactionSchema = z.object({
-  reactionId: z.string().trim().min(1),
-});
-
-@ApiTags('Messages (Chat)')
-@Controller('messages')
-// Chat tier rules live in MessagesService.createConversation, not here: an unverified
+@ApiTags("Messages (Chat)")
+@Controller("messages")
+// Chat tier rules live in MessagesWriteService.createConversation, not here: an unverified
 // user must be able to read and reply in a thread an admin opened to verify them.
 // They still cannot start one (createConversation rejects unverified senders).
 @UseGuards(AuthGuard)
 export class MessagesController {
-  constructor(private readonly messages: MessagesService) {}
+  constructor(
+    @Inject(MessagesQueryService)
+    private readonly messagesQueryService: Pick<
+      MessagesQueryService,
+      | "listConversations"
+      | "searchConversations"
+      | "getConversation"
+      | "listMessages"
+      | "messagesAround"
+      | "listMessagesNewer"
+      | "lookupConversation"
+    >,
+    @Inject(MessagesWriteService)
+    private readonly messagesWriteService: Pick<
+      MessagesWriteService,
+      "createConversation" | "sendMessage"
+    >,
+    @Inject(MessagesReactionsEditsService)
+    private readonly messagesReactionsEditsService: Pick<
+      MessagesReactionsEditsService,
+      | "attachCallVoicemail"
+      | "addReaction"
+      | "removeReaction"
+      | "editMessage"
+      | "deleteMessageForAll"
+    >,
+    @Inject(MessagesConversationStateService)
+    private readonly messagesConversationStateService: Pick<
+      MessagesConversationStateService,
+      | "markRead"
+      | "acceptConversation"
+      | "deleteConversation"
+      | "deleteMessageForMe"
+      | "restoreMessageForMe"
+      | "muteConversation"
+      | "unmuteConversation"
+      | "getUnreadSummary"
+      | "listBlocks"
+      | "blockUser"
+      | "unblockUser"
+    >,
+  ) {}
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 240),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Get('conversations')
-  async listConversations(@CurrentUserId() userId: string, @Query() query: unknown) {
+  @Get("conversations")
+  async listConversations(
+    @CurrentUserId() userId: string,
+    @Query() query: unknown,
+  ) {
     const parsed = listConversationsSchema.parse(query);
-    const result = await this.messages.listConversations({
+    const result = await this.messagesQueryService.listConversations({
       userId,
-      tab: parsed.tab ?? 'primary',
+      tab: parsed.tab ?? "primary",
       limit: parsed.limit ?? undefined,
       cursor: parsed.cursor ?? null,
     });
@@ -120,14 +114,17 @@ export class MessagesController {
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 120),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 120),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Get('conversations/search')
-  async searchConversations(@CurrentUserId() userId: string, @Query() query: unknown) {
+  @Get("conversations/search")
+  async searchConversations(
+    @CurrentUserId() userId: string,
+    @Query() query: unknown,
+  ) {
     const parsed = searchConversationsSchema.parse(query);
-    const result = await this.messages.searchConversations({
+    const result = await this.messagesQueryService.searchConversations({
       userId,
       query: parsed.q,
       limit: parsed.limit ?? undefined,
@@ -137,13 +134,19 @@ export class MessagesController {
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 240),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Get('conversations/:id')
-  async getConversation(@CurrentUserId() userId: string, @Param('id') id: string) {
-    const result = await this.messages.getConversation({ userId, conversationId: id });
+  @Get("conversations/:id")
+  async getConversation(
+    @CurrentUserId() userId: string,
+    @Param("id") id: string,
+  ) {
+    const result = await this.messagesQueryService.getConversation({
+      userId,
+      conversationId: id,
+    });
     return {
       data: { conversation: result.conversation, messages: result.messages },
       pagination: { nextCursor: result.nextCursor },
@@ -152,14 +155,18 @@ export class MessagesController {
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 240),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Get('conversations/:id/messages')
-  async listMessages(@CurrentUserId() userId: string, @Param('id') id: string, @Query() query: unknown) {
+  @Get("conversations/:id/messages")
+  async listMessages(
+    @CurrentUserId() userId: string,
+    @Param("id") id: string,
+    @Query() query: unknown,
+  ) {
     const parsed = listMessagesSchema.parse(query);
-    const result = await this.messages.listMessages({
+    const result = await this.messagesQueryService.listMessages({
       userId,
       conversationId: id,
       limit: parsed.limit ?? undefined,
@@ -173,33 +180,43 @@ export class MessagesController {
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 240),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Get('conversations/:id/messages/around/:msgId')
+  @Get("conversations/:id/messages/around/:msgId")
   async messagesAround(
     @CurrentUserId() userId: string,
-    @Param('id') id: string,
-    @Param('msgId') msgId: string,
+    @Param("id") id: string,
+    @Param("msgId") msgId: string,
   ) {
-    const result = await this.messages.messagesAround({ userId, conversationId: id, messageId: msgId });
+    const result = await this.messagesQueryService.messagesAround({
+      userId,
+      conversationId: id,
+      messageId: msgId,
+    });
     return { data: result };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 240),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Get('conversations/:id/messages/newer')
-  async listMessagesNewer(@CurrentUserId() userId: string, @Param('id') id: string, @Query() query: unknown) {
-    const parsed = z.object({
-      cursor: z.string().min(1),
-      limit: z.coerce.number().int().min(1).max(50).optional(),
-    }).parse(query);
-    const result = await this.messages.listMessagesNewer({
+  @Get("conversations/:id/messages/newer")
+  async listMessagesNewer(
+    @CurrentUserId() userId: string,
+    @Param("id") id: string,
+    @Query() query: unknown,
+  ) {
+    const parsed = z
+      .object({
+        cursor: z.string().min(1),
+        limit: limitQuery(50),
+      })
+      .parse(query);
+    const result = await this.messagesQueryService.listMessagesNewer({
       userId,
       conversationId: id,
       cursor: parsed.cursor,
@@ -213,18 +230,21 @@ export class MessagesController {
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 60),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 60),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('conversations')
-  async createConversation(@CurrentUserId() userId: string, @Body() body: unknown) {
+  @Post("conversations")
+  async createConversation(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ) {
     const parsed = createConversationSchema.parse(body);
-    const result = await this.messages.createConversation({
+    const result = await this.messagesWriteService.createConversation({
       userId,
       recipientUserIds: parsed.user_ids,
       title: parsed.title ?? null,
-      body: parsed.body ?? '',
+      body: parsed.body ?? "",
       media: (parsed.media ?? []) as MessageMediaInput[],
     });
     return { data: result };
@@ -232,14 +252,17 @@ export class MessagesController {
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 240),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Post('lookup')
-  async lookupConversation(@CurrentUserId() userId: string, @Body() body: unknown) {
+  @Post("lookup")
+  async lookupConversation(
+    @CurrentUserId() userId: string,
+    @Body() body: unknown,
+  ) {
     const parsed = lookupConversationSchema.parse(body);
-    const result = await this.messages.lookupConversation({
+    const result = await this.messagesQueryService.lookupConversation({
       userId,
       recipientUserIds: parsed.user_ids,
     });
@@ -248,17 +271,21 @@ export class MessagesController {
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('conversations/:id/messages')
-  async sendMessage(@CurrentUserId() userId: string, @Param('id') id: string, @Body() body: unknown) {
+  @Post("conversations/:id/messages")
+  async sendMessage(
+    @CurrentUserId() userId: string,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
     const parsed = sendMessageSchema.parse(body);
-    const result = await this.messages.sendMessage({
+    const result = await this.messagesWriteService.sendMessage({
       userId,
       conversationId: id,
-      body: parsed.body ?? '',
+      body: parsed.body ?? "",
       replyToId: parsed.replyToId ?? null,
       media: (parsed.media ?? []) as MessageMediaInput[],
     });
@@ -267,254 +294,321 @@ export class MessagesController {
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 30),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 30),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('conversations/:id/messages/:messageId/voicemail')
+  @Post("conversations/:id/messages/:messageId/voicemail")
   async attachCallVoicemail(
     @CurrentUserId() userId: string,
-    @Param('id') id: string,
-    @Param('messageId') messageId: string,
+    @Param("id") id: string,
+    @Param("messageId") messageId: string,
     @Body() body: unknown,
   ) {
     const parsed = voicemailSchema.parse(body);
-    const result = await this.messages.attachCallVoicemail({
-      userId,
-      conversationId: id,
-      messageId,
-      media: parsed as MessageMediaInput,
-    });
+    const result = await this.messagesReactionsEditsService.attachCallVoicemail(
+      {
+        userId,
+        conversationId: id,
+        messageId,
+        media: parsed as MessageMediaInput,
+      },
+    );
     return { data: result };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 180),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 180),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('conversations/:id/mark-read')
+  @Post("conversations/:id/mark-read")
   async markRead(
     @CurrentUserId() userId: string,
     @IsImpersonating() isImpersonating: boolean,
-    @Param('id') id: string,
+    @Param("id") id: string,
   ) {
     // Marking read stamps `lastReadAt` and emits `messages:read` to the other participant,
     // so an admin opening someone's DMs would show the sender a read receipt that never
     // happened. Only this passive signal is suppressed — sending a message or accepting a
     // request still marks read, because those are deliberate actions the admin took.
     if (isImpersonating) return { data: {} };
-    await this.messages.markRead({ userId, conversationId: id });
+    await this.messagesConversationStateService.markRead({
+      userId,
+      conversationId: id,
+    });
     return { data: {} };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 60),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 60),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('conversations/:id/accept')
-  async acceptConversation(@CurrentUserId() userId: string, @Param('id') id: string) {
-    await this.messages.acceptConversation({ userId, conversationId: id });
+  @Post("conversations/:id/accept")
+  async acceptConversation(
+    @CurrentUserId() userId: string,
+    @Param("id") id: string,
+  ) {
+    await this.messagesConversationStateService.acceptConversation({
+      userId,
+      conversationId: id,
+    });
     return { data: {} };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 60),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 60),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Delete('conversations/:id')
-  async deleteConversation(@CurrentUserId() userId: string, @Param('id') id: string) {
-    await this.messages.deleteConversation({ userId, conversationId: id });
+  @Delete("conversations/:id")
+  async deleteConversation(
+    @CurrentUserId() userId: string,
+    @Param("id") id: string,
+  ) {
+    await this.messagesConversationStateService.deleteConversation({
+      userId,
+      conversationId: id,
+    });
     return { data: {} };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 240),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Get('reactions')
+  @Get("reactions")
   listReactions() {
     return { data: ALLOWED_REACTIONS };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 120),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 120),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('conversations/:convId/messages/:msgId/reactions')
+  @Post("conversations/:convId/messages/:msgId/reactions")
   async addReaction(
     @CurrentUserId() userId: string,
-    @Param('convId') convId: string,
-    @Param('msgId') msgId: string,
+    @Param("convId") convId: string,
+    @Param("msgId") msgId: string,
     @Body() body: unknown,
   ) {
     const parsed = addReactionSchema.parse(body);
-    const result = await this.messages.addReaction({ userId, conversationId: convId, messageId: msgId, reactionId: parsed.reactionId });
+    const result = await this.messagesReactionsEditsService.addReaction({
+      userId,
+      conversationId: convId,
+      messageId: msgId,
+      reactionId: parsed.reactionId,
+    });
     return { data: result };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 120),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 120),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Delete('conversations/:convId/messages/:msgId/reactions/:reactionId')
+  @Delete("conversations/:convId/messages/:msgId/reactions/:reactionId")
   async removeReaction(
     @CurrentUserId() userId: string,
-    @Param('convId') convId: string,
-    @Param('msgId') msgId: string,
-    @Param('reactionId') reactionId: string,
+    @Param("convId") convId: string,
+    @Param("msgId") msgId: string,
+    @Param("reactionId") reactionId: string,
   ) {
-    await this.messages.removeReaction({ userId, conversationId: convId, messageId: msgId, reactionId });
+    await this.messagesReactionsEditsService.removeReaction({
+      userId,
+      conversationId: convId,
+      messageId: msgId,
+      reactionId,
+    });
     return { data: {} };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 60),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 60),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Delete('conversations/:convId/messages/:msgId')
+  @Delete("conversations/:convId/messages/:msgId")
   async deleteMessage(
     @CurrentUserId() userId: string,
-    @Param('convId') convId: string,
-    @Param('msgId') msgId: string,
+    @Param("convId") convId: string,
+    @Param("msgId") msgId: string,
   ) {
-    await this.messages.deleteMessageForMe({ userId, conversationId: convId, messageId: msgId });
+    await this.messagesConversationStateService.deleteMessageForMe({
+      userId,
+      conversationId: convId,
+      messageId: msgId,
+    });
     return { data: {} };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 60),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 60),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('conversations/:convId/messages/:msgId/restore')
+  @Post("conversations/:convId/messages/:msgId/restore")
   async restoreMessage(
     @CurrentUserId() userId: string,
-    @Param('convId') convId: string,
-    @Param('msgId') msgId: string,
+    @Param("convId") convId: string,
+    @Param("msgId") msgId: string,
   ) {
-    await this.messages.restoreMessageForMe({ userId, conversationId: convId, messageId: msgId });
+    await this.messagesConversationStateService.restoreMessageForMe({
+      userId,
+      conversationId: convId,
+      messageId: msgId,
+    });
     return { data: {} };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 60),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 60),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('conversations/:id/mute')
-  async muteConversation(@CurrentUserId() userId: string, @Param('id') id: string) {
-    await this.messages.muteConversation({ userId, conversationId: id });
+  @Post("conversations/:id/mute")
+  async muteConversation(
+    @CurrentUserId() userId: string,
+    @Param("id") id: string,
+  ) {
+    await this.messagesConversationStateService.muteConversation({
+      userId,
+      conversationId: id,
+    });
     return { data: {} };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 60),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 60),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Delete('conversations/:id/mute')
-  async unmuteConversation(@CurrentUserId() userId: string, @Param('id') id: string) {
-    await this.messages.unmuteConversation({ userId, conversationId: id });
+  @Delete("conversations/:id/mute")
+  async unmuteConversation(
+    @CurrentUserId() userId: string,
+    @Param("id") id: string,
+  ) {
+    await this.messagesConversationStateService.unmuteConversation({
+      userId,
+      conversationId: id,
+    });
     return { data: {} };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 60),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 60),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Patch('conversations/:convId/messages/:msgId')
+  @Patch("conversations/:convId/messages/:msgId")
   async editMessage(
     @CurrentUserId() userId: string,
-    @Param('convId') convId: string,
-    @Param('msgId') msgId: string,
+    @Param("convId") convId: string,
+    @Param("msgId") msgId: string,
     @Body() body: unknown,
   ) {
-    const parsed = z.object({ body: z.string().trim().min(1).max(2000) }).parse(body);
-    await this.messages.editMessage({ userId, conversationId: convId, messageId: msgId, body: parsed.body });
+    const parsed = z
+      .object({ body: z.string().trim().min(1).max(2000) })
+      .parse(body);
+    await this.messagesReactionsEditsService.editMessage({
+      userId,
+      conversationId: convId,
+      messageId: msgId,
+      body: parsed.body,
+    });
     return { data: {} };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 30),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 30),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Delete('conversations/:convId/messages/:msgId/all')
+  @Delete("conversations/:convId/messages/:msgId/all")
   async deleteMessageForAll(
     @CurrentUserId() userId: string,
-    @Param('convId') convId: string,
-    @Param('msgId') msgId: string,
+    @Param("convId") convId: string,
+    @Param("msgId") msgId: string,
   ) {
-    await this.messages.deleteMessageForAll({ userId, conversationId: convId, messageId: msgId });
+    await this.messagesReactionsEditsService.deleteMessageForAll({
+      userId,
+      conversationId: convId,
+      messageId: msgId,
+    });
     return { data: {} };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 240),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 240),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Get('unread-count')
+  @Get("unread-count")
   async getUnreadCount(@CurrentUserId() userId: string) {
-    const counts = await this.messages.getUnreadSummary(userId);
+    const counts =
+      await this.messagesConversationStateService.getUnreadSummary(userId);
     return { data: { primary: counts.primary, requests: counts.requests } };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('publicRead', 120),
-      ttl: rateLimitTtl('publicRead', 60),
+      limit: rateLimitLimit("publicRead", 120),
+      ttl: rateLimitTtl("publicRead", 60),
     },
   })
-  @Get('blocks')
+  @Get("blocks")
   async listBlocks(@CurrentUserId() userId: string) {
-    const blocks = await this.messages.listBlocks({ userId });
+    const blocks = await this.messagesConversationStateService.listBlocks({
+      userId,
+    });
     return { data: blocks };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 60),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 60),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Post('blocks')
+  @Post("blocks")
   async blockUser(@CurrentUserId() userId: string, @Body() body: unknown) {
     const parsed = blockUserSchema.parse(body);
-    await this.messages.blockUser({ userId, targetUserId: parsed.user_id });
+    await this.messagesConversationStateService.blockUser({
+      userId,
+      targetUserId: parsed.user_id,
+    });
     return { data: {} };
   }
 
   @Throttle({
     default: {
-      limit: rateLimitLimit('interact', 60),
-      ttl: rateLimitTtl('interact', 60),
+      limit: rateLimitLimit("interact", 60),
+      ttl: rateLimitTtl("interact", 60),
     },
   })
-  @Delete('blocks/:id')
-  async unblockUser(@CurrentUserId() userId: string, @Param('id') id: string) {
-    await this.messages.unblockUser({ userId, targetUserId: id });
+  @Delete("blocks/:id")
+  async unblockUser(@CurrentUserId() userId: string, @Param("id") id: string) {
+    await this.messagesConversationStateService.unblockUser({
+      userId,
+      targetUserId: id,
+    });
     return { data: {} };
   }
 }

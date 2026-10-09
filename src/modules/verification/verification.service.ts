@@ -1,3 +1,5 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
+import { toPage } from '../../common/pagination/page';
 import { PosthogService } from '../../common/posthog/posthog.service';
 import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type { Prisma, VerificationRequestStatus } from '@prisma/client';
@@ -102,7 +104,7 @@ export class VerificationService {
 
   async pendingCount(): Promise<number> {
     return this.prisma.verificationRequest.count({
-      where: { status: 'pending', user: { bannedAt: null, verifiedStatus: 'none' } },
+      where: { status: 'pending', user: { ...NOT_BANNED_USER_WHERE, verifiedStatus: 'none' } },
     });
   }
 
@@ -124,7 +126,7 @@ export class VerificationService {
     const whereParts: Prisma.VerificationRequestWhereInput[] = [];
     if (cursorWhere) whereParts.push(cursorWhere);
     if (params.status) whereParts.push({ status: params.status });
-    if (params.status === 'pending') whereParts.push({ user: { bannedAt: null, verifiedStatus: 'none' } });
+    if (params.status === 'pending') whereParts.push({ user: { ...NOT_BANNED_USER_WHERE, verifiedStatus: 'none' } });
 
     const q = (params.q ?? '').trim();
     if (q) {
@@ -158,10 +160,8 @@ export class VerificationService {
       },
     });
 
-    const slice = rows.slice(0, params.limit);
-    const nextCursor = rows.length > params.limit ? slice[slice.length - 1]?.id ?? null : null;
-
-    return { rows: slice, nextCursor };
+    const { items, nextCursor } = toPage(rows, params.limit, (last) => last.id);
+    return { rows: items, nextCursor };
   }
 
   async approveAdmin(params: { requestId: string; adminUserId: string; adminNote?: string | null }) {

@@ -87,7 +87,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
           ],
         },
       };
-      const withReqId = requestId ? ({ ...payload, meta: { ...payload.meta, requestId } } as any) : payload;
+      const withReqId = requestId ? { ...payload, meta: { ...payload.meta, requestId } } : payload;
       return res.status(status).json(withReqId);
     }
 
@@ -108,7 +108,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
         ],
       },
     };
-    const withReqId = requestId ? ({ ...payload, meta: { ...payload.meta, requestId } } as any) : payload;
+    const withReqId = requestId ? { ...payload, meta: { ...payload.meta, requestId } } : payload;
     return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json(withReqId);
   }
 }

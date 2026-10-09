@@ -1,4 +1,5 @@
 import { JobsStatusService } from "../../jobs/jobs-status.service";
+import { toPage } from '../../../common/pagination/page';
 import { Injectable, BadRequestException } from "@nestjs/common";
 import { z } from "zod";
 import { AdminOperationsService } from "../admin-operations.service";
@@ -121,12 +122,8 @@ export class DelegationReadsService {
             updatedAt: true,
           },
         });
-        result = {
-          data: rows.slice(0, q.limit),
-          pagination: {
-            nextCursor: rows.length > q.limit ? rows[q.limit - 1].id : null,
-          },
-        };
+        const { items, nextCursor } = toPage(rows, q.limit, (last) => last.id);
+        result = { data: items, pagination: { nextCursor } };
         break;
       }
     }

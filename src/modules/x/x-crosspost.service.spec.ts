@@ -1,7 +1,7 @@
 import { X_NATIVE_COST_MICROS } from "../../common/crosspost/crosspost-eligibility";
 import { X_REFERENCE_PRICES } from "./integration-budget.policy";
 import { XApiError } from "./x-api.client";
-import { XCrosspostService } from "./x-crosspost.service";
+import { makeXCrosspostService } from "./x-crosspost.testing";
 
 import { PostsReadService } from "../posts-read/posts-read.service";
 import { PostsWriteService } from "../posts-read/posts-write.service";
@@ -137,7 +137,7 @@ function harness(
     settle: jest.fn(),
     reserve: jest.fn(async () => true),
   };
-  const service = new XCrosspostService(
+  const service = makeXCrosspostService(
     prisma as never,
     { ensure: async () => sideEffects.dispatch("outbound.deliver") } as never,
     {

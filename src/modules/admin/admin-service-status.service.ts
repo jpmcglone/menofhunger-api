@@ -5,13 +5,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { RedisService } from "../redis/redis.service";
 import { TypeSafeService } from "../typesafe/typesafe.service";
 import { EmbeddingsService } from "../embeddings/embeddings.service";
-import type {
-  AdminServiceFeatureDto,
-  AdminServiceLevel,
-  AdminServiceState,
-  AdminServiceStatusDto,
-  AdminServiceStatusItemDto,
-} from "../../common/dto/admin-service-status.dto";
+import type { AdminServiceFeatureDto, AdminServiceLevel, AdminServiceState, AdminServiceStatusDto, AdminServiceStatusItemDto } from "../../common/dto/admin-service-status.dto";
 
 const PROBE_TIMEOUT_MS = 3_000;
 const CACHE_MS = 30_000;

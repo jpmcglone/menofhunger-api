@@ -1,24 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
-import {
-  BadRequestException,
-  ConflictException,
-  HttpException,
-  Injectable,
-  NotFoundException,
-  ServiceUnavailableException,
-} from "@nestjs/common";
-import type {
-  AdminAssistantAction,
-  AdminAssistantTurn,
-  Prisma,
-} from "@prisma/client";
-import type {
-  AdminAssistantActionDto,
-  AdminAssistantTurnDto,
-  AdminAssistantWorkspaceDto,
-} from "../../common/dto/admin-assistant.dto";
+import { BadRequestException, ConflictException, HttpException, Injectable, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
+import type { AdminAssistantAction, AdminAssistantTurn, Prisma } from "@prisma/client";
+import type { AdminAssistantActionDto, AdminAssistantTurnDto, AdminAssistantWorkspaceDto } from "../../common/dto/admin-assistant.dto";
 import { PrismaService } from "../prisma/prisma.service";
-import { AuthService } from "../auth/auth.service";
+import { AuthService } from "../auth/auth-public-api";
 import { AppConfigService } from "../app/app-config.service";
 import { RedisService } from "../redis/redis.service";
 import { PresenceRealtimeService } from "../presence/presence-realtime.service";
@@ -27,12 +12,7 @@ import { MarvinUsageService } from "../marvin/services/marvin-usage.service";
 import { MarvinAdminService } from "../marvin/services/marvin-admin.service";
 import { sessionApi, sharedTools } from "../mcp/mcp-tools";
 import { isOwnAdminSession } from "./admin-session";
-import {
-  actionArguments,
-  actionSnapshot,
-  adminActions,
-  assistantPostSchema,
-} from "./admin-assistant-actions";
+import { actionArguments, actionSnapshot, adminActions, assistantPostSchema } from "./admin-assistant-actions";
 
 import { DelegationActionsService } from "./delegation/delegation-actions.service";
 import { DelegationPolicyService } from "./delegation/delegation-policy.service";

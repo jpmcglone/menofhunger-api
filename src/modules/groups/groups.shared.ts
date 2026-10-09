@@ -1,24 +1,19 @@
+import { decodeJsonCursor, encodeJsonCursor } from '../../common/pagination/json-cursor';
 /**
  * Keyset cursor for /groups/search pagination. Encodes the (memberCount, id)
  * tuple of the LAST row in the previous page so the next request can
  * `WHERE memberCount < c OR (memberCount = c AND id < lastId)`.
  */
 export function encodeGroupCursor(c: { memberCount: number; id: string }): string {
-  return Buffer.from(JSON.stringify(c), 'utf8').toString('base64url');
+  return encodeJsonCursor(c);
 }
 
 export function decodeGroupCursor(
   raw: string | null | undefined,
 ): { memberCount: number; id: string } | null {
-  if (!raw) return null;
-  try {
-    const json = Buffer.from(raw, 'base64url').toString('utf8');
-    const parsed = JSON.parse(json) as { memberCount?: unknown; id?: unknown };
-    if (typeof parsed.memberCount !== 'number' || typeof parsed.id !== 'string') return null;
-    return { memberCount: parsed.memberCount, id: parsed.id };
-  } catch {
-    return null;
-  }
+  const parsed = decodeJsonCursor(raw);
+  if (typeof parsed?.memberCount !== 'number' || typeof parsed.id !== 'string') return null;
+  return { memberCount: parsed.memberCount, id: parsed.id };
 }
 
 /** Unique, non-empty, lowercased words from a search query. */

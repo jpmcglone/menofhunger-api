@@ -24,7 +24,7 @@ Run the queries in [`pg_stat_statements.sql`](./pg_stat_statements.sql) and save
 
 Then correlate `query` text with code paths:
 
-- Trending feed: `PostsService.listPopularFeed()` in `src/modules/posts/posts.service.ts`
+- Trending feed: `PostsFeedPopularService.listPopularFeed()` in `src/modules/posts/posts-feed-popular.service.ts`
 - Search: `SearchService.searchPosts()` in `src/modules/search/search.service.ts`
 - Follow recommendations: `FollowsService.recommendUsersToFollow()`
 - Notifications list: `NotificationsService.list()`
@@ -46,4 +46,3 @@ and confirm whether the planner is using:
 If you want a clean “measurement window”:
 
 - `SELECT pg_stat_statements_reset();`
-

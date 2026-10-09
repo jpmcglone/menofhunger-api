@@ -1,21 +1,12 @@
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { CrewOwnerTransferVote } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { SideEffectsService } from '../side-effects/side-effects.service';
-import {
-  CREW_INACTIVE_OWNER_DAYS,
-  CREW_TRANSFER_VOTE_EXPIRY_DAYS,
-} from '../../common/dto/crew.dto';
+import { CREW_INACTIVE_OWNER_DAYS, CREW_TRANSFER_VOTE_EXPIRY_DAYS } from '../../common/dto/crew.dto';
 import { CrewService } from './crew.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 export type TransferReason = 'direct' | 'vote' | 'inactivity';
 
@@ -260,7 +251,7 @@ export class CrewTransferService {
     // Collect candidate crews in small batches — we intentionally do not hold all crews
     // in memory even though the expected N is small.
     const crews = await this.prisma.crew.findMany({
-      where: { deletedAt: null },
+      where: NOT_DELETED,
       select: {
         id: true,
         ownerUserId: true,

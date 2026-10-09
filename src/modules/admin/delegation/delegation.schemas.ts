@@ -1,10 +1,7 @@
+import { BOARD_TITLE_MAX, BOARD_MAX_TAGS, BOARD_TAG_MAX_LENGTH } from "../../board/board.utils";
 import { z } from "zod";
-import {
-  BOARD_TITLE_MIN,
-  BOARD_TITLE_MAX,
-  BOARD_MAX_TAGS,
-  BOARD_TAG_MAX_LENGTH,
-} from "../../board/board.utils";
+import type { DelegationJob } from "@prisma/client";
+import { BOARD_TITLE_MIN } from "../../board/board.utils";
 import { newsletterAudienceFiltersSchema } from "../../newsletters/newsletter-audience";
 
 export const delegationId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
@@ -346,3 +343,15 @@ export const workflowOperations: Record<string, string[]> = {
   export: ["export"],
   operations: ["export"],
 };
+
+export type RunSnapshot = Pick<
+  DelegationJob,
+  | "ownerId"
+  | "actorId"
+  | "title"
+  | "workflow"
+  | "instruction"
+  | "permission"
+  | "revision"
+  | "schedule"
+>;

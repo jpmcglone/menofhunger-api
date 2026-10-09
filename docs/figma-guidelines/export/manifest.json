@@ -1,0 +1,19 @@
+{
+  "files": {
+    "01-product-and-components.md": "d9f2e25ff86a562d1869314f1c572518b7002fc0cc55815983f5524b6ceea94f",
+    "02-materials-and-tokens.md": "2cef1341a7d71d250f878e61f6e6a3024f53fd5c0d05d17e15e8814253a40e17",
+    "03-platforms-and-handoff.md": "1a87ca731aed4b3c76043be534f0300d68b878f17a29762b0ec84b7f8d1cdf1e",
+    "04-motion-and-exploration.md": "c4c29ff7d49212f0c62ffa9e318edc37416edbb3c16d17f6439fc6b58347da3f"
+  },
+  "schema_version": 1,
+  "source_revision": "0190a98b7953970a97c9bc1cdafc2fefc94f797e43da99644c0eb66156b586d5",
+  "sources": {
+    ".agents/skills/design-simplicity-principles/SKILL.md": "8e0fabe7fb064f742af5888194c700085d376de1ae8eab7b0d4e4d0bd6fcc53f",
+    ".agents/skills/moh-designer/SKILL.md": "0e06b0d99783b86987594c243e41ea341b4570a88b76b13de3f727847487b15a",
+    "docs/engineering-policy.md": "d149e8675d224378377773c20055edda992247fefde3ad54f96258982c953bb8",
+    "docs/figma-guidelines/01-product-and-components.md": "ea4255a4422eb9afdc155e89ec46fe5987192aebc796ebccaef01da1532fb041",
+    "docs/figma-guidelines/02-materials-and-tokens.md": "de46519cc28d4669b9bb0c896c34f274a01d686a29093cb6ec02e7d6be7147f2",
+    "docs/figma-guidelines/03-platforms-and-handoff.md": "422edeb35c3e9587a5875ac2666465e53e853ced5a06c1b3de8621deba371662",
+    "docs/figma-guidelines/04-motion-and-exploration.md": "6fa52e654dc19a016cb889faf0354902e6086a3789cdf3ca059ca39fb9e71fc1"
+  }
+}

@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { MarvinAIService } from './marvin-ai.service';
 
 import { PostsReadService } from '../../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../../common/prisma/where';
 const SUMMARY_TRIGGER_REPLY_COUNT = 20;
 const SUMMARY_INPUT_BODY_TRUNCATE = 320;
 const SUMMARY_MAX_LENGTH = 1500;
@@ -44,8 +45,8 @@ export class MarvinThreadSummaryService {
   /** Returns true if the thread currently meets the size threshold for summarization. */
   async shouldSummarize(rootPostId: string): Promise<boolean> {
     if (!rootPostId) return false;
-    const replyCount = await this.postsRead.read.count({
-      where: { rootId: rootPostId, deletedAt: null, visibility: { not: 'onlyMe' } },
+    const replyCount = await this.postsRead.count({
+      where: { rootId: rootPostId, ...NOT_DELETED, visibility: { not: 'onlyMe' } },
     });
     return replyCount >= SUMMARY_TRIGGER_REPLY_COUNT;
   }
@@ -96,16 +97,16 @@ export class MarvinThreadSummaryService {
   ): Promise<Array<{ id: string; body: string; createdAt: Date; username: string | null }>> {
     let createdAtFloor: Date | null = null;
     if (lastIncluded) {
-      const last = await this.postsRead.read.findUnique({
+      const last = await this.postsRead.findIncludingDeleted({
         where: { id: lastIncluded },
         select: { createdAt: true },
       });
       createdAtFloor = last?.createdAt ?? null;
     }
-    const rows = await this.postsRead.read.findMany({
+    const rows = await this.postsRead.findMany({
       where: {
         rootId: rootPostId,
-        deletedAt: null,
+        ...NOT_DELETED,
         visibility: { not: 'onlyMe' },
         ...(createdAtFloor ? { createdAt: { gt: createdAtFloor } } : {}),
       },

@@ -1,9 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
-import type {
-  AdminAnalyticsChannelsDto,
-  AnalyticsGranularity,
-} from "../../common/dto/admin-analytics.dto";
+import type { AdminAnalyticsChannelsDto, AnalyticsGranularity } from "../../common/dto/admin-analytics.dto";
 
 /** Live channel messages by people (bots excluded) in non-archived channels. */
 const humanMessages = Prisma.sql`

@@ -5,6 +5,7 @@ import { resolveMarvVisionUrl } from './marvin-vision-media';
 import { windowThreadAroundFocal } from './marvin-thread-window';
 
 import { PostsReadService } from '../../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../../common/prisma/where';
 /** Safety cap so a mega-thread cannot blow the prompt. Typical MOH threads fit entirely. */
 const DEFAULT_THREAD_LIMIT = 80;
 /** A Board post's title and link are its subject; put them ahead of the text Marv reads. */
@@ -102,7 +103,7 @@ export type MarvThreadContext = {
  *
  * Visibility: soft-deleted and `onlyMe` posts are filtered here. Callers that
  * need per-viewer access control on the focal post must resolve it through
- * `PostsService.getById` first.
+ * `PostsFeedLookupService.getById` first.
  */
 @Injectable()
 export class MarvinThreadContextService {
@@ -132,22 +133,22 @@ export class MarvinThreadContextService {
     const threadLimit = params.threadLimit ?? DEFAULT_THREAD_LIMIT;
 
     try {
-      const focalMeta = await this.postsRead.read.findFirst({
-        where: { id: focalPostId, deletedAt: null },
+      const focalMeta = await this.postsRead.findFirst({
+        where: { id: focalPostId, ...NOT_DELETED },
         select: { id: true, rootId: true },
       });
       if (!focalMeta) return empty;
       const rootId = focalMeta.rootId ?? focalMeta.id;
       const threadWhere = {
         OR: [{ id: rootId }, { rootId }],
-        deletedAt: null,
+        ...NOT_DELETED,
         visibility: { not: 'onlyMe' as const },
       };
 
       const [marvUserId, totalInThread, rows] = await Promise.all([
         this.identity.getMarvUserId(),
-        this.postsRead.read.count({ where: threadWhere }),
-        this.postsRead.read.findMany({
+        this.postsRead.count({ where: threadWhere }),
+        this.postsRead.findMany({
           where: threadWhere,
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
           select: {
@@ -173,7 +174,7 @@ export class MarvinThreadContextService {
             },
             user: { select: { username: true, name: true } },
             media: {
-              where: { deletedAt: null },
+              where: NOT_DELETED,
               select: {
                 kind: true,
                 source: true,

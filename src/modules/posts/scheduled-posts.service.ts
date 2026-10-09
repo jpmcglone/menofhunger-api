@@ -1,96 +1,34 @@
 import { findGroupMemberStatus } from '../viewer/group-membership.queries';
 import { assertXCrosspostInput } from "../../common/crosspost/x-crosspost-input";
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import type { PostVisibility } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
-import { PostsMutationService } from "./posts-mutation.service";
-import { PickaxCrosspostService } from "../pickax/pickax-crosspost.service";
-import { XCrosspostService } from "../x/x-crosspost.service";
-import { PresenceRealtimeService } from "../presence/presence-realtime.service";
 import { AppConfigService } from "../app/app-config.service";
-import {
-  USER_LIST_SELECT,
-  MENTION_USER_SELECT,
-} from "../../common/prisma-selects/user.select";
+import { USER_LIST_SELECT, MENTION_USER_SELECT } from "../../common/prisma-selects/user.select";
 import { notDeletedWhere } from "./posts-query-builders";
-import { toPostDto } from "../../common/dto/post.dto";
 import { toScheduledPostDto } from "../../common/dto/scheduled-post.dto";
 import type { ScheduledPostDto } from "../../common/dto/scheduled-post.dto";
+import { toPage, clampLimit } from '../../common/pagination/page';
+import { GROUP_REF_SELECT } from '../../common/prisma-selects/group.select';
+import type { ScheduledPollInput, ScheduledPostMediaInput, ScheduledPostNewMediaInput } from './scheduled-posts.types';
+import { assertPremium, validateScheduledAt } from './scheduled-posts.policy';
+import { ScheduledPostsUpdateService } from './scheduled-posts-update.service';
+import { ScheduledPostsPublishService } from './scheduled-posts-publish.service';
 
-/** Maximum scheduling window: 60 days from now. */
-const MAX_SCHEDULE_OFFSET_MS = 60 * 24 * 60 * 60 * 1000;
 /** Max pending scheduled posts per user. Conservative to limit holding-row abuse. */
 const MAX_QUEUED_SCHEDULED_POSTS = 25;
-/** Max rows processed across all users per cron sweep. */
-const SWEEP_GLOBAL_LIMIT = 50;
-/** Max rows processed per user per cron sweep — prevents one user monopolising a sweep. */
-const SWEEP_PER_USER_LIMIT = 10;
-
-/** New media — used for create and as the resolved form in update. */
-export type ScheduledPostNewMediaInput = {
-  source: "upload" | "giphy";
-  kind: "image" | "gif" | "video";
-  r2Key?: string;
-  thumbnailR2Key?: string;
-  url?: string;
-  mp4Url?: string;
-  width?: number;
-  height?: number;
-  durationSeconds?: number;
-  alt?: string | null;
-};
-
-/** Input for updates — may reference existing holding-row media by id. */
-export type ScheduledPostMediaInput =
-  | { source: "existing"; id: string; alt?: string | null }
-  | ScheduledPostNewMediaInput;
-
-export type ScheduledPollInput = {
-  options: Array<{ text: string }>;
-  durationHours: number;
-};
 
 @Injectable()
 export class ScheduledPostsService {
-  private readonly logger = new Logger(ScheduledPostsService.name);
-
   constructor(
     private readonly prisma: PrismaService,
-    private readonly mutation: PostsMutationService,
-    private readonly realtime: PresenceRealtimeService,
     private readonly appConfig: AppConfigService,
-    private readonly pickax: PickaxCrosspostService,
-    private readonly x: XCrosspostService,
+    private readonly updater: ScheduledPostsUpdateService,
+    private readonly publisher: ScheduledPostsPublishService,
   ) {}
 
-  private r2BaseUrl(): string | null {
-    return this.appConfig.r2()?.publicBaseUrl ?? null;
-  }
-
-  private assertPremium(user: { premium: boolean; premiumPlus: boolean }) {
-    if (!user.premium && !user.premiumPlus) {
-      throw new ForbiddenException(
-        "Scheduled posts are for premium members only.",
-      );
-    }
-  }
-
-  private validateScheduledAt(scheduledAt: Date, now: Date = new Date()) {
-    const delta = scheduledAt.getTime() - now.getTime();
-    // No minimum offset enforced server-side — the UI prevents picking < 5 min,
-    // but if the user took time composing and the window slipped, the cron will
-    // publish it on its next sweep (within ~1 minute).
-    if (delta > MAX_SCHEDULE_OFFSET_MS) {
-      throw new BadRequestException(
-        "Scheduled time cannot be more than 60 days in the future.",
-      );
-    }
+  publishDue(now: Date = new Date()): Promise<void> {
+    return this.publisher.publishDue(now);
   }
 
   async createScheduled(params: {
@@ -114,7 +52,7 @@ export class ScheduledPostsService {
       select: { premium: true, premiumPlus: true, verifiedStatus: true },
     });
     if (!user) throw new NotFoundException("User not found.");
-    this.assertPremium(user);
+    assertPremium(user);
 
     // Enforce per-user cap before creating another holding row.
     const queuedCount = await this.prisma.post.count({
@@ -133,7 +71,7 @@ export class ScheduledPostsService {
       );
     }
 
-    this.validateScheduledAt(params.scheduledAt, now);
+    validateScheduledAt(params.scheduledAt, now);
 
     const visibility = params.visibility;
     // Scheduled posts cannot be replies, quotes, or onlyMe.
@@ -194,10 +132,7 @@ export class ScheduledPostsService {
     // Validate community group membership if group post.
     const resolvedGroupId = (params.communityGroupId ?? "").trim() || null;
     if (resolvedGroupId) {
-      const membership = await this.prisma.communityGroupMember.findUnique({
-        where: { groupId_userId: { groupId: resolvedGroupId, userId } },
-        select: { status: true },
-      });
+      const membership = await findGroupMemberStatus(this.prisma, resolvedGroupId, userId);
       if (!userIsVerified)
         throw new ForbiddenException("Verify your account to post in groups.");
       if (membership?.status !== "active")
@@ -249,13 +184,13 @@ export class ScheduledPostsService {
         media: { orderBy: { position: "asc" } },
         mentions: { include: { user: { select: MENTION_USER_SELECT } } },
         scheduledCommunityGroup: {
-          select: { id: true, slug: true, name: true },
+          select: GROUP_REF_SELECT,
         },
       },
     });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return toScheduledPostDto(holding as any, this.r2BaseUrl());
+    return toScheduledPostDto(holding, (this.appConfig.r2()?.publicBaseUrl ?? null));
   }
 
   async listScheduled(params: {
@@ -266,7 +201,7 @@ export class ScheduledPostsService {
     items: ScheduledPostDto[];
     nextCursor: string | null;
   }> {
-    const limit = Math.max(1, Math.min(50, params.limit ?? 30));
+    const limit = clampLimit(params.limit, { default: 30, max: 50 });
 
     const rows = await this.prisma.post.findMany({
       where: {
@@ -285,267 +220,22 @@ export class ScheduledPostsService {
         media: { orderBy: { position: "asc" } },
         mentions: { include: { user: { select: MENTION_USER_SELECT } } },
         scheduledCommunityGroup: {
-          select: { id: true, slug: true, name: true },
+          select: GROUP_REF_SELECT,
         },
       },
       orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
       take: limit + 1,
     });
 
-    const slice = rows.slice(0, limit);
-    const nextCursor =
-      rows.length > limit
-        ? (slice[slice.length - 1]?.scheduledAt?.toISOString() ?? null)
-        : null;
+    const { items: slice, nextCursor: pageCursor } = toPage(rows, limit, (r) => r.scheduledAt?.toISOString() ?? '');
+    const nextCursor = pageCursor || null;
 
-    const r2 = this.r2BaseUrl();
+    const r2 = (this.appConfig.r2()?.publicBaseUrl ?? null);
     return { items: slice.map((p) => toScheduledPostDto(p, r2)), nextCursor };
   }
 
-  async updateScheduled(params: {
-    userId: string;
-    scheduledPostId: string;
-    body?: string;
-    visibility?: PostVisibility;
-    scheduledAt?: Date;
-    crosspost?: { pickax?: "link" | "native"; x?: "link" | "native" };
-    media?: ScheduledPostMediaInput[] | null;
-    poll?: ScheduledPollInput | null;
-    communityGroupId?: string | null;
-  }): Promise<ScheduledPostDto> {
-    const id = (params.scheduledPostId ?? "").trim();
-    if (!id) throw new NotFoundException("Scheduled post not found.");
-
-    const post = await this.prisma.post.findUnique({
-      where: { id },
-      include: {
-        user: { select: USER_LIST_SELECT },
-        media: { orderBy: { position: "asc" } },
-        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
-        scheduledCommunityGroup: {
-          select: { id: true, slug: true, name: true },
-        },
-      },
-    });
-    if (!post || post.deletedAt)
-      throw new NotFoundException("Scheduled post not found.");
-    if (post.userId !== params.userId)
-      throw new ForbiddenException("Not allowed.");
-    if (!post.isDraft || !post.scheduledAt)
-      throw new ForbiddenException("Not a scheduled post.");
-
-    const user = await this.prisma.user.findUnique({
-      where: { id: params.userId },
-      select: { premium: true, premiumPlus: true, verifiedStatus: true },
-    });
-    if (!user) throw new NotFoundException("User not found.");
-    this.assertPremium(user);
-
-    const now = new Date();
-    const nextScheduledAt = params.scheduledAt ?? post.scheduledAt;
-    this.validateScheduledAt(nextScheduledAt, now);
-
-    const nextBody =
-      typeof params.body === "string" ? params.body.trim() : post.body;
-    const userIsPremium = Boolean(user.premium || user.premiumPlus);
-    const userIsVerified = Boolean(
-      user.verifiedStatus && user.verifiedStatus !== "none",
-    );
-    const maxLen = userIsPremium ? 1000 : 500;
-    if (nextBody.length > maxLen) {
-      throw new BadRequestException(
-        `Posts are limited to ${maxLen} characters.`,
-      );
-    }
-
-    const nextVisibility =
-      params.visibility ?? post.scheduledVisibility ?? "public";
-    if (nextVisibility === "onlyMe") {
-      throw new BadRequestException(
-        'Scheduled posts cannot have "only me" visibility.',
-      );
-    }
-
-    // Resolve media: expand 'existing' references using the holding row's current media.
-    const rawMedia = params.media === undefined ? null : params.media;
-    const media: ScheduledPostNewMediaInput[] | null = rawMedia
-      ? rawMedia.map((m): ScheduledPostNewMediaInput => {
-          if (m.source !== "existing") return m;
-          const id = (m.id ?? "").trim();
-          const found = post.media.find((pm) => pm.id === id && !pm.deletedAt);
-          if (!found) throw new BadRequestException("Invalid media item.");
-          const alt = (m.alt ?? "").trim() || (found.alt ?? "").trim() || null;
-          return {
-            source:
-              found.source === "giphy"
-                ? ("giphy" as const)
-                : ("upload" as const),
-            kind: found.kind as "image" | "gif" | "video",
-            r2Key: found.r2Key ?? undefined,
-            thumbnailR2Key: found.thumbnailR2Key ?? undefined,
-            url: found.url ?? undefined,
-            mp4Url: found.mp4Url ?? undefined,
-            width: found.width ?? undefined,
-            height: found.height ?? undefined,
-            durationSeconds: found.durationSeconds ?? undefined,
-            alt,
-          };
-        })
-      : null;
-
-    if (media && media.length > 4)
-      throw new BadRequestException(
-        "You can attach up to 4 images, GIFs, or videos.",
-      );
-    if (media && media.length > 0) {
-      const hasVideo = media.some((m) => m.kind === "video");
-      const hasImageOrGif = media.some((m) => m.kind !== "video");
-      if (hasImageOrGif && !userIsVerified)
-        throw new ForbiddenException(
-          "Verify your account to post images and GIFs.",
-        );
-      if (hasVideo && !userIsPremium)
-        throw new ForbiddenException(
-          "Video posts are for premium members only.",
-        );
-    }
-
-    // Validate group.
-    const resolvedGroupId =
-      params.communityGroupId !== undefined
-        ? (params.communityGroupId ?? "").trim() || null
-        : post.scheduledCommunityGroupId;
-    if (resolvedGroupId) {
-      const membership = await findGroupMemberStatus(this.prisma, resolvedGroupId, params.userId);
-      if (!userIsVerified)
-        throw new ForbiddenException("Verify your account to post in groups.");
-      if (membership?.status !== "active")
-        throw new ForbiddenException(
-          "You must be a member of this group to post in it.",
-        );
-    }
-
-    // Validate poll if provided.
-    let nextPollJson: {
-      options: { text: string }[];
-      durationHours: number;
-    } | null = null;
-    if (params.poll !== undefined) {
-      if (params.poll) {
-        const opts = params.poll.options;
-        if (!opts || opts.length < 2 || opts.length > 4)
-          throw new BadRequestException("Polls must have 2–4 options.");
-        for (const opt of opts) {
-          const text = (opt.text ?? "").trim();
-          if (!text)
-            throw new BadRequestException("Poll options cannot be empty.");
-          if (text.length > 80)
-            throw new BadRequestException(
-              "Poll options are limited to 80 characters.",
-            );
-        }
-        if (params.poll.durationHours < 1 || params.poll.durationHours > 168) {
-          throw new BadRequestException(
-            "Poll duration must be between 1 and 168 hours.",
-          );
-        }
-        nextPollJson = {
-          options: params.poll.options.map((o) => ({ text: o.text.trim() })),
-          durationHours: params.poll.durationHours,
-        };
-      } else {
-        nextPollJson = null;
-      }
-    } else {
-      nextPollJson = post.scheduledPollJson as {
-        options: { text: string }[];
-        durationHours: number;
-      } | null;
-    }
-
-    const crosspost =
-      params.crosspost ??
-      (post.crosspostChoices as
-        | { pickax?: "link" | "native"; x?: "link" | "native" }
-        | undefined);
-    if (crosspost?.x)
-      assertXCrosspostInput(
-        {
-          crosspost,
-          body: nextBody,
-          visibility: nextVisibility,
-          communityGroupId: resolvedGroupId,
-          poll: nextPollJson,
-          media: media ?? post.media,
-        },
-        this.appConfig.integrationBudget().enabled,
-      );
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const next = await tx.post.update({
-        where: { id },
-        data: {
-          body: nextBody,
-          scheduledRevision: { increment: 1 },
-          scheduledAt: nextScheduledAt,
-          crosspostChoices: params.crosspost,
-          scheduledVisibility: resolvedGroupId
-            ? "verifiedOnly"
-            : nextVisibility,
-          scheduledCommunityGroupId: resolvedGroupId,
-          scheduledPollJson: nextPollJson ?? undefined,
-          scheduledError: null,
-          scheduledFailedAt: null,
-        },
-        include: {
-          user: { select: USER_LIST_SELECT },
-          media: { orderBy: { position: "asc" } },
-          mentions: { include: { user: { select: MENTION_USER_SELECT } } },
-          scheduledCommunityGroup: {
-            select: { id: true, slug: true, name: true },
-          },
-        },
-      });
-
-      if (media !== null) {
-        await tx.postMedia.deleteMany({ where: { postId: id } });
-        if (media.length > 0) {
-          await tx.postMedia.createMany({
-            data: media.map((m, idx) => ({
-              postId: id,
-              source: m.source,
-              kind: m.kind,
-              r2Key: m.r2Key ?? null,
-              thumbnailR2Key: m.thumbnailR2Key ?? null,
-              url: m.url ?? null,
-              mp4Url: m.mp4Url ?? null,
-              width: m.width ?? null,
-              height: m.height ?? null,
-              durationSeconds: m.durationSeconds ?? null,
-              alt: m.alt ?? null,
-              position: idx,
-            })),
-          });
-        }
-      }
-
-      return next;
-    });
-
-    // Re-fetch with updated media included.
-    const full = await this.prisma.post.findUnique({
-      where: { id },
-      include: {
-        user: { select: USER_LIST_SELECT },
-        media: { orderBy: { position: "asc" } },
-        mentions: { include: { user: { select: MENTION_USER_SELECT } } },
-        scheduledCommunityGroup: {
-          select: { id: true, slug: true, name: true },
-        },
-      },
-    });
-
-    return toScheduledPostDto(full ?? updated, this.r2BaseUrl());
+  async updateScheduled(params: { userId: string; scheduledPostId: string; body?: string; visibility?: PostVisibility; scheduledAt?: Date; crosspost?: { pickax?: "link" | "native"; x?: "link" | "native" }; media?: ScheduledPostMediaInput[] | null; poll?: ScheduledPollInput | null; communityGroupId?: string | null }) : Promise<ScheduledPostDto> {
+    return this.updater.updateScheduled(params);
   }
 
   async deleteScheduled(params: {
@@ -579,251 +269,4 @@ export class ScheduledPostsService {
     return { success: true };
   }
 
-  /**
-   * Claim and publish all scheduled posts whose fire time is <= now.
-   * Called from the background job processor once a minute.
-   * Atomic claim via updateMany prevents double-publish in multi-instance deploys.
-   * Per-user fairness: at most SWEEP_PER_USER_LIMIT rows per user per sweep.
-   */
-  async publishDue(now: Date = new Date()): Promise<void> {
-    // Fetch more candidates than the global limit to allow per-user fairness filtering.
-    const candidates = await this.prisma.post.findMany({
-      where: {
-        AND: [
-          notDeletedWhere(),
-          { isDraft: true },
-          { scheduledAt: { lte: now, not: null } },
-        ],
-      },
-      include: {
-        media: { orderBy: { position: "asc" } },
-      },
-      orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
-      take: SWEEP_GLOBAL_LIMIT * 4, // wide scan; per-user filter narrows below
-    });
-
-    const perUserCounts = new Map<string, number>();
-    let globalCount = 0;
-
-    for (const post of candidates) {
-      if (globalCount >= SWEEP_GLOBAL_LIMIT) break;
-      const userCount = perUserCounts.get(post.userId) ?? 0;
-      if (userCount >= SWEEP_PER_USER_LIMIT) continue;
-      perUserCounts.set(post.userId, userCount + 1);
-      globalCount++;
-      await this.publishOne(post, now);
-    }
-  }
-
-  private async publishOne(
-    post: Awaited<ReturnType<typeof this.prisma.post.findMany>>[0] & {
-      media: Array<{
-        source: string;
-        kind: string;
-        r2Key: string | null;
-        thumbnailR2Key: string | null;
-        url: string | null;
-        mp4Url: string | null;
-        width: number | null;
-        height: number | null;
-        durationSeconds: number | null;
-        alt: string | null;
-        position: number;
-      }>;
-    },
-    now: Date,
-  ): Promise<void> {
-    const scheduledId = post.id;
-    const userId = post.userId;
-
-    // ── Re-validate author eligibility BEFORE claiming ──────────────────────
-    // This prevents wasted claim + immediate rollback for permanently ineligible rows.
-    // We only emit the failed event once (when scheduledError was previously null)
-    // to avoid toasting the user every minute.
-    const author = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        premium: true,
-        premiumPlus: true,
-        verifiedStatus: true,
-        bannedAt: true,
-      },
-    });
-
-    const revalError = this.revalidateForPublish(author, post);
-    if (revalError) {
-      this.logger.warn(
-        `Scheduled post ${scheduledId} ineligible: ${revalError}`,
-      );
-      const isFirstFailure = !post.scheduledError;
-      await this.prisma.post.update({
-        where: { id: scheduledId },
-        data: {
-          scheduledError: revalError.slice(0, 500),
-          scheduledFailedAt: now,
-        },
-      });
-      if (isFirstFailure) {
-        this.realtime.emitScheduledPostFailed(userId, {
-          scheduledId,
-          error: revalError,
-        });
-      }
-      return;
-    }
-
-    try {
-      const visibility = (post.scheduledVisibility ??
-        "public") as PostVisibility;
-      const communityGroupId = post.scheduledCommunityGroupId ?? null;
-
-      // Build poll from stored JSON.
-      const pollJson = post.scheduledPollJson as {
-        options: { text: string }[];
-        durationHours: number;
-      } | null;
-      let poll: {
-        endsAt: Date;
-        options: Array<{ text: string; image: null }>;
-      } | null = null;
-      if (pollJson?.options?.length) {
-        const endsAt = new Date(
-          now.getTime() + (pollJson.durationHours ?? 24) * 60 * 60 * 1000,
-        );
-        poll = {
-          endsAt,
-          options: pollJson.options.map((o) => ({ text: o.text, image: null })),
-        };
-      }
-
-      // Replay createPost pipeline.
-      const bundle = await this.mutation.createPost({
-        scheduledSource: { id: scheduledId, revision: post.scheduledRevision },
-        crosspost: (post.crosspostChoices ?? undefined) as
-          | { pickax?: "link" | "native"; x?: "link" | "native" }
-          | undefined,
-        userId,
-        body: post.body,
-        visibility,
-        parentId: null,
-        mentions: null,
-        communityGroupId,
-        media: post.media.length
-          ? post.media.map((m) => ({
-              source:
-                m.source === "giphy" ? ("giphy" as const) : ("upload" as const),
-              kind: m.kind as "image" | "gif" | "video",
-              r2Key: m.r2Key ?? undefined,
-              thumbnailR2Key: m.thumbnailR2Key ?? undefined,
-              url: m.url ?? undefined,
-              mp4Url: m.mp4Url ?? undefined,
-              width: m.width ?? undefined,
-              height: m.height ?? undefined,
-              durationSeconds: m.durationSeconds ?? undefined,
-              alt: m.alt ?? null,
-            }))
-          : null,
-        poll,
-      });
-
-      // Men of Hunger owns the schedule: Pickax and X are queued only now, at fire time.
-      // Failures here must not undo or fail the committed publication.
-      const choices = post.crosspostChoices as
-        | { pickax?: "link" | "native"; x?: "link" | "native" }
-        | null;
-      if (choices?.pickax) {
-        await this.pickax
-          .requestPostCrosspost(userId, bundle.post.id, choices.pickax)
-          .catch((e) =>
-            this.logger.warn(`Scheduled Pickax crosspost ${scheduledId}: ${e}`),
-          );
-      }
-      if (choices?.x) {
-        await this.x
-          .requestPostCrosspost(userId, bundle.post.id, choices.x)
-          .catch((e) =>
-            this.logger.warn(`Scheduled X crosspost ${scheduledId}: ${e}`),
-          );
-      }
-
-      // Notify the author that the post went live.
-      const postDto = toPostDto(bundle.post, this.r2BaseUrl());
-      this.realtime.emitScheduledPostPublished(userId, {
-        scheduledId,
-        post: postDto,
-      });
-
-      this.logger.log(
-        `Scheduled post ${scheduledId} published as ${bundle.post.id}`,
-      );
-    } catch (err) {
-      // A committed publication or another worker's claim must never be restored.
-      const current = await this.prisma.post.findUnique({
-        where: { id: scheduledId },
-        select: { deletedAt: true, scheduledPublishedPostId: true },
-      });
-      if (!current || current.deletedAt || current.scheduledPublishedPostId)
-        return;
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      this.logger.error(
-        `Failed to publish scheduled post ${scheduledId}: ${errorMsg}`,
-      );
-
-      // The atomic publication rolled back; retain its due date for recovery.
-      await this.prisma.post.updateMany({
-        where: {
-          id: scheduledId,
-          deletedAt: null,
-          scheduledPublishedPostId: null,
-          scheduledRevision: post.scheduledRevision,
-        },
-        data: {
-          scheduledError: errorMsg.slice(0, 500),
-          scheduledFailedAt: now,
-        },
-      });
-
-      this.realtime.emitScheduledPostFailed(userId, {
-        scheduledId,
-        error: errorMsg,
-      });
-    }
-  }
-
-  /**
-   * Returns a human-readable error string if the author is no longer eligible to publish,
-   * or null if everything looks good. Called before the atomic claim.
-   */
-  private revalidateForPublish(
-    author: {
-      premium: boolean;
-      premiumPlus: boolean;
-      verifiedStatus: string | null;
-      bannedAt: Date | null;
-    } | null,
-    post: {
-      media: Array<{ kind: string }>;
-      scheduledCommunityGroupId: string | null;
-      scheduledError: string | null;
-    },
-  ): string | null {
-    if (!author || author.bannedAt) {
-      return "Account is no longer eligible to post.";
-    }
-    const isPremium = Boolean(author.premium || author.premiumPlus);
-    if (!isPremium) {
-      return "Scheduled posts require premium. Renew your subscription to publish.";
-    }
-    const isVerified = Boolean(
-      author.verifiedStatus && author.verifiedStatus !== "none",
-    );
-    const hasImageOrGif = post.media.some((m) => m.kind !== "video");
-    if (hasImageOrGif && !isVerified) {
-      return "Verify your account to post images and GIFs.";
-    }
-    // Group membership is checked at claim time inside createPost if the group post path is taken;
-    // we do a lightweight pre-check here to give the user an early actionable error.
-    // (Full check happens in createPost anyway, so no race concern.)
-    return null;
-  }
 }

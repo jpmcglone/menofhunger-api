@@ -1,16 +1,16 @@
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
-import { FANOUT_CONCURRENCY, runInBatches } from '../side-effects/batch';
-import type { SideEffectPayloads } from '../side-effects/side-effects.constants';
-import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
-import { SideEffectsService } from '../side-effects/side-effects.service';
-import { RedisService } from '../redis/redis.service';
-import { RedisKeys } from '../redis/redis-keys';
-import { PresenceRedisStateService } from '../presence/presence-redis-state.service';
-import { NotificationPushService } from './notification-push.service';
-import { NotificationWriterService } from './notification-writer.service';
-import { ApnsPushService } from './apns-push.service';
-import { AccountSwitchService } from '../auth/account-switch.service';
-import { PresenceRealtimeService } from '../presence/presence-realtime.service';
+import { Inject, Injectable, Logger, type OnModuleInit } from "@nestjs/common";
+import { FANOUT_CONCURRENCY, runInBatches } from "../side-effects/batch";
+import type { SideEffectPayloads } from "../side-effects/side-effects.constants";
+import { SideEffectsRegistry } from "../side-effects/side-effects.registry";
+import { SideEffectsService } from "../side-effects/side-effects.service";
+import { RedisService } from "../redis/redis.service";
+import { RedisKeys } from "../redis/redis-keys";
+import { PresenceRedisReadService } from "../presence/presence-redis-read.service";
+import { NotificationPushService } from "./notification-push.service";
+import { NotificationCreatorService } from "./notification-creator.service";
+import { ApnsPushService } from "./apns-push.service";
+import { AccountSwitchService } from "../auth/auth-public-api";
+import { PresenceRealtimeService } from "../presence/presence-realtime.service";
 
 /** Collapse rapid badge syncs from feed scroll / mark-read bursts. */
 const BADGE_SYNC_DEBOUNCE_MS = 1_500;
@@ -31,23 +31,38 @@ export class NotificationSideEffectsHandler implements OnModuleInit {
   private readonly logger = new Logger(NotificationSideEffectsHandler.name);
 
   constructor(
-    private readonly push: NotificationPushService,
-    private readonly writer: NotificationWriterService,
+    @Inject(NotificationPushService)
+    private readonly push: Pick<
+      NotificationPushService,
+      "sendKindPushForActor"
+    >,
+    @Inject(NotificationCreatorService)
+    private readonly writer: Pick<NotificationCreatorService, "create">,
     private readonly registry: SideEffectsRegistry,
     private readonly apns: ApnsPushService,
     private readonly redis: RedisService,
-    private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presenceRedis: PresenceRedisReadService,
     private readonly sideEffects: SideEffectsService,
     private readonly accountSwitch: AccountSwitchService,
     private readonly presenceRealtime: PresenceRealtimeService,
   ) {}
 
   onModuleInit(): void {
-    this.registry.register('notification.push', (payload) => this.onPush(payload));
-    this.registry.register('notification.fanout.chunk', (payload) => this.onFanoutChunk(payload));
-    this.registry.register('notification.badge.sync', (payload) => this.onBadgeSync(payload));
-    this.registry.register('notification.lockScreen.clear', (payload) => this.onLockScreenClear(payload));
-    this.registry.register('account.cluster.badge', (payload) => this.onClusterBadge(payload));
+    this.registry.register("notification.push", (payload) =>
+      this.onPush(payload),
+    );
+    this.registry.register("notification.fanout.chunk", (payload) =>
+      this.onFanoutChunk(payload),
+    );
+    this.registry.register("notification.badge.sync", (payload) =>
+      this.onBadgeSync(payload),
+    );
+    this.registry.register("notification.lockScreen.clear", (payload) =>
+      this.onLockScreenClear(payload),
+    );
+    this.registry.register("account.cluster.badge", (payload) =>
+      this.onClusterBadge(payload),
+    );
   }
 
   /**
@@ -57,7 +72,9 @@ export class NotificationSideEffectsHandler implements OnModuleInit {
    * push tag when a send succeeds and suppresses another send for that tag inside the kind's
    * coalesce window. A retry after a partial failure therefore doesn't double-buzz.
    */
-  private async onPush(payload: SideEffectPayloads['notification.push']): Promise<void> {
+  private async onPush(
+    payload: SideEffectPayloads["notification.push"],
+  ): Promise<void> {
     if (!payload.recipientUserId || !payload.kind) return;
     await this.push.sendKindPushForActor(payload);
   }
@@ -68,24 +85,30 @@ export class NotificationSideEffectsHandler implements OnModuleInit {
    * The parent handler does all the eligibility filtering and passes only recipients that
    * should be notified, so this is a dumb writer — which is what makes it safely retryable.
    */
-  private async onFanoutChunk(payload: SideEffectPayloads['notification.fanout.chunk']): Promise<void> {
+  private async onFanoutChunk(
+    payload: SideEffectPayloads["notification.fanout.chunk"],
+  ): Promise<void> {
     const recipients = (payload.recipientUserIds ?? []).filter(Boolean);
     if (recipients.length === 0) return;
 
-    const result = await runInBatches(recipients, FANOUT_CONCURRENCY, async (recipientUserId) => {
-      await this.writer.create({
-        recipientUserId,
-        kind: payload.kind,
-        actorUserId: payload.actorUserId,
-        actorPostId: payload.actorPostId,
-        subjectPostId: payload.subjectPostId,
-        subjectUserId: payload.subjectUserId,
-        subjectArticleId: payload.subjectArticleId,
-        subjectGroupId: payload.subjectGroupId,
-        title: payload.title,
-        body: payload.body,
-      });
-    });
+    const result = await runInBatches(
+      recipients,
+      FANOUT_CONCURRENCY,
+      async (recipientUserId) => {
+        await this.writer.create({
+          recipientUserId,
+          kind: payload.kind,
+          actorUserId: payload.actorUserId,
+          actorPostId: payload.actorPostId,
+          subjectPostId: payload.subjectPostId,
+          subjectUserId: payload.subjectUserId,
+          subjectArticleId: payload.subjectArticleId,
+          subjectGroupId: payload.subjectGroupId,
+          title: payload.title,
+          body: payload.body,
+        });
+      },
+    );
 
     if (result.failed > 0) {
       this.logger.warn(
@@ -98,21 +121,26 @@ export class NotificationSideEffectsHandler implements OnModuleInit {
    * Debounced badge-only APNs. Skips when an active iOS socket exists (socket path already
    * updates the icon). Web-only presence does not skip. Change-only vs last sent.
    */
-  private async onBadgeSync(payload: SideEffectPayloads['notification.badge.sync']): Promise<void> {
-    const userId = (payload.recipientUserId ?? '').trim();
+  private async onBadgeSync(
+    payload: SideEffectPayloads["notification.badge.sync"],
+  ): Promise<void> {
+    const userId = (payload.recipientUserId ?? "").trim();
     if (!userId) return;
 
     const debounceKey = RedisKeys.badgeSyncDebounce(userId);
-    const acquired = await this.redis.setString(debounceKey, '1', {
+    const acquired = await this.redis.setString(debounceKey, "1", {
       ttlMs: BADGE_SYNC_DEBOUNCE_MS,
       onlyIfAbsent: true,
     });
     if (!acquired) {
       // One trailing flush after the window so the final count still lands.
       this.sideEffects.dispatch(
-        'notification.badge.sync',
+        "notification.badge.sync",
         { recipientUserId: userId },
-        { jobId: `badge-sync-trail:${userId}`, delay: BADGE_SYNC_TRAILING_DELAY_MS },
+        {
+          jobId: `badge-sync-trail:${userId}`,
+          delay: BADGE_SYNC_TRAILING_DELAY_MS,
+        },
       );
       return;
     }
@@ -140,10 +168,15 @@ export class NotificationSideEffectsHandler implements OnModuleInit {
   }
 
   private async onLockScreenClear(
-    payload: SideEffectPayloads['notification.lockScreen.clear'],
+    payload: SideEffectPayloads["notification.lockScreen.clear"],
   ): Promise<void> {
-    const userId = (payload.recipientUserId ?? '').trim();
-    const section = payload.section === 'groups' ? 'groups' : payload.section === 'inbox' ? 'inbox' : null;
+    const userId = (payload.recipientUserId ?? "").trim();
+    const section =
+      payload.section === "groups"
+        ? "groups"
+        : payload.section === "inbox"
+          ? "inbox"
+          : null;
     if (!userId || !section) return;
     const tokenOwners = await this.accountSwitch.listTokenOwnerIds(userId);
     const owners = tokenOwners.length > 0 ? tokenOwners : [userId];
@@ -152,15 +185,20 @@ export class NotificationSideEffectsHandler implements OnModuleInit {
     }
   }
 
-  private async onClusterBadge(payload: SideEffectPayloads['account.cluster.badge']): Promise<void> {
-    const userId = (payload.userId ?? '').trim();
+  private async onClusterBadge(
+    payload: SideEffectPayloads["account.cluster.badge"],
+  ): Promise<void> {
+    const userId = (payload.userId ?? "").trim();
     if (!userId) return;
     const cluster = await this.accountSwitch.listClusterUserIds(userId);
     // Solo accounts still receive their own summary so the client total tracks the server formula.
     if (cluster.length === 0) return;
     const summary = await this.accountSwitch.badgeSummaryForUser(userId);
     for (const id of cluster) {
-      this.presenceRealtime.emitAccountsBadgeUpdated(id, { userId, ...summary });
+      this.presenceRealtime.emitAccountsBadgeUpdated(id, {
+        userId,
+        ...summary,
+      });
     }
   }
 }

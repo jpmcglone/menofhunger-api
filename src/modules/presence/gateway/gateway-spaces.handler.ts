@@ -1,3 +1,4 @@
+import { socketData } from './gateway-socket-data';
 import { Injectable, Logger } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import type { Socket } from 'socket.io';
@@ -11,7 +12,8 @@ import { WatchPartyStateService } from '../../spaces/watch-party-state.service';
 import type { SpaceChatSenderDto, SpaceListenerDto, SpaceLobbyCountsDto } from '../../../common/dto';
 import { WsEventNames, type UsersSpaceChangedPayloadDto } from '../../../common/dto';
 import { PresenceService } from '../presence.service';
-import { PresenceRedisStateService } from '../presence-redis-state.service';
+import { PresenceLobbyStateService } from '../presence-lobby-state.service';
+import { PresenceRedisBusService } from '../presence-redis-bus.service';
 import { GatewayContextService } from './gateway-context.service';
 import { GatewayThrottleService } from './gateway-throttle.service';
 import { spaceRoom, spacesChatRoom } from './gateway-rooms';
@@ -61,7 +63,8 @@ export class SpacesGatewayHandler {
 
   constructor(
     private readonly presence: PresenceService,
-    private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presenceBus: PresenceRedisBusService,
+    private readonly presenceLobby: PresenceLobbyStateService,
     private readonly follows: FollowsService,
     private readonly spaces: SpacesService,
     private readonly spacesPresence: SpacesPresenceService,
@@ -163,7 +166,7 @@ export class SpacesGatewayHandler {
           const room = spaceRoom(spaceId);
           const out = { spaceId, ...pausedState };
           this.context.server.to(room).emit('spaces:watchPartyState', out);
-          void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:watchPartyState', payload: out }).catch(() => undefined);
+          void this.presenceBus.publishEmitToRoom({ room, event: 'spaces:watchPartyState', payload: out }).catch(() => undefined);
         }
       }
     }
@@ -236,7 +239,7 @@ export class SpacesGatewayHandler {
 
   private async emitSpacesLobbyCountsAsync(): Promise<void> {
     const local = this.spacesPresence.getLobbyCountsBySpaceId();
-    const countsBySpaceId = await this.presenceRedis.syncAndAggregateLobbyCounts(local);
+    const countsBySpaceId = await this.presenceLobby.syncAndAggregateLobbyCounts(local);
     const payload: SpaceLobbyCountsDto = { countsBySpaceId };
 
     this.context.server.emit('spaces:lobbyCounts', payload);
@@ -245,7 +248,7 @@ export class SpacesGatewayHandler {
       .setJson(RedisKeys.spacesLobbyCounts(), countsBySpaceId, { ttlSeconds: 30 })
       .catch(() => undefined);
 
-    void this.presenceRedis.publishSpacesLobbyCounts(countsBySpaceId).catch(() => undefined);
+    void this.presenceBus.publishSpacesLobbyCounts(countsBySpaceId).catch(() => undefined);
   }
 
   /**
@@ -277,7 +280,7 @@ export class SpacesGatewayHandler {
     };
     const targets = this.context.getTargetsForUser(uid);
     this.context.emitToSockets(targets, WsEventNames.usersSpaceChanged, spaceChangedDto);
-    void this.presenceRedis.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
+    void this.presenceBus.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
   }
 
   /**
@@ -306,7 +309,7 @@ export class SpacesGatewayHandler {
         };
         const targets = this.context.getTargetsForUser(row.userId);
         this.context.emitToSockets(targets, WsEventNames.usersSpaceChanged, spaceChangedDto);
-        void this.presenceRedis.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
+        void this.presenceBus.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
       }
       this.logger.log(`Pruned ${dropped.length} offline space member(s)`);
     } catch (err) {
@@ -329,7 +332,7 @@ export class SpacesGatewayHandler {
 
     // Spaces cleanup (best-effort).
     try {
-      const ownerSpaceId = String((client.data as any)?.ownerSpaceId ?? '').trim() || null;
+      const ownerSpaceId = String(socketData(client).ownerSpaceId ?? '').trim() || null;
       const spaceLeft = this.spacesPresence.onDisconnect(socketId);
       // Always clear owner-socket maps for this socket. Leaving an owned space by
       // joining elsewhere used to leave stale entries because cleanup only ran when
@@ -338,7 +341,7 @@ export class SpacesGatewayHandler {
         this.clearOwnerSocket(socketId, ownerSpaceId, {
           pauseWatchParty: Boolean(spaceLeft?.wasActive && spaceLeft.spaceId === ownerSpaceId),
         });
-        (client.data as any).ownerSpaceId = null;
+        socketData(client).ownerSpaceId = null;
       }
       const spaceUserId = String(spaceLeft?.userId ?? fallbackUserId ?? '').trim();
       // Socket-keyed leave can miss when the join socket isn't the one that
@@ -361,10 +364,10 @@ export class SpacesGatewayHandler {
     // Without this, abrupt disconnects (tab close, network drop) never emit a
     // "left the chat" system message because spaces:chatUnsubscribe isn't sent.
     try {
-      const chatSpaceId = String((client.data as any)?.spaceChatSpaceId ?? '').trim() || null;
+      const chatSpaceId = String(socketData(client).spaceChatSpaceId ?? '').trim() || null;
       if (chatSpaceId) {
         this.emitChatSystemIfSoleSocket(client, chatSpaceId, 'leave', { debounce: true });
-        (client.data as any).spaceChatSpaceId = null;
+        socketData(client).spaceChatSpaceId = null;
       }
     } catch (err) {
       this.logger.warn(
@@ -382,10 +385,10 @@ export class SpacesGatewayHandler {
     // Wait for handleConnection's async auth to finish before reading userId.
     // Socket.IO dispatches events immediately on connect, before handleConnection resolves,
     // so without this await the userId would be undefined on hard-reload joins.
-    await ((client.data as any).__ready as Promise<void> | undefined)?.catch?.(() => undefined);
+    await (socketData(client).__ready as Promise<void> | undefined)?.catch?.(() => undefined);
 
     const userId =
-      (client.data as { userId?: string })?.userId ??
+      socketData(client).userId ??
       this.presence.getUserIdForSocket(client.id) ??
       null;
     if (!userId) return;
@@ -396,20 +399,20 @@ export class SpacesGatewayHandler {
 
     // Clear prior owner-socket tracking when this socket moves to another space
     // (owned or not). Otherwise owner maps retain stale socket ids forever.
-    const prevOwnerSpaceId = String((client.data as any)?.ownerSpaceId ?? '').trim() || null;
+    const prevOwnerSpaceId = String(socketData(client).ownerSpaceId ?? '').trim() || null;
     if (prevOwnerSpaceId && prevOwnerSpaceId !== spaceId) {
       this.clearOwnerSocket(client.id, prevOwnerSpaceId, {
         pauseWatchParty: true,
         deactivateImmediately: true,
       });
-      (client.data as any).ownerSpaceId = null;
+      socketData(client).ownerSpaceId = null;
     }
 
     // Elect this socket as the primary control socket. Going live is explicit
     // (owner panel "Go live") — joining a scheduled/inactive space must not activate it.
     if (isOwner) {
       this.cancelOwnerGoneDeactivate(spaceId);
-      (client.data as any).ownerSpaceId = spaceId;
+      socketData(client).ownerSpaceId = spaceId;
 
       // Track in the full owner-socket set for this space (all tabs).
       if (!this.ownerSocketsBySpaceId.has(spaceId)) {
@@ -426,7 +429,7 @@ export class SpacesGatewayHandler {
         prevSocket?.emit('spaces:watchPartyOwnerReplaced', { spaceId });
       }
     } else {
-      (client.data as any).ownerSpaceId = null;
+      socketData(client).ownerSpaceId = null;
     }
 
     const { prevSpaceId, prevRoomSpaceId } = this.spacesPresence.join({ socketId: client.id, userId, spaceId });
@@ -460,7 +463,7 @@ export class SpacesGatewayHandler {
     };
     const targets = this.context.getTargetsForUser(userId);
     this.context.emitToSockets(targets, WsEventNames.usersSpaceChanged, spaceChangedDto);
-    void this.presenceRedis.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
+    void this.presenceBus.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
 
     // Send current watch party state to the joining client (falls back to Redis on server restart).
     const wpState = await this.watchPartyState.getStateAsync(spaceId);
@@ -470,7 +473,7 @@ export class SpacesGatewayHandler {
   }
 
   async handleSpacesLeave(client: Socket): Promise<void> {
-    const ownerSpaceId = String((client.data as any)?.ownerSpaceId ?? '').trim() || null;
+    const ownerSpaceId = String(socketData(client).ownerSpaceId ?? '').trim() || null;
     const roomSpaceId = this.spacesPresence.getRoomSpaceForSocket(client.id);
     const left = this.spacesPresence.leave(client.id);
     this.spacesPresence.clearRoomForSocket(client.id);
@@ -480,14 +483,14 @@ export class SpacesGatewayHandler {
         pauseWatchParty: Boolean(left?.wasActive && left.spaceId === ownerSpaceId),
         deactivateImmediately: true,
       });
-      (client.data as any).ownerSpaceId = null;
+      socketData(client).ownerSpaceId = null;
     }
     if (left?.wasActive) {
       await this.emitSpaceMembers(left.spaceId);
       this.emitSpacesLobbyCounts();
 
       const userId =
-        (client.data as { userId?: string })?.userId ??
+        socketData(client).userId ??
         this.presence.getUserIdForSocket(client.id) ??
         null;
       if (userId) {
@@ -499,7 +502,7 @@ export class SpacesGatewayHandler {
         };
         const targets = this.context.getTargetsForUser(userId);
         this.context.emitToSockets(targets, WsEventNames.usersSpaceChanged, spaceChangedDto);
-        void this.presenceRedis.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
+        void this.presenceBus.publishUserSpaceChanged(spaceChangedDto).catch(() => undefined);
       }
     }
   }
@@ -529,7 +532,7 @@ export class SpacesGatewayHandler {
 
   private async emitLobbyCountsToClient(client: Socket): Promise<void> {
     const local = this.spacesPresence.getLobbyCountsBySpaceId();
-    const countsBySpaceId = await this.presenceRedis.syncAndAggregateLobbyCounts(local);
+    const countsBySpaceId = await this.presenceLobby.syncAndAggregateLobbyCounts(local);
     const payload: SpaceLobbyCountsDto = { countsBySpaceId };
     client.emit('spaces:lobbyCounts', payload);
   }
@@ -545,7 +548,7 @@ export class SpacesGatewayHandler {
     let n = 0;
     for (const sock of sockets.values()) {
       if (sock.id === exceptSocketId) continue;
-      const sid = String((sock.data as { spaceChatSpaceId?: string } | undefined)?.spaceChatSpaceId ?? '').trim();
+      const sid = String(socketData(sock).spaceChatSpaceId ?? '').trim();
       if (sid !== spaceId) continue;
       const uid = String(
         (sock.data as { userId?: string; spaceChatUser?: { id?: string } } | undefined)?.userId
@@ -584,7 +587,7 @@ export class SpacesGatewayHandler {
     const room = spacesChatRoom(spaceId);
     const out = { spaceId, message: msg };
     this.context.server.to(room).emit('spaces:chatMessage', out);
-    void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
+    void this.presenceBus.publishEmitToRoom({ room, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
   }
 
   /** Join when this is the user's first chat socket; leave when it is the last. */
@@ -594,7 +597,7 @@ export class SpacesGatewayHandler {
     event: 'join' | 'leave',
     opts?: { debounce?: boolean },
   ): void {
-    const sender = ((client.data as { spaceChatUser?: SpaceChatSenderDto })?.spaceChatUser ?? null);
+    const sender = (socketData(client).spaceChatUser ?? null);
     const userId = String(sender?.id ?? '').trim();
     if (!sender?.id || !userId) return;
 
@@ -622,16 +625,16 @@ export class SpacesGatewayHandler {
     const spaceId = String(payload?.spaceId ?? '').trim();
     if (!this.spacesPresence.isValidSpaceId(spaceId)) return;
 
-    await ((client.data as any).__ready as Promise<void> | undefined)?.catch?.(() => undefined);
+    await (socketData(client).__ready as Promise<void> | undefined)?.catch?.(() => undefined);
 
     const userId =
-      (client.data as { userId?: string })?.userId ??
+      socketData(client).userId ??
       this.presence.getUserIdForSocket(client.id) ??
       null;
     if (!userId) return;
     if (!(await this.resolveSpaceAccess(userId, spaceId))) return;
 
-    const prev = String((client.data as any)?.spaceChatSpaceId ?? '').trim() || null;
+    const prev = String(socketData(client).spaceChatSpaceId ?? '').trim() || null;
     if (prev && prev !== spaceId) {
       // Emit a leave system message for the old space before switching rooms.
       // Normally the client sends spaces:chatUnsubscribe first, but this guards
@@ -640,7 +643,7 @@ export class SpacesGatewayHandler {
       client.leave(spacesChatRoom(prev));
     }
 
-    (client.data as any).spaceChatSpaceId = spaceId;
+    socketData(client).spaceChatSpaceId = spaceId;
     client.join(spacesChatRoom(spaceId));
     // Append the join line first so the snapshot the joiner gets already
     // includes it — a room broadcast alone can lose the race and show
@@ -650,12 +653,12 @@ export class SpacesGatewayHandler {
   }
 
   handleSpacesChatUnsubscribe(client: Socket): void {
-    const prev = String((client.data as any)?.spaceChatSpaceId ?? '').trim() || null;
+    const prev = String(socketData(client).spaceChatSpaceId ?? '').trim() || null;
     if (prev) {
       this.emitChatSystemIfSoleSocket(client, prev, 'leave');
       client.leave(spacesChatRoom(prev));
     }
-    (client.data as any).spaceChatSpaceId = null;
+    socketData(client).spaceChatSpaceId = null;
   }
 
   handleSpacesChatSend(
@@ -666,18 +669,18 @@ export class SpacesGatewayHandler {
     const body = String(payload?.body ?? '');
     if (!this.spacesPresence.isValidSpaceId(spaceId)) return;
 
-    const subscribed = String((client.data as any)?.spaceChatSpaceId ?? '').trim();
+    const subscribed = String(socketData(client).spaceChatSpaceId ?? '').trim();
     if (!subscribed || subscribed !== spaceId) return;
 
     const userId =
-      (client.data as { userId?: string })?.userId ??
+      socketData(client).userId ??
       this.presence.getUserIdForSocket(client.id) ??
       null;
     if (!userId) return;
 
     if (!this.spacesChat.canSend(userId)) return;
 
-    const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
+    const sender = (socketData(client).spaceChatUser ?? null) as SpaceChatSenderDto | null;
     if (!sender?.id) return;
 
     const replyToId = String(payload?.replyToId ?? '').trim() || null;
@@ -699,7 +702,7 @@ export class SpacesGatewayHandler {
     const room = spacesChatRoom(spaceId);
     const out = { spaceId, message: msg };
     this.context.server.to(room).emit('spaces:chatMessage', out);
-    void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
+    void this.presenceBus.publishEmitToRoom({ room, event: 'spaces:chatMessage', payload: out }).catch(() => undefined);
   }
 
   handleSpacesChatReact(
@@ -711,11 +714,11 @@ export class SpacesGatewayHandler {
     const reactionId = String(payload?.reactionId ?? '').trim();
     if (!this.spacesPresence.isValidSpaceId(spaceId) || !messageId) return;
 
-    const subscribed = String((client.data as any)?.spaceChatSpaceId ?? '').trim();
+    const subscribed = String(socketData(client).spaceChatSpaceId ?? '').trim();
     if (!subscribed || subscribed !== spaceId) return;
 
     const userId =
-      (client.data as { userId?: string })?.userId ??
+      socketData(client).userId ??
       this.presence.getUserIdForSocket(client.id) ??
       null;
     if (!userId) return;
@@ -725,7 +728,7 @@ export class SpacesGatewayHandler {
 
     if (!this.throttle.shouldEmitReaction(`spaces:chatReaction:${userId}`, 400)) return;
 
-    const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
+    const sender = (socketData(client).spaceChatUser ?? null) as SpaceChatSenderDto | null;
     const room = spacesChatRoom(spaceId);
     const out = {
       spaceId,
@@ -736,7 +739,7 @@ export class SpacesGatewayHandler {
       emoji: reaction.emoji,
     };
     this.context.server.to(room).emit('spaces:chatReaction', out);
-    void this.presenceRedis
+    void this.presenceBus
       .publishEmitToRoom({ room, event: 'spaces:chatReaction', payload: out })
       .catch(() => undefined);
     this.posthog.capture(userId, 'space_chat_reaction_sent', {
@@ -751,7 +754,7 @@ export class SpacesGatewayHandler {
     if (!this.spacesPresence.isValidSpaceId(spaceId)) return;
 
     const userId =
-      (client.data as { userId?: string })?.userId ??
+      socketData(client).userId ??
       this.presence.getUserIdForSocket(client.id) ??
       null;
     if (!userId) return;
@@ -764,7 +767,7 @@ export class SpacesGatewayHandler {
     const room = spaceRoom(spaceId);
     const out = { spaceId, userId, reactionId: reaction.id, emoji: reaction.emoji };
     this.context.server.to(room).emit('spaces:reaction', out);
-    void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:reaction', payload: out }).catch(() => undefined);
+    void this.presenceBus.publishEmitToRoom({ room, event: 'spaces:reaction', payload: out }).catch(() => undefined);
     this.posthog.capture(userId, 'space_reaction_sent', {
       space_id: spaceId,
       reaction_id: reaction.id,
@@ -775,10 +778,10 @@ export class SpacesGatewayHandler {
     const spaceId = String(payload?.spaceId ?? '').trim();
     if (!this.spacesPresence.isValidSpaceId(spaceId)) return;
 
-    const subscribed = String((client.data as any)?.spaceChatSpaceId ?? '').trim();
+    const subscribed = String(socketData(client).spaceChatSpaceId ?? '').trim();
     if (!subscribed || subscribed !== spaceId) return;
 
-    const sender = ((client.data as any)?.spaceChatUser ?? null) as SpaceChatSenderDto | null;
+    const sender = (socketData(client).spaceChatUser ?? null) as SpaceChatSenderDto | null;
     if (!sender?.id) return;
 
     const typing = payload?.typing !== false;
@@ -788,7 +791,7 @@ export class SpacesGatewayHandler {
     const room = spacesChatRoom(spaceId);
     const out = { spaceId, sender, typing };
     client.to(room).emit('spaces:typing', out);
-    void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:typing', payload: out }).catch(() => undefined);
+    void this.presenceBus.publishEmitToRoom({ room, event: 'spaces:typing', payload: out }).catch(() => undefined);
   }
 
   // ─── Mode changes ───────────────────────────────────────────────────
@@ -806,7 +809,7 @@ export class SpacesGatewayHandler {
     if (!spaceId || !['NONE', 'WATCH_PARTY', 'RADIO'].includes(mode)) return;
 
     const userId =
-      (client.data as { userId?: string })?.userId ??
+      socketData(client).userId ??
       this.presence.getUserIdForSocket(client.id) ??
       null;
     if (!userId) return;
@@ -832,7 +835,7 @@ export class SpacesGatewayHandler {
           const room = spaceRoom(spaceId);
           const resetOut = { spaceId, ...resetState };
           this.context.server.to(room).emit('spaces:watchPartyState', resetOut);
-          void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:watchPartyState', payload: resetOut }).catch(() => undefined);
+          void this.presenceBus.publishEmitToRoom({ room, event: 'spaces:watchPartyState', payload: resetOut }).catch(() => undefined);
         }
       }
     }
@@ -850,7 +853,7 @@ export class SpacesGatewayHandler {
 
     const room = spaceRoom(spaceId);
     this.context.server.to(room).emit('spaces:modeChanged', out);
-    void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:modeChanged', payload: out }).catch(() => undefined);
+    void this.presenceBus.publishEmitToRoom({ room, event: 'spaces:modeChanged', payload: out }).catch(() => undefined);
 
     // Re-broadcast members with cleared pause flags if any were changed.
     if (pauseCleared.length > 0) {
@@ -883,7 +886,7 @@ export class SpacesGatewayHandler {
     if (mode !== 'WATCH_PARTY') return;
 
     const userId =
-      (client.data as { userId?: string })?.userId ??
+      socketData(client).userId ??
       this.presence.getUserIdForSocket(client.id) ??
       null;
     if (!userId) return;
@@ -909,6 +912,6 @@ export class SpacesGatewayHandler {
     const room = spaceRoom(spaceId);
     const out = { spaceId, ...state };
     this.context.server.to(room).emit('spaces:watchPartyState', out);
-    void this.presenceRedis.publishEmitToRoom({ room, event: 'spaces:watchPartyState', payload: out }).catch(() => undefined);
+    void this.presenceBus.publishEmitToRoom({ room, event: 'spaces:watchPartyState', payload: out }).catch(() => undefined);
   }
 }

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { ChannelAccessService } from './channel-access.service';
 import { ChannelAttentionService } from './channel-attention.service';
-import { ChannelMessagesService } from './channel-messages.service';
+import { makeChannelMessages } from './channel-messages.testing';
 import { ChannelsService } from './channels.service';
 import { provisionDefaultChannels } from './channel-provisioning';
 import { prepareChannelDeparture } from './channel-lifecycle';
@@ -20,7 +20,7 @@ const enabled = url && new URL(url).hostname === '127.0.0.1' && new URL(url).pat
   const access = new ChannelAccessService(db as any, config);
   const channels = new ChannelsService(db as any, access, realtime, effects);
   const attention = new ChannelAttentionService(db as any, access, channels, effects, { onlineUserIds: async () => [] } as any);
-  const messages = new ChannelMessagesService(db as any, access, channels, attention, config, realtime, {} as any, effects);
+  const { reader, writer: messages } = makeChannelMessages({ prisma: db as any, access, channels, attention, config, realtime, media: {} as any, effects });
   let group: string, owner: string, member: string, moderator: string, general: string, announcements: string;
   beforeEach(async () => {
     const suffix = randomUUID().slice(0, 8);
@@ -64,12 +64,12 @@ const enabled = url && new URL(url).hostname === '127.0.0.1' && new URL(url).pat
     const privateChannel = await channels.create(owner, group, { name: 'leaders', privacy: 'private' });
     await send(owner, privateChannel.id, 'Private retained history');
     expect((await channels.list(moderator, group)).map(row => row.id)).not.toContain(privateChannel.id);
-    await expect(messages.search(moderator, group, { q: 'Private', channelId: privateChannel.id })).rejects.toThrow('unavailable');
-    expect((await messages.search(moderator, group, { q: 'Private retained' })).messages).toHaveLength(0);
-    expect((await messages.search(owner, group, { q: 'Private retained' })).messages).toMatchObject([{ channelId: privateChannel.id }]);
+    await expect(reader.search(moderator, group, { q: 'Private', channelId: privateChannel.id })).rejects.toThrow('unavailable');
+    expect((await reader.search(moderator, group, { q: 'Private retained' })).messages).toHaveLength(0);
+    expect((await reader.search(owner, group, { q: 'Private retained' })).messages).toMatchObject([{ channelId: privateChannel.id }]);
     await expect(channels.details(moderator, group, privateChannel.id)).rejects.toThrow('unavailable');
     await db.communityGroupMember.update({ where: { groupId_userId: { groupId: group, userId: member } }, data: { status: 'pending' } });
-    await expect(messages.list(member, group, general, {})).rejects.toThrow('unavailable');
+    await expect(reader.list(member, group, general, {})).rejects.toThrow('unavailable');
     await db.user.update({ where: { id: moderator }, data: { verifiedStatus: 'none' } });
     await expect(channels.list(moderator, group)).rejects.toThrow('unavailable');
   });
@@ -98,7 +98,7 @@ const enabled = url && new URL(url).hostname === '127.0.0.1' && new URL(url).pat
     expect(await access.personalCount(member, group)).toBe(1);
     await db.userBlock.create({ data: { blockerId: member, blockedId: owner } });
     expect(await access.personalCount(member, group)).toBe(0);
-    expect(await messages.personal(member, group)).toHaveLength(0);
+    expect(await reader.personal(member, group)).toHaveLength(0);
     expect((await channels.details(member, group, general)).personalCount).toBe(0);
     await db.userBlock.delete({ where: { blockerId_blockedId: { blockerId: member, blockedId: owner } } });
     await db.userMute.create({ data: { muterId: member, mutedId: owner } });
@@ -114,13 +114,13 @@ const enabled = url && new URL(url).hostname === '127.0.0.1' && new URL(url).pat
     const retained = await send(owner, channel.id, 'Retained');
     await expect(channels.addMember(owner, group, channel.id, member, false)).rejects.toThrow('history');
     await channels.addMember(owner, group, channel.id, member, true);
-    expect((await messages.list(member, group, channel.id, {})).messages[0].id).toBe(retained.id);
+    expect((await reader.list(member, group, channel.id, {})).messages[0].id).toBe(retained.id);
     await db.$transaction(async tx => {
       await prepareChannelDeparture(tx, group, member, { forced: false });
       await tx.communityGroupMember.delete({ where: { groupId_userId: { groupId: group, userId: member } } });
     });
     await db.communityGroupMember.create({ data: { groupId: group, userId: member, status: 'active', role: 'member' } });
-    await expect(messages.context(member, group, channel.id, retained.id)).rejects.toThrow('unavailable');
+    await expect(reader.context(member, group, channel.id, retained.id)).rejects.toThrow('unavailable');
   });
   it('blocks voluntary loss of the last private leader but archives on forced loss', async () => {
     const channel = await channels.create(owner, group, { name: 'sole-leader', privacy: 'private' });
@@ -144,10 +144,10 @@ const enabled = url && new URL(url).hostname === '127.0.0.1' && new URL(url).pat
     await send(member, general, 'Retain my reply', root.id);
     await messages.pin(owner, group, general, root.id, true);
     await messages.delete(owner, group, general, root.id);
-    expect((await messages.context(member, group, general, root.id)).messages.find(row => row.id === root.id)).toMatchObject({ body: '', deletedForAll: true });
-    expect((await messages.list(member, group, general, { root: root.id })).messages).toHaveLength(1);
-    expect((await messages.search(member, group, { q: 'Find this', channelId: general })).messages).toHaveLength(0);
-    expect(await messages.pins(member, group, general)).toHaveLength(0);
+    expect((await reader.context(member, group, general, root.id)).messages.find(row => row.id === root.id)).toMatchObject({ body: '', deletedForAll: true });
+    expect((await reader.list(member, group, general, { root: root.id })).messages).toHaveLength(1);
+    expect((await reader.search(member, group, { q: 'Find this', channelId: general })).messages).toHaveLength(0);
+    expect(await reader.pins(member, group, general)).toHaveLength(0);
   });
   it('returns every change after a revision for reconnect catch-up, including tombstones', async () => {
     const reacted = await send(owner, general, 'React to me while offline');
@@ -156,20 +156,20 @@ const enabled = url && new URL(url).hostname === '127.0.0.1' && new URL(url).pat
     const added = await send(member, general, 'Sent while offline');
     await messages.reaction(member, group, general, reacted.id, 'check', true);
     await messages.delete(owner, group, general, removed.id);
-    const changes = await messages.list(member, group, general, { changedSince: seen });
+    const changes = await reader.list(member, group, general, { changedSince: seen });
     expect(changes.messages.map(row => row.id)).toEqual([added.id, reacted.id, removed.id]);
     expect(changes.messages.at(-1)).toMatchObject({ deletedForAll: true, body: '' });
-    expect((await messages.list(member, group, general, { changedSince: seen, limit: 2 })).nextCursor).toBe(changes.messages[1]!.revision);
+    expect((await reader.list(member, group, general, { changedSince: seen, limit: 2 })).nextCursor).toBe(changes.messages[1]!.revision);
   });
   it('omits deleted replies and deleted roots once no reply remains', async () => {
     const root = await send(owner, general, 'Root to remove');
     const reply = await send(member, general, 'Reply to remove', root.id);
     await messages.delete(owner, group, general, root.id);
-    expect((await messages.list(member, group, general, {})).messages.map(row => row.id)).toContain(root.id);
+    expect((await reader.list(member, group, general, {})).messages.map(row => row.id)).toContain(root.id);
     await messages.delete(member, group, general, reply.id);
-    expect((await messages.list(member, group, general, { root: root.id })).messages).toHaveLength(0);
-    expect((await messages.list(member, group, general, {})).messages.map(row => row.id)).not.toContain(root.id);
-    await expect(messages.context(member, group, general, root.id)).rejects.toThrow('unavailable');
+    expect((await reader.list(member, group, general, { root: root.id })).messages).toHaveLength(0);
+    expect((await reader.list(member, group, general, {})).messages.map(row => row.id)).not.toContain(root.id);
+    await expect(reader.context(member, group, general, root.id)).rejects.toThrow('unavailable');
   });
   it('enforces MARV retrieval scope against real private grants and cancels after removal', async () => {
     await db.user.update({ where: { id: owner }, data: { premium: true } });

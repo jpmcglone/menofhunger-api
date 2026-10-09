@@ -1,27 +1,24 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import type { AdminOperationsHealthDto } from '../../common/dto/admin-operations.dto';
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import type {
-  AdminActivationDto,
-  AdminAttentionDto,
-  AdminAttentionItemDto,
-  AdminAttentionPulseDto,
-} from '../../common/dto/admin-engagement.dto';
+import type { AdminActivationDto, AdminAttentionDto, AdminAttentionItemDto, AdminAttentionPulseDto } from '../../common/dto/admin-engagement.dto';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 const MS_DAY = 86400000;
 const PULSE_WINDOW_DAYS = 7;
 const PREVIEW_LIMIT = 8;
 const memberAuthor: Prisma.UserWhereInput = {
-  isBot: false, bannedAt: null, accountKind: 'person', siteAdmin: false,
+  isBot: false, ...NOT_BANNED_USER_WHERE, accountKind: 'person', siteAdmin: false,
 };
-const humanAuthor: Prisma.UserWhereInput = { isBot: false, bannedAt: null };
+const humanAuthor: Prisma.UserWhereInput = { isBot: false, ...NOT_BANNED_USER_WHERE };
 const publicRoot: Prisma.PostWhereInput = {
   visibility: 'public', communityGroupId: null, parentId: null, kind: 'regular',
-  isDraft: false, deletedAt: null,
+  isDraft: false, ...NOT_DELETED,
 };
-const humanReply: Prisma.PostWhereInput = { isDraft: false, deletedAt: null, user: humanAuthor };
+const humanReply: Prisma.PostWhereInput = { isDraft: false, ...NOT_DELETED, user: humanAuthor };
 
 export function utcDayMs(value: Date): number {
   return Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
@@ -103,10 +100,10 @@ export class AdminEngagementService {
         orderBy: { createdAt: "asc" },
         select: { createdAt: true },
       }),
-      this.postsRead.read.count({
+      this.postsRead.count({
         where: {
           isDraft: true,
-          deletedAt: null,
+          ...NOT_DELETED,
           scheduledAt: { not: null },
           scheduledFailedAt: { not: null },
         },
@@ -140,12 +137,12 @@ export class AdminEngagementService {
       replies: { none: humanReply },
     };
     const previewSelect = { id: true, body: true, createdAt: true, user: { select: { username: true } } };
-    const pendingVerification = { status: 'pending' as const, user: { bannedAt: null, verifiedStatus: 'none' as const } };
+    const pendingVerification = { status: 'pending' as const, user: { ...NOT_BANNED_USER_WHERE, verifiedStatus: 'none' as const } };
     const [health, verification, unanswered, memberPreview, oldestVerification, roots, lodge] = await Promise.all([
       this.health(),
       this.prisma.verificationRequest.count({ where: pendingVerification }),
-      this.postsRead.read.count({ where: unansweredWhere }),
-      this.postsRead.read.findMany({
+      this.postsRead.count({ where: unansweredWhere }),
+      this.postsRead.findMany({
         where: { ...unansweredWhere, user: memberAuthor },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         take: PREVIEW_LIMIT,
@@ -156,7 +153,7 @@ export class AdminEngagementService {
         orderBy: { createdAt: 'asc' },
         select: { createdAt: true },
       }),
-      this.postsRead.read.findMany({
+      this.postsRead.findMany({
         where: { ...publicRoot, createdAt: { gte: since, lte: now }, user: memberAuthor },
         select: {
           userId: true,
@@ -164,13 +161,13 @@ export class AdminEngagementService {
           replies: { where: humanReply, orderBy: { createdAt: 'asc' }, take: 1, select: { createdAt: true } },
         },
       }),
-      this.postsRead.read.findFirst({
+      this.postsRead.findFirst({
         where: { ...publicRoot, createdAt: { gte: since, lte: now }, user: { username: 'menofhunger' } },
         orderBy: { createdAt: 'desc' },
         select: { id: true, replies: { where: humanReply, select: { id: true } } },
       }),
     ]);
-    const otherPreview = memberPreview.length >= PREVIEW_LIMIT ? [] : await this.postsRead.read.findMany({
+    const otherPreview = memberPreview.length >= PREVIEW_LIMIT ? [] : await this.postsRead.findMany({
       where: {
         ...unansweredWhere,
         user: { ...humanAuthor, OR: [{ siteAdmin: true }, { accountKind: { not: 'person' } }] },

@@ -1,3 +1,5 @@
+import { NOT_BANNED_USER_WHERE } from '../../../common/prisma-selects/user.where';
+import { USER_BRIEF_SELECT } from '../../../common/prisma-selects/user.select';
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../prisma/prisma.service";
 
@@ -9,9 +11,7 @@ export class DelegationPolicyService {
     const owner = await this.prisma.user.findUnique({
       where: { id: ownerId },
       select: {
-        id: true,
-        username: true,
-        name: true,
+        ...USER_BRIEF_SELECT,
         accountKind: true,
         siteAdmin: true,
         bannedAt: true,
@@ -31,11 +31,11 @@ export class DelegationPolicyService {
     const pages = await this.prisma.userPageOperator.findMany({
       where: {
         operatorUserId: ownerId,
-        page: { bannedAt: null, accountKind: "page" },
+        page: { ...NOT_BANNED_USER_WHERE, accountKind: "page" },
       },
       select: {
         page: {
-          select: { id: true, username: true, name: true, accountKind: true },
+          select: { ...USER_BRIEF_SELECT, accountKind: true },
         },
       },
       orderBy: { createdAt: "asc" },

@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
+import { NOT_DELETED } from './prisma/where';
 
 /**
  * Canonical authored-post total: every published, non-deleted post regardless
@@ -17,7 +18,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 export function totalUserPostsWhere(userId: string): Prisma.PostWhereInput {
   return {
     userId,
-    deletedAt: null,
+    ...NOT_DELETED,
     isDraft: false,
     visibility: { not: 'onlyMe' },
     boardOnly: false,
@@ -28,7 +29,7 @@ export function totalUserPostsWhere(userId: string): Prisma.PostWhereInput {
 export function totalUserArticlesWhere(authorId: string): Prisma.ArticleWhereInput {
   return {
     authorId,
-    deletedAt: null,
+    ...NOT_DELETED,
     isDraft: false,
     publishedAt: { not: null },
   };
@@ -41,7 +42,7 @@ export function totalUserArticlesWhere(authorId: string): Prisma.ArticleWhereInp
 export function totalPostCommentsWhere(parentId: string): Prisma.PostWhereInput {
   return {
     parentId,
-    deletedAt: null,
+    ...NOT_DELETED,
     isDraft: false,
   };
 }
@@ -55,7 +56,7 @@ export async function totalUserBoardPoints(
   userId: string,
 ): Promise<number> {
   const result = await prisma.post.aggregate({
-    where: { userId, kind: 'board', deletedAt: null, isDraft: false },
+    where: { userId, kind: 'board', ...NOT_DELETED, isDraft: false },
     _sum: { boostCount: true },
   });
   return Math.max(0, result._sum.boostCount ?? 0);

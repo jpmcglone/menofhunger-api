@@ -1,4 +1,5 @@
-import { SpacesService } from './spaces.service';
+import { makeSpacesService } from './spaces.testing';
+import { SpacesViewService } from './spaces-view.service';
 
 function build(overrides: {
   prisma?: Record<string, any>;
@@ -65,7 +66,7 @@ function build(overrides: {
   };
 
   const posthog = { capture: jest.fn(), ...overrides.posthog };
-  const service = new SpacesService(
+  const service = makeSpacesService(
     prisma,
     appConfig as any,
     spacesPresence as any,
@@ -618,9 +619,9 @@ describe('SpacesService.listLobbySpaces', () => {
   });
 });
 
-describe('SpacesService.countNonOwnerSubscribers', () => {
+describe('SpacesViewService.countNonOwnerSubscribers', () => {
   it('counts where userId is not the owner', async () => {
-    const { service, prisma } = build({
+    const { prisma } = build({
       prisma: {
         spaceScheduleSubscriber: {
           count: jest.fn(async () => 3),
@@ -630,7 +631,8 @@ describe('SpacesService.countNonOwnerSubscribers', () => {
         },
       },
     });
-    await expect(service.countNonOwnerSubscribers('space-1', 'owner-1')).resolves.toBe(3);
+    const view = new SpacesViewService(prisma, { r2: () => null } as any, {} as any, {} as any, {} as any);
+    await expect(view.countNonOwnerSubscribers('space-1', 'owner-1')).resolves.toBe(3);
     expect(prisma.spaceScheduleSubscriber.count).toHaveBeenCalledWith({
       where: { spaceId: 'space-1', userId: { not: 'owner-1' } },
     });

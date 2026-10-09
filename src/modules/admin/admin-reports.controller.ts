@@ -6,21 +6,7 @@ import { AdminGuard, type AdminRequest } from './admin.guard';
 import { ReportsService } from '../reports/reports.service';
 import { toReportAdminDto } from '../../common/dto';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
-
-const listSchema = z.object({
-  q: z.string().trim().max(200).optional(),
-  status: z.enum(['pending', 'dismissed', 'actionTaken']).optional(),
-  targetType: z.enum(['post', 'user', 'message', 'article']).optional(),
-  reason: z.enum(['spam', 'harassment', 'hate', 'sexual', 'violence', 'illegal', 'other']).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-  cursor: z.string().optional(),
-  sort: z.enum(['newest', 'likely']).optional(),
-});
-
-export const updateSchema = z.object({
-  status: z.enum(['pending', 'dismissed', 'actionTaken']).optional(),
-  adminNote: z.union([z.string().trim().max(2000), z.null()]).optional(),
-});
+import { listSchema, updateSchema } from './admin-reports.schemas';
 
 @UseGuards(AdminGuard)
 @Controller('admin/reports')

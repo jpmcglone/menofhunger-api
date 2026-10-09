@@ -1,7 +1,8 @@
+import { socketData } from './gateway-socket-data';
 import { Injectable, Logger } from '@nestjs/common';
 import type { Socket } from 'socket.io';
 import { AppConfigService } from '../../app/app-config.service';
-import { AuthService } from '../../auth/auth.service';
+import { AuthService } from '../../auth/auth-public-api';
 import { FollowsService } from '../../follows/follows.service';
 import type { FollowListUser } from '../../follows/follows.service';
 import { MarvinBotIdentityService } from '../../marvin/services/marvin-bot-identity.service';
@@ -13,12 +14,15 @@ import { WsEventNames } from '../../../common/dto/realtime.dto';
 import { parseSessionCookieFromHeader } from '../../../common/session-cookie';
 import { sanitizeAnonViewerId } from '../../views/view-tracking.utils';
 import { PresenceService } from '../presence.service';
+import { PresenceAnonymousStateService } from '../presence-anonymous-state.service';
+import { PresenceLobbyStateService } from '../presence-lobby-state.service';
+import { PresenceRedisReadService } from '../presence-redis-read.service';
 import { PresenceRedisStateService } from '../presence-redis-state.service';
 import { GatewayContextService } from './gateway-context.service';
 import { GatewayThrottleService } from './gateway-throttle.service';
-import { AccountSwitchService } from '../../auth/account-switch.service';
+import { AccountSwitchService } from '../../auth/auth-public-api';
 import { CallSessionStore } from '../../calls/call-session.store';
-import { canSeeMembers } from '../../auth/member-visibility';
+import { canSeeMembers } from '../../auth/auth-public-api';
 import { OnlineMembersService } from '../online-members.service';
 import { SideEffectsService } from '../../side-effects/side-effects.service';
 
@@ -55,6 +59,9 @@ export class PresenceStatusHandler {
     private readonly auth: AuthService,
     private readonly presence: PresenceService,
     private readonly presenceRedis: PresenceRedisStateService,
+    private readonly presenceRead: PresenceRedisReadService,
+    private readonly presenceAnon: PresenceAnonymousStateService,
+    private readonly presenceLobby: PresenceLobbyStateService,
     private readonly follows: FollowsService,
     private readonly redis: RedisService,
     private readonly spacesPresence: SpacesPresenceService,
@@ -74,7 +81,7 @@ export class PresenceStatusHandler {
     // Event handlers that need client.data.userId must await __ready first,
     // because Socket.IO dispatches events before handleConnection resolves.
     let resolveReady!: () => void;
-    (client.data as any).__ready = new Promise<void>((resolve) => {
+    socketData(client).__ready = new Promise<void>((resolve) => {
       resolveReady = resolve;
     });
 
@@ -88,7 +95,7 @@ export class PresenceStatusHandler {
   private async handleConnectionInner(client: Socket): Promise<void> {
     const cookieHeader = client.handshake.headers.cookie as string | undefined;
     const token = parseSessionCookieFromHeader(cookieHeader);
-    let user: any = null;
+    let user: NonNullable<Awaited<ReturnType<AuthService['meFromSessionToken']>>>['user'] | null = null;
     // True when a site admin is driving this socket via impersonation. Such a socket must
     // still be registered (that's how `emitToUser` reaches it, so the admin sees live
     // updates), but it must not write activity to the target's account or announce them
@@ -139,7 +146,7 @@ export class PresenceStatusHandler {
         this.presence.persistDailyActivity(userId);
       }
     } else if (anonId) {
-      const registration = await this.presenceRedis.registerAnonSocket({
+      const registration = await this.presenceAnon.registerAnonSocket({
         socketId: client.id,
         anonId,
         client: String(clientType),
@@ -147,29 +154,30 @@ export class PresenceStatusHandler {
       isNewlyAnonymous = Boolean(registration?.isNewlyOnline);
     }
 
-    (client.data as { userId?: string; presenceClient?: string; anonId?: string }).userId = userId ?? undefined;
-    (client.data as { userId?: string; presenceClient?: string; anonId?: string }).anonId = anonId ?? undefined;
-    (client.data as { userId?: string; presenceClient?: string }).presenceClient = String(clientType);
-    (client.data as { impersonated?: boolean }).impersonated = impersonated;
-    (client.data as any).viewer = {
+    socketData(client).userId = userId ?? undefined;
+    socketData(client).anonId = anonId ?? undefined;
+    socketData(client).presenceClient = String(clientType);
+    socketData(client).impersonated = impersonated;
+    socketData(client).viewer = {
       verified: Boolean(userId && user?.verifiedStatus && user.verifiedStatus !== 'none'),
       premium: Boolean(userId && user?.premium),
-      premiumPlus: Boolean(userId && (user as any)?.premiumPlus),
-      isOrganization: Boolean(userId && (user as any)?.isOrganization),
+      premiumPlus: Boolean(userId && user?.premiumPlus),
+      isOrganization: Boolean(userId && user?.isOrganization),
       verifiedStatus: ((userId ? user?.verifiedStatus : 'none') ?? 'none') as 'none' | 'identity' | 'manual',
-      siteAdmin: Boolean(userId && (user as any)?.siteAdmin),
+      siteAdmin: Boolean(userId && user?.siteAdmin),
     };
-    (client.data as any).radioChatUser = {
+    const chatUser = {
       id: userId ?? '',
-      username: (user?.username ?? null) as string | null,
+      username: user?.username ?? null,
       premium: Boolean(userId && user?.premium),
-      premiumPlus: Boolean(userId && (user as any)?.premiumPlus),
-      isOrganization: Boolean(userId && (user as any)?.isOrganization),
+      premiumPlus: Boolean(userId && user?.premiumPlus),
+      isOrganization: Boolean(userId && user?.isOrganization),
       verifiedStatus: ((userId ? user?.verifiedStatus : 'none') ?? 'none') as 'none' | 'identity' | 'manual',
-    } satisfies RadioChatSenderDto;
-    (client.data as any).spaceChatUser = (client.data as any).radioChatUser satisfies SpaceChatSenderDto;
-    (client.data as any).postSubs = new Set<string>();
-    (client.data as any).articleSubs = new Set<string>();
+    } satisfies RadioChatSenderDto & SpaceChatSenderDto;
+    socketData(client).radioChatUser = chatUser;
+    socketData(client).spaceChatUser = chatUser;
+    socketData(client).postSubs = new Set<string>();
+    socketData(client).articleSubs = new Set<string>();
     if (this.context.logPresenceVerbose) {
       this.logger.debug(`[presence] CONNECT socket=${client.id} userId=${userId ?? 'anon'} isNewlyOnline=${isNewlyOnline}`);
     }
@@ -181,7 +189,7 @@ export class PresenceStatusHandler {
         // Live aggregate — never seed from the Redis snapshot alone (it can linger
         // after lobbies empty and inflate the Spaces nav "(N)" count).
         const local = this.spacesPresence.getLobbyCountsBySpaceId();
-        const countsBySpaceId = await this.presenceRedis.syncAndAggregateLobbyCounts(local);
+        const countsBySpaceId = await this.presenceLobby.syncAndAggregateLobbyCounts(local);
         void this.redis
           .setJson(RedisKeys.spacesLobbyCounts(), countsBySpaceId, { ttlSeconds: 30 })
           .catch(() => undefined);
@@ -214,10 +222,10 @@ export class PresenceStatusHandler {
     // Anonymous sockets never reach presence.unregister, so drop their feed subscription here.
     this.presence.unsubscribeOnlineFeed(socketId);
     let result: { userId?: string | null; isNowOffline?: boolean } | null = null;
-    const hadUser = Boolean((client.data as { userId?: string }).userId);
+    const hadUser = Boolean(socketData(client).userId);
     if (hadUser) {
       try {
-        result = this.presence.unregister(socketId) as any;
+        result = this.presence.unregister(socketId);
       } catch (err) {
         this.logger.warn(
           `[presence] disconnect unregister failed socket=${socketId}: ${err instanceof Error ? err.message : String(err)}`,
@@ -231,9 +239,9 @@ export class PresenceStatusHandler {
       );
     }
 
-    const anonId = String((client.data as { anonId?: string }).anonId ?? '').trim();
+    const anonId = String(socketData(client).anonId ?? '').trim();
     if (anonId) {
-      void this.presenceRedis
+      void this.presenceAnon
         .unregisterAnonSocket({ socketId, anonId })
         .then(async (r) => {
           if (r?.isNowOffline) await this.emitAnonymousCount();
@@ -246,7 +254,7 @@ export class PresenceStatusHandler {
     // Mirror of the connect path: an impersonated socket never wrote to Redis
     // (online zset, socket set), so there is nothing to unregister there and
     // no offline fan-out to emit.
-    const impersonated = Boolean((client.data as { impersonated?: boolean }).impersonated);
+    const impersonated = Boolean(socketData(client).impersonated);
     const nonceAtDisconnect = this.userPresenceNonce.get(userId) ?? 0;
     this.throttle.clearTypingThrottleForUser(userId);
     if (impersonated) return;
@@ -276,7 +284,7 @@ export class PresenceStatusHandler {
   private async onlineCounts(): Promise<{ totalOnline: number; anonymousOnline: number }> {
     const [roster, anonymousOnline] = await Promise.all([
       this.onlineMembers.resolve(),
-      this.presenceRedis.anonymousOnlineCount(),
+      this.presenceRead.anonymousOnlineCount(),
     ]);
     return { totalOnline: roster.total, anonymousOnline };
   }
@@ -303,7 +311,7 @@ export class PresenceStatusHandler {
     const count =
       typeof anonymousOnline === 'number' && Number.isFinite(anonymousOnline)
         ? Math.max(0, Math.floor(anonymousOnline))
-        : await this.presenceRedis.anonymousOnlineCount();
+        : await this.presenceRead.anonymousOnlineCount();
     this.context.emitToSockets(targets, 'presence:anonymous-count', { anonymousOnline: count });
   }
 
@@ -339,9 +347,9 @@ export class PresenceStatusHandler {
     }
 
     const [lastConnectAtById, idleById, platformsById] = await Promise.all([
-      this.presenceRedis.lastConnectAtMsByUserId([sourceId]),
-      this.presenceRedis.idleByUserIds([sourceId]),
-      this.presenceRedis.platformsByUserIds([sourceId]),
+      this.presenceRead.lastConnectAtMsByUserId([sourceId]),
+      this.presenceRead.idleByUserIds([sourceId]),
+      this.presenceRead.platformsByUserIds([sourceId]),
     ]);
     const lastConnectAt = lastConnectAtById.get(sourceId) ?? Date.now();
     const idle = idleById.get(sourceId) ?? this.presence.isUserIdle(sourceId);
@@ -357,7 +365,7 @@ export class PresenceStatusHandler {
     const targets = this.presence.getOnlineFeedListeners();
     if (targets.size === 0) return;
     const platforms =
-      authoritativePlatforms ?? (await this.presenceRedis.platformsByUserIds([userId])).get(userId) ?? [];
+      authoritativePlatforms ?? (await this.presenceRead.platformsByUserIds([userId])).get(userId) ?? [];
     this.context.emitToSockets(targets, 'presence:platforms-changed', {
       userId,
       platforms,
@@ -396,7 +404,7 @@ export class PresenceStatusHandler {
   async emitOffline(userId: string): Promise<void> {
     const cluster = await this.accountSwitch.presenceClusterByUserId([userId]);
     const members = cluster.get(userId) ?? [userId];
-    const onlineById = await this.presenceRedis.onlineByUserIds(members);
+    const onlineById = await this.presenceRead.onlineByUserIds(members);
     if ([...onlineById.values()].some(Boolean)) return;
     this.scheduleCountOnlyUpdate();
     for (const displayedId of members) {
@@ -425,7 +433,7 @@ export class PresenceStatusHandler {
 
   async handleSubscribe(client: Socket, payload: { userIds?: string[] }): Promise<void> {
     // Presence subscriptions require an authenticated session.
-    if (!(client.data as any).userId) return;
+    if (!socketData(client).userId) return;
 
     const userIds = Array.isArray(payload?.userIds) ? payload.userIds : [];
     if (this.context.logPresenceVerbose) {
@@ -436,8 +444,8 @@ export class PresenceStatusHandler {
     if (added.length > 0) {
       const clusters = await this.accountSwitch.presenceClusterByUserId(added);
       const clusterIds = [...new Set(added.flatMap((uid) => clusters.get(uid) ?? [uid]))];
-      const idleById = await this.presenceRedis.idleByUserIds(clusterIds);
-      const onlineById = await this.presenceRedis.onlineByUserIds(clusterIds);
+      const idleById = await this.presenceRead.idleByUserIds(clusterIds);
+      const onlineById = await this.presenceRead.onlineByUserIds(clusterIds);
       const statusesById = new Map((await this.presence.getActiveStatuses(added)).map((status) => [status.userId, status]));
       const users = added.map((uid) => {
         const members = clusters.get(uid) ?? [uid];
@@ -463,8 +471,8 @@ export class PresenceStatusHandler {
   }
 
   async handleSubscribeOnlineFeed(client: Socket): Promise<void> {
-    await ((client.data as { __ready?: Promise<void> }).__ready)?.catch?.(() => undefined);
-    const viewer = (client.data as { viewer?: Parameters<typeof canSeeMembers>[0] }).viewer;
+    await (socketData(client).__ready)?.catch?.(() => undefined);
+    const viewer = socketData(client).viewer;
     if (!canSeeMembers(viewer)) {
       this.presence.subscribeOnlineFeed(client.id, { countOnly: true });
       const counts = await this.onlineCounts();
@@ -481,12 +489,12 @@ export class PresenceStatusHandler {
     // The shared roster keeps this snapshot's total identical to REST and the map.
     const [roster, anonymousOnline] = await Promise.all([
       this.onlineMembers.resolve(),
-      this.presenceRedis.anonymousOnlineCount(),
+      this.presenceRead.anonymousOnlineCount(),
     ]);
     const { connectedIds, memberIds: userIds, sourceByDisplayedId, marvId } = roster;
     // Per-client snapshot — include this socket's follow relationships so
     // /online does not paint "Follow" on people the viewer already follows.
-    const viewerUserId = String((client.data as { userId?: string }).userId ?? '').trim() || null;
+    const viewerUserId = String(socketData(client).userId ?? '').trim() || null;
     if (roster.total === 0) {
       client.emit('presence:onlineFeedSnapshot', { users: [], totalOnline: 0, anonymousOnline, membersVisible: true });
       return;
@@ -499,9 +507,9 @@ export class PresenceStatusHandler {
           })
         : [];
       const [lastConnectAtById, idleById, platformsById, inCallIds] = await Promise.all([
-        this.presenceRedis.lastConnectAtMsByUserId(connectedIds),
-        this.presenceRedis.idleByUserIds(connectedIds),
-        this.presenceRedis.platformsByUserIds(connectedIds),
+        this.presenceRead.lastConnectAtMsByUserId(connectedIds),
+        this.presenceRead.idleByUserIds(connectedIds),
+        this.presenceRead.platformsByUserIds(connectedIds),
         this.callSessions.inCallByUserIds(userIds),
       ]);
       const statusesById = new Map((await this.presence.getActiveStatuses(userIds)).map((status) => [status.userId, status]));
@@ -588,7 +596,7 @@ export class PresenceStatusHandler {
   handleIdle(client: Socket): void {
     // Impersonated sockets never wrote to Redis, so idle/active state changes
     // for the target user must be ignored entirely.
-    if ((client.data as any).impersonated) return;
+    if (socketData(client).impersonated) return;
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return;
     this.presence.setUserIdle(userId);
@@ -600,11 +608,11 @@ export class PresenceStatusHandler {
   handleActive(client: Socket): void {
     // Impersonated sockets must not update the target's last-seen / daily-activity
     // or flip their idle/active state — the admin's activity is not the user's.
-    if ((client.data as any).impersonated) return;
+    if (socketData(client).impersonated) return;
     const userId = this.presence.getUserIdForSocket(client.id);
     if (!userId) return;
     this.presence.setLastActivity(userId);
-    const presenceClient = (client.data as { presenceClient?: string } | undefined)?.presenceClient ?? 'web';
+    const presenceClient = socketData(client).presenceClient ?? 'web';
     void this.presenceRedis.touchSocket({ socketId: client.id, userId, client: presenceClient }).catch(() => undefined);
     this.presence.persistLastSeenAt(userId);
     this.presence.persistDailyActivity(userId);

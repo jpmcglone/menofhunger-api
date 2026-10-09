@@ -220,14 +220,14 @@ describe('buildAttachParentChain — embedded-post viewer state (Phase 1)', () =
 
 describe('allPostIds includes embedded post IDs (source guardrail)', () => {
   const feedQuerySource = require('node:fs').readFileSync(
-    require('node:path').join(__dirname, 'posts-feed-listings.service.ts'),
+    require('node:path').join(__dirname, 'posts-feed-compose.service.ts'),
     'utf8',
   );
   const lookupSource = require('node:fs').readFileSync(
     require('node:path').join(__dirname, 'posts-feed-lookup.service.ts'),
     'utf8',
   );
-  const controllerSource = ['posts.controller.ts', 'posts-get.query.ts', 'posts-list.query.ts']
+  const controllerSource = ['posts.controller.ts', 'posts-profile.controller.ts', 'posts-thread.controller.ts', 'posts-permalink.service.ts', 'posts-list-query.service.ts']
     .map((file) => require('node:fs').readFileSync(require('node:path').join(__dirname, file), 'utf8'))
     .join('\n');
 
@@ -244,21 +244,21 @@ describe('allPostIds includes embedded post IDs (source guardrail)', () => {
   });
 
   it('profile feed path uses composeFeedPostDtos', () => {
-    expect(controllerSource).toContain('this.posts.composeFeedPostDtos');
+    expect(controllerSource).toContain('this.postsCompose.composeFeedPostDtos');
     expect(controllerSource).not.toContain('repostedPostMapUser.keys()');
   });
 
   it('permalink getById batches ancestors instead of walking getById per parent', () => {
     expect(controllerSource).toContain('collectAncestorPostIds');
     expect(controllerSource).toContain('loadPermalinkRelatedPosts');
-    expect(controllerSource).not.toContain('current = await this.posts.getById({ viewerUserId, id: parentId })');
+    expect(controllerSource).not.toContain('current = await this.postsLookup.getById({ viewerUserId, id: parentId })');
   });
 
   it('permalink overlays load in one Promise.all', () => {
     const overlayStart = controllerSource.indexOf('quotedPostByIdPermalink');
     const snippet = controllerSource.slice(overlayStart, overlayStart + 1400);
     expect(snippet).toContain('await Promise.all([');
-    expect(snippet).toContain('communityGroupPreviewMapForIds');
+    expect(snippet).toContain('communityGroupPreviewMapForFeed');
     expect(snippet).toContain('viewerBoostedPostIds');
     expect(snippet).toContain('viewerBookmarksByPostId');
     expect(snippet).toContain('viewerVotedPollOptionIdByPostId');
@@ -285,7 +285,7 @@ describe('allPostIds includes embedded post IDs (source guardrail)', () => {
 
 describe('authenticated post-view batch writes (source guardrail)', () => {
   const viewsSource = require('node:fs').readFileSync(
-    require('node:path').join(__dirname, '../post-views/post-views.service.ts'),
+    require('node:path').join(__dirname, '../post-views/post-views-batch.service.ts'),
     'utf8',
   );
 
@@ -294,10 +294,10 @@ describe('authenticated post-view batch writes (source guardrail)', () => {
     expect(viewsSource).toContain('createManyAndReturn');
     const batchFn = viewsSource.slice(
       viewsSource.indexOf('async markViewedBatch('),
-      viewsSource.indexOf('async expandViewTargetIds('),
+      viewsSource.indexOf('async markAnonymousViewsBatch('),
     );
     expect(batchFn).toContain('if (uid)');
-    expect(batchFn).toContain('this.markAuthenticatedViewsBatch');
+    expect(batchFn).toContain('markAuthenticatedViewsBatch(');
     expect(batchFn).not.toContain('expanded.map((pid) => this.markViewed(uid');
   });
 });

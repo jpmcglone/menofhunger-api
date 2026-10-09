@@ -3,8 +3,8 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RequestCacheService } from '../../common/cache/request-cache.service';
 import { ViewerContextService, type ViewerContext } from '../viewer/viewer-context.service';
-import { RedisService } from '../redis/redis.service';
-import { RedisKeys } from '../redis/redis-keys';
+import { ViewerBlockSetsService } from '../viewer/viewer-block-sets.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 /**
  * Viewer-scoped post enrichment: which posts the viewer boosted / reposted /
@@ -17,7 +17,7 @@ export class PostsViewerEnrichmentService {
     private readonly prisma: PrismaService,
     private readonly requestCache: RequestCacheService,
     private readonly viewerContextService: ViewerContextService,
-    private readonly redis: RedisService,
+    private readonly blockSets: ViewerBlockSetsService,
   ) {}
 
   async viewerContext(viewerUserId: string | null) {
@@ -29,7 +29,7 @@ export class PostsViewerEnrichmentService {
     const { viewerUserId, postIds } = params;
     if (!viewerUserId || postIds.length === 0) return new Set<string>();
     const rows = await this.prisma.post.findMany({
-      where: { userId: viewerUserId, parentId: { in: [...new Set(postIds)] }, deletedAt: null, isDraft: false },
+      where: { userId: viewerUserId, parentId: { in: [...new Set(postIds)] }, ...NOT_DELETED, isDraft: false },
       select: { parentId: true },
       distinct: ['parentId'],
     });
@@ -136,7 +136,7 @@ export class PostsViewerEnrichmentService {
     const missing = ids.filter((id) => !map.has(id));
     if (missing.length > 0) {
       const reposts = await this.prisma.post.findMany({
-        where: { userId: viewerUserId, kind: 'repost', repostedPostId: { in: missing }, deletedAt: null },
+        where: { userId: viewerUserId, kind: 'repost', repostedPostId: { in: missing }, ...NOT_DELETED },
         select: { repostedPostId: true },
       });
       const repostedSet = new Set((reposts as Array<{ repostedPostId: string | null }>).map((r) => r.repostedPostId).filter(Boolean));
@@ -236,48 +236,11 @@ export class PostsViewerEnrichmentService {
     return this.viewerContextService.allowedPostVisibilities(viewer);
   }
 
-  /**
-   * Fetch the block relationship sets for a viewer.
-   * Returns sets of author IDs: those blocked by viewer and those blocking viewer.
-   * Used to annotate post DTOs with `viewerBlockStatus`.
-   */
-  async viewerBlockSets(viewerUserId: string): Promise<{ blockedByViewer: Set<string>; viewerBlockedBy: Set<string> }> {
-    const cacheKey = RedisKeys.viewerBlockSets(viewerUserId);
-    try {
-      const cached = await this.redis.getJson<{ blockedByViewer: string[]; viewerBlockedBy: string[] }>(cacheKey);
-      if (cached) {
-        return {
-          blockedByViewer: new Set(cached.blockedByViewer),
-          viewerBlockedBy: new Set(cached.viewerBlockedBy),
-        };
-      }
-    } catch {
-      // Redis unavailable — fall through to DB.
-    }
-
-    const rows = await this.prisma.userBlock.findMany({
-      where: { OR: [{ blockerId: viewerUserId }, { blockedId: viewerUserId }] },
-      select: { blockerId: true, blockedId: true },
-    });
-    const blockedByViewer = new Set<string>();
-    const viewerBlockedBy = new Set<string>();
-    for (const row of rows) {
-      if (row.blockerId === viewerUserId) blockedByViewer.add(row.blockedId);
-      else viewerBlockedBy.add(row.blockerId);
-    }
-
-    void this.redis.setJson(cacheKey, {
-      blockedByViewer: [...blockedByViewer],
-      viewerBlockedBy: [...viewerBlockedBy],
-    }, { ttlSeconds: 5 * 60 }).catch(() => undefined);
-
-    return { blockedByViewer, viewerBlockedBy };
+  viewerBlockSets(viewerUserId: string) {
+    return this.blockSets.get(viewerUserId);
   }
 
-  /** Bust cached block sets for both sides of a block/unblock action. */
-  invalidateBlockSetsCache(userId1: string, userId2: string): void {
-    void this.redis.del(RedisKeys.viewerBlockSets(userId1), RedisKeys.viewerBlockSets(userId2)).catch(() => undefined);
+  invalidateBlockSetsCache(userId1: string, userId2: string) {
+    return this.blockSets.invalidate(userId1, userId2);
   }
-
-  // ─── User media grid ──────────────────────────────────────────────────────
 }

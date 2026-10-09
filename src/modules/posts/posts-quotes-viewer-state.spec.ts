@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { PostsController } from './posts.controller';
+import { PostsRelatedController } from './posts-related.controller';
 import { PostsFeedMediaService } from './posts-feed-media.service';
 
 describe('quote feed viewer state and access', () => {
@@ -11,7 +11,7 @@ describe('quote feed viewer state and access', () => {
       composeFeedPostDtos: jest.fn().mockResolvedValue(enriched),
     };
     const response = { setHeader: jest.fn() };
-    const result = await PostsController.prototype.listQuotes.call({ posts }, 'viewer', 'original', {}, response as unknown as Response);
+    const result = await PostsRelatedController.prototype.listQuotes.call({ postsMedia: posts, postsCompose: posts }, 'viewer', 'original', {}, response as unknown as Response);
     expect(result).toEqual({ data: enriched, pagination: { nextCursor: 'next' } });
     expect(posts.composeFeedPostDtos).toHaveBeenCalledWith({ viewerUserId: 'viewer', filteredPosts: raw, collapsedItemsByItemId: new Map() });
   });

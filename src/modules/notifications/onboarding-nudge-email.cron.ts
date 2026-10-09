@@ -1,14 +1,12 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { AppConfigService } from '../app/app-config.service';
 import { buildGreeting, getVerifiedRecipientEmail } from '../email/email-send.helpers';
-import {
-  buildOnboardingNudgeEmail,
-  pickOnboardingNudge,
-  type OnboardingStage,
-} from '../email/onboarding-nudge';
+import { buildOnboardingNudgeEmail, pickOnboardingNudge, type OnboardingStage } from '../email/onboarding-nudge';
+import { NOT_DELETED } from '../../common/prisma/where';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STAGES: Array<{ stage: OnboardingStage; days: number; column: 'onboardingNudge1SentAt' | 'onboardingNudge3SentAt' | 'onboardingNudge7SentAt' }> = [
@@ -70,7 +68,7 @@ export class OnboardingNudgeEmailCron {
         _count: { posts: number; recruits: number };
       }> = await this.prisma.user.findMany({
         where: {
-          bannedAt: null,
+          ...NOT_BANNED_USER_WHERE,
           isBot: false,
           email: { not: null },
           emailVerifiedAt: { not: null },
@@ -99,7 +97,7 @@ export class OnboardingNudgeEmailCron {
           onboardingNudge3SentAt: true,
           onboardingNudge7SentAt: true,
           notificationPreferences: { select: { emailOnboarding: true } },
-          _count: { select: { posts: { where: { deletedAt: null, isDraft: false } }, recruits: true } },
+          _count: { select: { posts: { where: { ...NOT_DELETED, isDraft: false } }, recruits: true } },
         },
       });
       if (users.length === 0) break;

@@ -17,10 +17,15 @@ export async function createdAtIdCursorWhere(params: {
   const row = await params.lookup(cursorId);
   if (!row) return null;
 
+  return createdAtIdBefore(row);
+}
+
+/** Keyset predicate for `createdAt DESC, id DESC` ordering: rows strictly after `cursor`. */
+export function createdAtIdBefore(cursor: { createdAt: Date; id: string }) {
   return {
     OR: [
-      { createdAt: { lt: row.createdAt } },
-      { AND: [{ createdAt: row.createdAt }, { id: { lt: row.id } }] },
+      { createdAt: { lt: cursor.createdAt } },
+      { AND: [{ createdAt: cursor.createdAt }, { id: { lt: cursor.id } }] },
     ],
   };
 }

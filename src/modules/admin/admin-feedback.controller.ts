@@ -1,38 +1,11 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  Get,
-  Param,
-  Patch,
-  Query,
-  Req,
-  UseGuards,
-} from "@nestjs/common";
-import { z } from "zod";
+import { BadRequestException, Body, Controller, Get, Param, Patch, Query, Req, UseGuards } from "@nestjs/common";
 import { AdminGuard } from "./admin.guard";
 import { FeedbackService } from "../feedback/feedback.service";
 import { toFeedbackAdminDto } from "../../common/dto";
 import { PresenceRealtimeService } from "../presence/presence-realtime.service";
 import type { AdminRequest } from "./admin.guard";
 import { AppConfigService } from "../app/app-config.service";
-
-const listSchema = z.object({
-  feedbackId: z
-    .string()
-    .regex(/^[A-Za-z0-9_-]{1,64}$/)
-    .optional(),
-  q: z.string().trim().max(200).optional(),
-  status: z.enum(["new", "triaged", "resolved"]).optional(),
-  category: z.enum(["bug", "feature", "account", "other"]).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-  cursor: z.string().optional(),
-});
-
-export const updateSchema = z.object({
-  status: z.enum(["new", "triaged", "resolved"]).optional(),
-  adminNote: z.union([z.string().trim().max(2000), z.null()]).optional(),
-});
+import { listSchema, updateSchema } from './admin-feedback.schemas';
 
 @UseGuards(AdminGuard)
 @Controller("admin/feedback")

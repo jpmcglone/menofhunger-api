@@ -1,6 +1,6 @@
+import { makeArticlesService } from './articles.testing';
 import { ForbiddenException, HttpException, HttpStatus } from '@nestjs/common';
 import { VerifiedStatus } from '@prisma/client';
-import { ArticlesService } from './articles.service';
 
 function makeService(opts?: { allowedVisibilities?: Array<'public' | 'verifiedOnly' | 'premiumOnly'> }) {
   const prisma = {
@@ -27,7 +27,7 @@ function makeService(opts?: { allowedVisibilities?: Array<'public' | 'verifiedOn
   const cache = { getOrSetJson: jest.fn(async (_params: any) => _params.compute()) } as any;
   const cacheInvalidation = { feedGlobalVersion: jest.fn(async () => 1) } as any;
 
-  const service = new ArticlesService(
+  const service = makeArticlesService(
     prisma,
     viewer,
     appConfig,
@@ -38,7 +38,7 @@ function makeService(opts?: { allowedVisibilities?: Array<'public' | 'verifiedOn
     { dispatch: jest.fn() } as any,
     { viewerViewedArticleIds: jest.fn().mockResolvedValue(new Set()) } as any,
     { syncArticleThread: jest.fn().mockResolvedValue(undefined), createArticleThread: jest.fn().mockResolvedValue(null) } as any,
-    { write: prisma.post } as any,
+    { createArticleShare: jest.fn() } as any,
   );
 
   return { service, prisma, viewer };
@@ -154,7 +154,7 @@ function makeAuthoringService(tier: TierOpts = {}) {
     createArticleThread: jest.fn().mockResolvedValue(null),
   } as any;
 
-  const service = new ArticlesService(
+  const service = makeArticlesService(
     prisma,
     viewer,
     appConfig,
@@ -165,7 +165,7 @@ function makeAuthoringService(tier: TierOpts = {}) {
     { dispatch: jest.fn() } as any,
     { viewerViewedArticleIds: jest.fn().mockResolvedValue(new Set()) } as any,
     board,
-    { write: prisma.post } as any,
+    { createArticleShare: jest.fn() } as any,
   );
 
   return { service, prisma, viewer, board };

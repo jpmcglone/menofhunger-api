@@ -45,6 +45,29 @@ class SharedRuleParsing(unittest.TestCase):
 
 
 class SyncCheck(unittest.TestCase):
+    def test_sync_guidelines_to_explicit_ios_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as raw, tempfile.TemporaryDirectory() as ios_raw:
+            root = Path(raw)
+            ios = Path(ios_raw)
+            repos = [root / "menofhunger-api", root / "menofhunger-www", ios]
+            for repo in repos:
+                (repo / "docs").mkdir(parents=True)
+                (repo / ".cursor/rules").mkdir(parents=True)
+                (repo / "AGENTS.md").write_text("# Repository\n")
+            api = repos[0]
+            (api / "docs/engineering-policy.md").write_text("# Engineering policy\n")
+            (api / "docs/figma-guidelines").mkdir()
+            (api / "docs/figma-guidelines/example.md").write_text("# Library guidance\n")
+            for name in MODULE.SHARED_RULES:
+                (api / ".cursor/rules" / name).write_text("# Shared rule\n")
+            args = ["--repos-root", str(root), "--ios-root", str(ios)]
+            self.assertEqual(MODULE.main(args), 0)
+            self.assertEqual((ios / "docs/figma-guidelines/example.md").read_text(), "# Library guidance\n")
+            self.assertEqual(MODULE.main(args + ["--check"]), 0)
+            (api / "scripts").mkdir()
+            (api / "scripts/sync-figma-guidelines.py").write_text("raise SystemExit(1)\n")
+            self.assertEqual(MODULE.main(args + ["--check"]), 1)
+
     def test_check_accepts_divergent_globs_and_addenda(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

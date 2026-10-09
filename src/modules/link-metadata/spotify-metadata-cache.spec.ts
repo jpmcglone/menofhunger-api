@@ -1,6 +1,5 @@
 import { CacheService } from '../redis/cache.service';
 import { LinkMetadataService } from './link-metadata.service';
-import { PostsReadService } from '../posts-read/posts-read.service';
 const canonical = 'https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT';
 const share = 'https://spotify.link/example';
 function setup() {
@@ -27,7 +26,7 @@ function setup() {
   };
   const service = new LinkMetadataService(prisma as any,
     new CacheService(redis as any),
-    { frontendBaseUrl: () => '' } as any, new PostsReadService(prisma as any as never));
+    { frontendBaseUrl: () => '' } as any);
   return { service, prisma, redis };
 }
 describe('Spotify metadata contract and cache', () => {

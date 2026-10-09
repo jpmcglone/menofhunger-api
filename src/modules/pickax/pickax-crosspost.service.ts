@@ -7,19 +7,7 @@ import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PickaxApiClient, PickaxApiError } from './pickax-api.client';
 import { PickaxConnectionService } from './pickax-connection.service';
-import {
-  PICKAX_NATIVE_LIMITS,
-  articleCrosspostBlocker,
-  buildPickaxArticlePayload,
-  buildPickaxLinkPayload,
-  buildPickaxPostPayload,
-  contentHash,
-  pickaxArticleUrl,
-  pickaxPostUrl,
-  postCrosspostBlocker,
-  type PickaxArticleSource,
-  type PickaxPostSource,
-} from './pickax-content';
+import { PICKAX_NATIVE_LIMITS, articleCrosspostBlocker, buildPickaxArticlePayload, buildPickaxLinkPayload, buildPickaxPostPayload, contentHash, pickaxArticleUrl, pickaxPostUrl, postCrosspostBlocker, type PickaxArticleSource, type PickaxPostSource } from './pickax-content';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
 import { PostsWriteService } from '../posts-read/posts-write.service';
@@ -302,7 +290,7 @@ export class PickaxCrosspostService {
     if (remoteId) {
       const pickaxUrl = mode === 'link' || kind === 'post' ? pickaxPostUrl(remoteId) : pickaxArticleUrl(remoteId);
       if (kind === 'post') {
-        await this.postsWrite.write.updateMany({ where: { id: localId }, data: { pickaxUrl, pickaxError: null } });
+        await this.postsWrite.recordCrosspostResult(localId, 'pickax', { url: pickaxUrl, error: null });
       } else {
         await this.prisma.article.updateMany({ where: { id: localId }, data: { pickaxUrl, pickaxError: null } });
       }
@@ -318,7 +306,7 @@ export class PickaxCrosspostService {
   ): Promise<void> {
     const note = message.slice(0, 500);
     if (target.kind === 'post') {
-      await this.postsWrite.write.updateMany({ where: { id: target.localId }, data: { pickaxError: note } });
+      await this.postsWrite.recordCrosspostResult(target.localId, 'pickax', { error: note });
     } else {
       await this.prisma.article.updateMany({ where: { id: target.localId }, data: { pickaxError: note } });
     }
@@ -350,7 +338,7 @@ export class PickaxCrosspostService {
   }
 
   private async loadPost(postId: string): Promise<{ userId: string; boardTitle: string | null; source: PickaxPostSource } | null> {
-    const post = await this.postsRead.read.findUnique({
+    const post = await this.postsRead.findIncludingDeleted({
       where: { id: postId },
       select: {
         id: true,

@@ -1,17 +1,19 @@
+import { Inject } from '@nestjs/common';
+import { PostsFeedListingsService } from '../posts/posts-feed-listings.service';
 import { Controller, Get, Param, Res } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { publicCacheControl } from '../../common/http-cache';
 import { rateLimitLimit, rateLimitTtl } from '../../common/throttling/rate-limit.resolver';
-import { PostsService } from '../posts/posts.service';
+
 import { PublicProfilesService } from '../users/public-profiles.service';
 
 @ApiTags('Public')
 @Controller('public')
 export class PublicController {
   constructor(
-    private readonly posts: PostsService,
+    @Inject(PostsFeedListingsService) private readonly postsListings: Pick<PostsFeedListingsService, 'getLatestPublic' | 'getPublicById'>,
     private readonly profiles: PublicProfilesService,
   ) {}
 
@@ -29,7 +31,7 @@ export class PublicController {
   @ApiResponse({ status: 404, description: 'No public posts exist yet.' })
   @Get('posts/latest')
   async getLatestPost(@Res({ passthrough: true }) res: Response) {
-    const post = await this.posts.getLatestPublic();
+    const post = await this.postsListings.getLatestPublic();
     res.setHeader('Cache-Control', publicCacheControl(30, 60));
     return { data: post };
   }
@@ -49,7 +51,7 @@ export class PublicController {
   @ApiResponse({ status: 404, description: 'The post is missing or not public.' })
   @Get('posts/:id')
   async getPost(@Param('id') id: string, @Res({ passthrough: true }) res: Response) {
-    const post = await this.posts.getPublicById(id);
+    const post = await this.postsListings.getPublicById(id);
     res.setHeader('Cache-Control', publicCacheControl(60, 300));
     return { data: post };
   }

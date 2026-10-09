@@ -1,6 +1,6 @@
 import { Controller, Get, Param, Res, UseGuards } from "@nestjs/common";
 import type { Response } from "express";
-import { AuthGuard } from "../auth/auth.guard";
+import { AuthGuard } from "../auth/auth-public-api";
 import { CurrentUserId } from "../users/users.decorator";
 import { ConversationsService } from "./conversations.service";
 @Controller("posts")

@@ -16,6 +16,9 @@ import { UsersModule } from "../users/users.module";
 import { XApiClient } from "./x-api.client";
 import { XConnectionService } from "./x-connection.service";
 import { XCrosspostService } from "./x-crosspost.service";
+import { XCrosspostOutcomeService } from "./x-crosspost-outcome.service";
+import { XCrosspostPublishService } from "./x-crosspost-publish";
+import { XArticleSyncService } from "./x-crosspost-article-sync";
 import { XSideEffectsHandler } from "./x-side-effects.handler";
 import { XController } from "./x.controller";
 
@@ -33,10 +36,13 @@ import { XController } from "./x.controller";
     XUsageService,
     XApiClient,
     XConnectionService,
+    XCrosspostOutcomeService,
+    XCrosspostPublishService,
+    XArticleSyncService,
     XCrosspostService,
     XSideEffectsHandler,
     IntegrationAdminService,
   ],
-  exports: [XCrosspostService, IntegrationAdminService],
+  exports: [XCrosspostService, IntegrationAdminService, XPublicSnapshotService, XProfilePreviewService],
 })
 export class XModule {}

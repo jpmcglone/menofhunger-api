@@ -1,5 +1,5 @@
 import { OutboundModule } from '../outbound/outbound.service';
-import { AvatarVideoModule, AvatarVideoConsumersModule } from '../uploads/avatar-video.module';
+import { AvatarVideoConsumersModule } from '../uploads/avatar-video.module';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
@@ -14,34 +14,7 @@ import { AppConfigService } from './app-config.service';
 import { SiteConfigModule } from '../site-config/site-config.module';
 import { MohThrottlerGuard } from '../../common/throttling/moh-throttler.guard';
 import { RequestCacheModule } from '../../common/cache/request-cache.module';
-import { HealthModule } from '../health/health.module';
 import { PrismaModule } from '../prisma/prisma.module';
-import { AuthModule } from '../auth/auth.module';
-import { AuthMeModule } from '../auth/auth-me.module';
-import { UsersModule } from '../users/users.module';
-import { AdminModule } from '../admin/admin.module';
-import { UploadsModule } from '../uploads/uploads.module';
-import { PostsModule } from '../posts/posts.module';
-import { FollowsModule } from '../follows/follows.module';
-import { GiphyModule } from '../giphy/giphy.module';
-import { BookmarksModule } from '../bookmarks/bookmarks.module';
-import { SearchModule } from '../search/search.module';
-import { PresenceModule } from '../presence/presence.module';
-import { NotificationsModule } from '../notifications/notifications.module';
-import { LinkMetadataModule } from '../link-metadata/link-metadata.module';
-import { FeedbackModule } from '../feedback/feedback.module';
-import { MessagesModule } from '../messages/messages.module';
-import { VerificationModule } from '../verification/verification.module';
-import { ReportsModule } from '../reports/reports.module';
-import { Websters1828Module } from '../websters1828/websters1828.module';
-import { EmailModule } from '../email/email.module';
-import { RadioModule } from '../radio/radio.module';
-import { SpacesModule } from '../spaces/spaces.module';
-import { TopicsModule } from '../topics/topics.module';
-import { HashtagsModule } from '../hashtags/hashtags.module';
-import { CashtagsModule } from '../cashtags/cashtags.module';
-import { MetricsModule } from '../metrics/metrics.module';
-import { BillingModule } from '../billing/billing.module';
 import { JobsModule } from '../jobs/jobs.module';
 import { JobsConsumersModule } from '../jobs/jobs-consumers.module';
 import { SideEffectsModule } from '../side-effects/side-effects.module';
@@ -52,39 +25,12 @@ import { ViewerContextModule } from '../viewer/viewer-context.module';
 import { PostsReadModule } from '../posts-read/posts-read.module';
 import { UserLookupModule } from '../user-lookup/user-lookup.module';
 import { DomainEventsModule } from '../events/domain-events.module';
-import { DailyContentModule } from '../daily-content/daily-content.module';
-import { CheckinsModule } from '../checkins/checkins.module';
-import { PostViewsModule } from '../post-views/post-views.module';
-import { ArticleViewsModule } from '../article-views/article-views.module';
-import { PosthogModule } from '../../common/posthog/posthog.module';
-import { SlackModule } from '../../common/slack/slack.module';
-import { ArticlesModule } from '../articles/articles.module';
-import { BoardModule } from '../board/board.module';
-import { MutesModule } from '../mutes/mutes.module';
-import { CoinsModule } from '../coins/coins.module';
-import { TaxonomyModule } from '../taxonomy/taxonomy.module';
-import { TranscriptionModule } from '../transcription/transcription.module';
-import { GroupChannelsModule } from '../group-channels/group-channels.module';
-import { GroupsModule } from '../groups/groups.module';
-import { CrewModule } from '../crew/crew.module';
-import { LandingModule } from '../landing/landing.module';
-import { AiUtilityModule } from '../ai/ai-utility.module';
-import { TypeSafeModule } from '../typesafe/typesafe.module';
-import { EmbeddingsModule } from '../embeddings/embeddings.module';
-import { ModerationScreenModule } from '../moderation-screen/moderation-screen.module';
-import { OnboardingMatchesModule } from '../onboarding-matches/onboarding-matches.module';
-import { MarvinIdentityModule } from '../marvin/marvin-identity.module';
-import { MarvinModule } from '../marvin/marvin.module';
-import { ExploreModule } from '../explore/explore.module';
-import { PublicModule } from '../public/public.module';
-import { ScriptureModule } from '../scripture/scripture.module';
-import { FitnessModule } from '../fitness/fitness.module';
-import { PickaxModule } from '../pickax/pickax.module';
-import { XModule } from '../x/x.module';
-import { AnnouncementsModule } from '../announcements/announcements.module';
-import { NewslettersModule } from '../newsletters/newsletters.module';
-import { PartnerModule } from '../partner/partner.module';
-import { McpModule } from '../mcp/mcp.module';
+import { AuthModule } from '../auth/auth.module';
+
+import { IdentityFeaturesModule } from './identity-features.module';
+import { ContentFeaturesModule } from './content-features.module';
+import { CommunityFeaturesModule } from './community-features.module';
+import { IntegrationFeaturesModule } from './integration-features.module';
 
 // Module wiring is static; use env flags as a pragmatic switch for which processes host consumers.
 const RUN_JOB_CONSUMERS_RAW = (process.env.RUN_JOB_CONSUMERS ?? 'true').trim().toLowerCase();
@@ -125,68 +71,13 @@ const RUN_JOB_CONSUMERS = RUN_JOB_CONSUMERS_RAW === '' ? true : ['1', 'true', 'y
         },
       ],
     }),
-    HealthModule,
     PrismaModule,
+    // The global MohThrottlerGuard injects AuthService, so AppModule must import AuthModule itself.
     AuthModule,
-    AuthMeModule,
-    UsersModule,
-    VerificationModule,
-    McpModule,
-    PartnerModule,
-    AdminModule,
-    UploadsModule,
-    AvatarVideoModule,
-    PostsModule,
-    FollowsModule,
-    GiphyModule,
-    BookmarksModule,
-    SearchModule,
-    PresenceModule,
-    NotificationsModule,
-    LinkMetadataModule,
-    FeedbackModule,
-    ReportsModule,
-    MessagesModule,
-    Websters1828Module,
-    EmailModule,
-    RadioModule,
-    SpacesModule,
-    TopicsModule,
-    HashtagsModule,
-    CashtagsModule,
-    MetricsModule,
-    BillingModule,
-    DailyContentModule,
-    CheckinsModule,
-    PostViewsModule,
-    ArticleViewsModule,
-    PosthogModule,
-    SlackModule,
-    ArticlesModule,
-    BoardModule,
-    MutesModule,
-    TaxonomyModule,
-    GroupsModule,
-    GroupChannelsModule,
-    TranscriptionModule,
-    CrewModule,
-    LandingModule,
-    CoinsModule,
-    AiUtilityModule,
-    TypeSafeModule,
-    EmbeddingsModule,
-    ModerationScreenModule,
-    OnboardingMatchesModule,
-    MarvinIdentityModule,
-    MarvinModule,
-    ExploreModule,
-    PublicModule,
-    ScriptureModule,
-    FitnessModule,
-    PickaxModule,
-    XModule,
-    AnnouncementsModule,
-    NewslettersModule,
+    IdentityFeaturesModule,
+    ContentFeaturesModule,
+    CommunityFeaturesModule,
+    IntegrationFeaturesModule,
     ...(RUN_JOB_CONSUMERS ? [JobsConsumersModule, SideEffectsConsumersModule, AvatarVideoConsumersModule] : []),
   ],
   controllers: [AppController],

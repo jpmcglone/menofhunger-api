@@ -1,10 +1,10 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppConfigService } from '../app/app-config.service';
 import { ViewerContextService } from './viewer-context.service';
-import { RedisService } from '../redis/redis.service';
-import { RedisKeys } from '../redis/redis-keys';
+import { ViewerBlockSetsService } from './viewer-block-sets.service';
 import { POST_WITH_POLL_INCLUDE } from '../../common/prisma-includes/post.include';
 import { collectAncestorPostIds } from '../../common/posts/collect-ancestor-post-ids';
 import { loadPostVideoEmbeds } from '../../common/posts/post-video-embeds';
@@ -13,6 +13,7 @@ import { toPostDto, type PostDto } from '../../common/dto/post.dto';
 import { toCommunityGroupPreviewDto, type CommunityGroupPreviewDto } from '../../common/dto/community-group.dto';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
+import { NOT_DELETED } from '../../common/prisma/where';
 export type VisiblePost = Prisma.PostGetPayload<{ include: typeof POST_WITH_POLL_INCLUDE }>;
 
 /**
@@ -31,48 +32,11 @@ export class PostVisibilityReadService {
     private readonly postsRead: PostsReadService,
     private readonly appConfig: AppConfigService,
     private readonly viewerContextService: ViewerContextService,
-    private readonly redis?: RedisService,
+    private readonly blockSets: ViewerBlockSetsService,
   ) {}
 
-  /**
-   * Fetch the block relationship sets for a viewer (Redis-cached, 5 min).
-   * Same key as PostsViewerEnrichmentService.viewerBlockSets so both paths share hits.
-   */
-  async viewerBlockSets(viewerUserId: string): Promise<{ blockedByViewer: Set<string>; viewerBlockedBy: Set<string> }> {
-    const cacheKey = RedisKeys.viewerBlockSets(viewerUserId);
-    if (this.redis) {
-      try {
-        const cached = await this.redis.getJson<{ blockedByViewer: string[]; viewerBlockedBy: string[] }>(cacheKey);
-        if (cached) {
-          return {
-            blockedByViewer: new Set(cached.blockedByViewer),
-            viewerBlockedBy: new Set(cached.viewerBlockedBy),
-          };
-        }
-      } catch {
-        // Redis unavailable — fall through to DB.
-      }
-    }
-
-    const rows = await this.prisma.userBlock.findMany({
-      where: { OR: [{ blockerId: viewerUserId }, { blockedId: viewerUserId }] },
-      select: { blockerId: true, blockedId: true },
-    });
-    const blockedByViewer = new Set<string>();
-    const viewerBlockedBy = new Set<string>();
-    for (const row of rows) {
-      if (row.blockerId === viewerUserId) blockedByViewer.add(row.blockedId);
-      else viewerBlockedBy.add(row.blockerId);
-    }
-
-    if (this.redis) {
-      void this.redis.setJson(cacheKey, {
-        blockedByViewer: [...blockedByViewer],
-        viewerBlockedBy: [...viewerBlockedBy],
-      }, { ttlSeconds: 5 * 60 }).catch(() => undefined);
-    }
-
-    return { blockedByViewer, viewerBlockedBy };
+  viewerBlockSets(viewerUserId: string) {
+    return this.blockSets.get(viewerUserId);
   }
 
   /** Fetch posts by id and filter to those the viewer is allowed to see, preserving input order. */
@@ -89,14 +53,16 @@ export class PostVisibilityReadService {
     const viewer = await this.viewerContextService.getViewer(viewerUserId);
     const allowed = this.viewerContextService.allowedPostVisibilities(viewer);
 
-    const fetched = await this.postsRead.read.findMany({
+    const query = {
       where: {
         id: { in: uniqueIds },
-        ...(includeDeleted ? {} : { deletedAt: null }),
-        ...(excludeBannedAuthors ? { user: { bannedAt: null } } : {}),
+        ...(excludeBannedAuthors ? { user: NOT_BANNED_USER_WHERE } : {}),
       },
       include: POST_WITH_POLL_INCLUDE,
-    });
+    };
+    const fetched = includeDeleted
+      ? await this.postsRead.findManyIncludingDeleted(query)
+      : await this.postsRead.findMany(query);
 
     const visibleFetched = fetched.filter((post) => {
       const isSelf = Boolean(viewer && viewer.id === post.userId);
@@ -183,18 +149,15 @@ export class PostVisibilityReadService {
         where: { userId: viewerUserId, poll: { postId: { in: allPostIds } } },
         select: { optionId: true, poll: { select: { postId: true } } },
       }),
-      (this.prisma.post as any).findMany({
-        where: { userId: viewerUserId, kind: 'repost', repostedPostId: { in: allPostIds }, deletedAt: null },
+      this.postsRead.findMany({
+        where: { userId: viewerUserId, kind: 'repost', repostedPostId: { in: allPostIds }, ...NOT_DELETED },
         select: { repostedPostId: true },
       }) as Promise<Array<{ repostedPostId: string | null }>>,
       this.prisma.postView.findMany({
         where: { userId: viewerUserId, postId: { in: allPostIds } },
         select: { postId: true, lastSeenAt: true, createdAt: true },
       }),
-      this.prisma.userBlock.findMany({
-        where: { OR: [{ blockerId: viewerUserId }, { blockedId: viewerUserId }] },
-        select: { blockerId: true, blockedId: true },
-      }),
+      this.blockSets.get(viewerUserId),
     ]);
 
     const boosted = new Set(boostedRows.map((r) => r.postId));
@@ -213,12 +176,7 @@ export class PostVisibilityReadService {
     const lastSeenAtByPostId = new Map(
       viewedRows.map((r) => [r.postId, r.lastSeenAt ?? r.createdAt] as const),
     );
-    const blockedByViewer = new Set<string>();
-    const viewerBlockedBy = new Set<string>();
-    for (const row of blockSets) {
-      if (row.blockerId === viewerUserId) blockedByViewer.add(row.blockedId);
-      if (row.blockedId === viewerUserId) viewerBlockedBy.add(row.blockerId);
-    }
+    const { blockedByViewer, viewerBlockedBy } = blockSets;
 
     const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
 
@@ -235,7 +193,7 @@ export class PostVisibilityReadService {
       const ids = [...groupIds];
       const [groups, memberships] = await Promise.all([
         this.prisma.communityGroup.findMany({
-          where: { id: { in: ids }, deletedAt: null },
+          where: { id: { in: ids }, ...NOT_DELETED },
         }),
         this.prisma.communityGroupMember.findMany({
           where: { groupId: { in: ids }, userId: viewerUserId },
@@ -269,7 +227,7 @@ export class PostVisibilityReadService {
       blockedByViewer,
       viewerBlockedBy,
       repostedByPostId,
-      repostedPostMap: repostedPostMap as any,
+      repostedPostMap,
       groupPreviewByGroupId,
       viewedByPostId,
       lastSeenAtByPostId,

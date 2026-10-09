@@ -1,9 +1,11 @@
+import { clampLimit } from '../../common/pagination/page';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TOPIC_OPTIONS } from '../../common/topics/topic-options';
 
 import { PostsReadService } from '../posts-read/posts-read.service';
 import { slugifyTopic } from '../../common/text/slugify';
+import { NOT_DELETED } from '../../common/prisma/where';
 type SearchTaxonomyParams = {
   q: string;
   limit: number;
@@ -49,7 +51,7 @@ export class TaxonomyService {
 
   async search(params: SearchTaxonomyParams): Promise<TaxonomySearchResult[]> {
     const q = normalizeInput(params.q);
-    const limit = Math.max(1, Math.min(50, params.limit || 10));
+    const limit = clampLimit(params.limit, { default: 10, max: 50 });
     const cacheKey = `${q}::${limit}`;
     const cached = this.searchCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.data;
@@ -243,13 +245,13 @@ export class TaxonomyService {
     for (const term of terms) {
       const [articleCount, postCount, hashtagCount, recentArticleCount, recentPostCount] = await Promise.all([
         this.prisma.articleTag.count({ where: { tag: term.slug } }),
-        this.postsRead.read.count({ where: { topics: { has: term.slug }, deletedAt: null } }),
+        this.postsRead.count({ where: { topics: { has: term.slug }, ...NOT_DELETED } }),
         this.prisma.hashtag.count({ where: { tag: term.slug } }),
         this.prisma.articleTag.count({
-          where: { tag: term.slug, article: { publishedAt: { gte: lookbackStart }, deletedAt: null, isDraft: false } },
+          where: { tag: term.slug, article: { publishedAt: { gte: lookbackStart }, ...NOT_DELETED, isDraft: false } },
         }),
-        this.postsRead.read.count({
-          where: { topics: { has: term.slug }, createdAt: { gte: lookbackStart }, deletedAt: null },
+        this.postsRead.count({
+          where: { topics: { has: term.slug }, createdAt: { gte: lookbackStart }, ...NOT_DELETED },
         }),
       ]);
       const recentVelocity = recentArticleCount + recentPostCount;

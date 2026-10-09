@@ -1,31 +1,8 @@
 import { Body, Controller, Delete, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
-import { z } from 'zod';
 import { AdminGuard, type AdminRequest } from './admin.guard';
 import { AdminImageReviewService } from './admin-image-review.service';
-import { queryBoolean } from '../../common/validation/query-boolean';
-import { cursorPageQuerySchema } from '../../common/pagination/cursor-query.schema';
-
-const listSchema = cursorPageQuerySchema(100).extend({
-  
-  q: z.string().optional(),
-  showDeleted: queryBoolean().optional(),
-  onlyOrphans: queryBoolean().optional(),
-  sync: queryBoolean().optional(),
-  kind: z.enum(['all', 'image', 'video']).optional(),
-});
-
-const deleteSchema = z.object({
-  reason: z.string().trim().min(1).max(200),
-  onlyOrphans: z.boolean().optional(),
-  referencesToken: z.string().trim().min(1).max(64).optional(),
-});
-
-const bulkDeleteSchema = z.object({
-  ids: z.array(z.string().trim().min(1)).min(1).max(200),
-  reason: z.string().trim().min(1).max(200),
-  onlyOrphans: z.boolean().optional(),
-});
+import { listSchema, deleteSchema, bulkDeleteSchema } from './admin-image-review.schemas';
 
 @UseGuards(AdminGuard)
 @Controller('admin/media-review')

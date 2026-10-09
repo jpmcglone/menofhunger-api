@@ -1,3 +1,4 @@
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { XPublicSnapshotService } from "./x-public-snapshot.service";
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
@@ -7,10 +8,7 @@ import { IntegrationBudgetService } from "./integration-budget.service";
 import { X_REFERENCE_PRICES } from "./integration-budget.policy";
 import { XApiClient } from "./x-api.client";
 import { XConnectionService } from "./x-connection.service";
-import type {
-  XProfilePreviewDto,
-  XProfileContextDto,
-} from "../../common/dto/integrations.dto";
+import type { XProfilePreviewDto, XProfileContextDto } from "../../common/dto/integrations.dto";
 
 @Injectable()
 export class XProfilePreviewService {
@@ -118,7 +116,7 @@ export class XProfilePreviewService {
     const target = await this.prisma.user.findFirst({
       where: {
         id: profileUserId,
-        bannedAt: null,
+        ...NOT_BANNED_USER_WHERE,
         usernameIsSet: true,
         blocksInitiated: { none: { blockedId: viewerId } },
         blocksReceived: { none: { blockerId: viewerId } },
