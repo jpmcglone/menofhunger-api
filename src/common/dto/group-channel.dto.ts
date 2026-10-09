@@ -1,3 +1,4 @@
+import type { UserListDto } from './user.dto';
 import type { MessageDto } from '../../modules/messages/message.dto';
 
 export type GroupChannelCapabilitiesDto = {
@@ -21,9 +22,16 @@ export type GroupChannelDto = {
   hidden: boolean;
   capabilities: GroupChannelCapabilitiesDto;
 };
+export type GroupChannelMemberDto = { role: 'owner' | 'moderator' | 'member'; user: UserListDto };
+/** Recipient-filtered metadata for a stable ID token in a channel message body. */
+export type GroupChannelReferenceDto = {
+  token: string; channelId: string | null; name: string | null; displayName: string | null;
+  privacy: 'normal' | 'private'; accessible: boolean;
+};
 /** Counts only, visible to the sender; never identifies readers. */
 export type GroupChannelReceiptDto = { readCount: number; recipientCount: number };
 export type GroupChannelMessageDto = MessageDto & {
+  channelReferences?: GroupChannelReferenceDto[];
   receipt: GroupChannelReceiptDto | null;
   clientRequestId: string | null;
   revision: number;

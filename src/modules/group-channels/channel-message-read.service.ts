@@ -10,6 +10,7 @@ import { ChannelsService } from './channels.service';
 import { channelCapabilities, isChannelLeader } from './channel-policy';
 import { personalChannelMessageWhere } from './channel-attention-policy';
 import { toPage } from '../../common/pagination/page';
+import { channelReferenceCatalog, presentChannelBody, channelReferencePreview, type ChannelReferenceCatalog } from './channel-references';
 import { MESSAGE_INCLUDE, VISIBLE_MESSAGE, WELCOME_PREFIX, type MessageRow } from './channel-message-rows';
 
 /** Reads, realtime fan-out, and search over channel messages (writes live in ChannelMessagesService). */
@@ -33,7 +34,13 @@ export class ChannelMessageReadService {
     const follows = new Set(states.filter((s) => s.following).map((s) => s.rootMessageId));
     const receipts = await this.receipts(userId, groupId, channel, rows);
     const welcomes = await this.welcomes(rows);
-    return this.render(userId, member.role, groupId, channel, rows, follows, receipts, welcomes.get(userId));
+    const references = await channelReferenceCatalog(this.prisma, groupId, this.referenceBodies(rows), [userId]);
+    await this.access.channel(userId, groupId, channelId);
+    return this.render(userId, member.role, groupId, channel, rows, follows, receipts, welcomes.get(userId), references);
+  }
+
+  private referenceBodies(rows: MessageRow[]) {
+    return rows.flatMap(message => message.deletedForAll ? [] : [message.body, ...(message.replyTo && !message.replyTo.deletedForAll ? [message.replyTo.body] : [])]);
   }
 
   private render(
@@ -45,56 +52,58 @@ export class ChannelMessageReadService {
     follows: Set<string>,
     receipts: Map<string, GroupChannelReceiptDto>,
     welcomed: Set<string> = new Set(),
+    references: ChannelReferenceCatalog = new Map(),
   ): GroupChannelMessageDto[] {
     const channelId = channel.id;
     const member = { role };
-    return rows.map((message) => ({
-      receipt: receipts.get(message.id) ?? null,
-      ...toMessageDto({
-        message: { ...message, media: [] },
-        publicBaseUrl: this.config.r2()?.publicBaseUrl ?? null,
-        viewerUserId: userId,
-      }),
-      // Uploaded channel media is never mapped through the public Chat URL resolver.
-      media: message.deletedForAll
-        ? []
-        : message.media.map((media) => ({
-            id: media.id,
-            kind: media.kind,
-            source: media.source,
-            url: media.source === 'upload' ? `/groups/${groupId}/channels/${channelId}/media/${media.id}` : (media.url ?? ''),
-            thumbnailUrl: media.thumbnailR2Key ? `/groups/${groupId}/channels/${channelId}/media/${media.id}?thumbnail=true` : null,
-            mp4Url: media.source === 'upload' ? null : media.mp4Url,
-            width: media.width,
-            height: media.height,
-            durationSeconds: media.durationSeconds === null ? null : Math.floor(media.durationSeconds),
-            alt: media.alt,
-            ...transcriptFields(media),
-          })),
-      clientRequestId: message.senderId === userId ? message.clientRequestId : null,
-      revision: message.channelRevision,
-      channelId,
-      sequence: message.channelSequence!,
-      threadRootId: message.threadRootId,
-      hiddenPreviews: message.deletedForAll ? [] : message.hiddenPreviews,
-      replyCount: message._count.threadReplies,
-      lastReplyAt: message.threadReplies[0]?.createdAt.toISOString() ?? null,
-      following: follows.has(message.threadRootId ?? message.id),
-      pinned: message.channelPins.length > 0 && !message.deletedForAll,
-      joinWelcome:
-        message.kind === 'groupJoin' && !message.deletedForAll
-          ? {
-              canWelcome: message.senderId !== userId && !welcomed.has(message.id) && !channel.archivedAt && channelCapabilities(channel, member.role).canSend,
-            }
-          : null,
-      canEdit:
-        message.kind === 'text' &&
-        channelCapabilities(channel, member.role).canSend &&
-        !message.deletedForAll &&
-        message.senderId === userId &&
-        Date.now() - message.createdAt.getTime() < 15 * 60_000,
-      canDelete: !channel.archivedAt && !message.deletedForAll && (message.senderId === userId || isChannelLeader(member.role)),
-    }));
+    return rows.map((message) => {
+      const dto = toMessageDto({ message: { ...message, media: [] }, publicBaseUrl: this.config.r2()?.publicBaseUrl ?? null, viewerUserId: userId });
+      if (dto.replyTo && message.replyTo && !message.replyTo.deletedForAll) dto.replyTo.bodyPreview = channelReferencePreview(message.replyTo.body, references).slice(0, 200);
+      return {
+        receipt: receipts.get(message.id) ?? null,
+        ...dto,
+        ...presentChannelBody(message.deletedForAll ? '' : message.body, userId, references),
+        // Uploaded channel media is never mapped through the public Chat URL resolver.
+        media: message.deletedForAll
+          ? []
+          : message.media.map((media) => ({
+              id: media.id,
+              kind: media.kind,
+              source: media.source,
+              url: media.source === 'upload' ? `/groups/${groupId}/channels/${channelId}/media/${media.id}` : (media.url ?? ''),
+              thumbnailUrl: media.thumbnailR2Key ? `/groups/${groupId}/channels/${channelId}/media/${media.id}?thumbnail=true` : null,
+              mp4Url: media.source === 'upload' ? null : media.mp4Url,
+              width: media.width,
+              height: media.height,
+              durationSeconds: media.durationSeconds === null ? null : Math.floor(media.durationSeconds),
+              alt: media.alt,
+              ...transcriptFields(media),
+            })),
+        clientRequestId: message.senderId === userId ? message.clientRequestId : null,
+        revision: message.channelRevision,
+        channelId,
+        sequence: message.channelSequence!,
+        threadRootId: message.threadRootId,
+        hiddenPreviews: message.deletedForAll ? [] : message.hiddenPreviews,
+        replyCount: message._count.threadReplies,
+        lastReplyAt: message.threadReplies[0]?.createdAt.toISOString() ?? null,
+        following: follows.has(message.threadRootId ?? message.id),
+        pinned: message.channelPins.length > 0 && !message.deletedForAll,
+        joinWelcome:
+          message.kind === 'groupJoin' && !message.deletedForAll
+            ? {
+                canWelcome: message.senderId !== userId && !welcomed.has(message.id) && !channel.archivedAt && channelCapabilities(channel, member.role).canSend,
+              }
+            : null,
+        canEdit:
+          message.kind === 'text' &&
+          channelCapabilities(channel, member.role).canSend &&
+          !message.deletedForAll &&
+          message.senderId === userId &&
+          Date.now() - message.createdAt.getTime() < 15 * 60_000,
+        canDelete: !channel.archivedAt && !message.deletedForAll && (message.senderId === userId || isChannelLeader(member.role)),
+      };
+    });
   }
 
   /** Who already welcomed each join row: member ID -> join message IDs. A welcome is the member's own `welcome:<joinId>` message. */
@@ -208,6 +217,7 @@ export class ChannelMessageReadService {
     const followsByUser = new Map<string, Set<string>>();
     for (const state of states) followsByUser.set(state.userId, (followsByUser.get(state.userId) ?? new Set()).add(state.rootMessageId));
     const welcomes = await this.welcomes(rows);
+    const references = await channelReferenceCatalog(this.prisma, groupId, this.referenceBodies(rows), recipients.map(recipient => recipient.userId));
     const owners = new Set(rows.map((m) => m.senderId));
     const receiptsByOwner = new Map<string, Map<string, GroupChannelReceiptDto>>();
     for (const owner of owners)
@@ -224,6 +234,7 @@ export class ChannelMessageReadService {
         followsByUser.get(recipient.userId) ?? new Set(),
         receiptsByOwner.get(recipient.userId) ?? new Map(),
         welcomes.get(recipient.userId),
+        references,
       );
       this.realtime.emitGroupChannelMessages(recipient.userId, { groupId, channel: snapshot, messages });
     }
@@ -336,11 +347,15 @@ export class ChannelMessageReadService {
     });
     if (input.channelId && !readable.length) throw new NotFoundException('Channel unavailable.');
     const channelByConversation = new Map(readable.map((channel) => [channel.conversationId, channel.id]));
+    const referenceSearch = await channelReferenceCatalog(this.prisma, groupId, [input.q], [userId]);
+    const query = presentChannelBody(input.q, userId, referenceSearch);
+    if (query.channelReferences.some(reference => !reference.accessible)) return { messages: [], nextCursor: null };
+    const searchBody = query.body;
     const rows = await this.prisma.message.findMany({
       where: {
         conversationId: { in: [...channelByConversation.keys()] },
         deletedForAll: false,
-        body: { contains: input.q, mode: 'insensitive' },
+        body: { contains: searchBody, mode: 'insensitive' },
       },
       include: MESSAGE_INCLUDE,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],

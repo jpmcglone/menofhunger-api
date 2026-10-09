@@ -11,6 +11,8 @@ import { assertChannelSend, isChannelLeader } from './channel-policy';
 import { MAX_HIDDEN_PREVIEWS, MESSAGE_INCLUDE, WELCOME_PREFIX } from './channel-message-rows';
 import { ChannelMessageReadService } from './channel-message-read.service';
 
+import { canonicalChannelBody } from './channel-references';
+
 export const CHANNEL_MAX_ATTACHMENTS = 4;
 export type ChannelAttachmentInput = { uploadId: string; thumbnailUploadId?: string; alt?: string };
 export type ChannelSendInput = {
@@ -80,6 +82,7 @@ export class ChannelMessagesService {
         return existing;
       }
       assertChannelSend(channel, member.role);
+      const canonicalBody = await canonicalChannelBody(tx, userId, groupId, body);
       const threadRootId = input.threadRootId ? await this.reader.requireRoot(channel.conversationId, input.threadRootId, tx) : null;
       // Inline quoted reply: the target must be a live message in this same channel.
       const replyToId = input.replyToId
@@ -115,7 +118,7 @@ export class ChannelMessagesService {
         data: {
           conversationId: channel.conversationId,
           senderId: userId,
-          body,
+          body: canonicalBody,
           clientRequestId: input.clientRequestId,
           requestHash,
           channelRevision: updated.revision,
@@ -142,7 +145,7 @@ export class ChannelMessagesService {
         channelId,
         messageId: created.id,
         senderId: userId,
-        body,
+        body: canonicalBody,
         threadRootId,
         broadcast: isChannelLeader(member.role),
       });
@@ -269,15 +272,16 @@ export class ChannelMessagesService {
         },
       });
       if (!message || Date.now() - message.createdAt.getTime() >= 15 * 60_000) throw new ForbiddenException('This message can no longer be edited.');
+      const canonicalBody = await canonicalChannelBody(tx, userId, groupId, body, message.body);
       await this.advanceRevision(tx, channelId, messageId);
       const hiddenPreviews = message.hiddenPreviews.filter((url) => body.includes(url));
-      await tx.message.update({ where: { id: messageId }, data: { body, hiddenPreviews, editedAt: new Date() } });
+      await tx.message.update({ where: { id: messageId }, data: { body: canonicalBody, hiddenPreviews, editedAt: new Date() } });
       await this.attention.reconcile(tx, {
         groupId,
         channelId,
         messageId,
         senderId: userId,
-        body,
+        body: canonicalBody,
         threadRootId: message.threadRootId,
         edited: true,
         broadcast: isChannelLeader(member.role),

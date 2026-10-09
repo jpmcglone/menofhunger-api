@@ -54,6 +54,17 @@ describe('channel send protocol', () => {
     await expect(h.service.send('viewer', 'group', 'channel', input)).rejects.toThrow('different message');
     expect(h.tx.message.create).not.toHaveBeenCalled();
   });
+  it('stores stable reference IDs under the group lock, and refuses cross-group forged tokens before writing', async () => {
+    const h = harness();
+    h.tx.groupChannel.findMany = jest.fn().mockResolvedValue([{ id: 'bugs', name: 'bugs', displayName: null, privacy: 'normal', access: [] }]);
+    h.tx.message.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'new-message', ...data }));
+    const result = await h.service.send('viewer', 'group', 'channel', { ...input, body: 'Please use #bugs.' });
+    expect(result.body).toBe('Please use <#bugs>.');
+    expect(h.attention.reconcile).toHaveBeenCalledWith(h.tx, expect.objectContaining({ body: 'Please use <#bugs>.' }));
+    h.tx.message.create.mockClear();
+    await expect(h.service.send('viewer', 'group', 'channel', { ...input, body: 'Please use <#foreign>.' })).rejects.toThrow('reference is unavailable');
+    expect(h.tx.message.create).not.toHaveBeenCalled();
+  });
   it('rejects a reply whose target is not in this conversation', async () => {
     const h = harness();
     await expect(h.service.send('viewer', 'group', 'channel', { ...input, threadRootId: 'other-channel-message' })).rejects.toThrow('Thread unavailable');

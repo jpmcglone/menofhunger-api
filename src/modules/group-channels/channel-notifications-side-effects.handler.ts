@@ -1,3 +1,4 @@
+import { channelReferenceCatalog, channelReferencePreview } from './channel-references';
 import { Injectable, NotFoundException, type OnModuleInit } from '@nestjs/common';
 import { GroupEmailService } from '../email/group-email.service';
 import { PresenceRedisReadService } from '../presence/presence-redis-read.service';
@@ -77,10 +78,12 @@ export class ChannelNotificationsSideEffectsHandler implements OnModuleInit {
         const group = await this.prisma.communityGroup.findUnique({ where: { id: input.groupId }, select: { slug: true, name: true } });
         if (!group) return;
         // Never put private names, text, actor details or attachments on a lock screen.
+        const references = await channelReferenceCatalog(this.prisma, input.groupId, [message.body], []);
+        const preview = channelReferencePreview(message.body, references);
         const privateChannel = channel.privacy === 'private';
         await this.push.sendWebPushToRecipient(userId, {
           title: privateChannel ? 'Men of Hunger' : `${group.name} · #${channel.displayName ?? channel.name}`,
-          body: privateChannel ? 'New activity in a private channel.' : trimPushBody(message.body) ?? 'Shared an attachment.',
+          body: privateChannel ? 'New activity in a private channel.' : trimPushBody(preview) ?? 'Shared an attachment.',
           url: `/groups/${encodeURIComponent(group.slug)}/channels/${channel.id}?message=${message.id}${message.threadRootId ? `&thread=${message.threadRootId}` : ''}`,
           tag: `channel-${message.id}-${reason}`, kind: reason === 'personal' ? 'channel_mention' : 'channel_message', threadId: `channel-${channel.id}`,
           actorUserId: message.senderId,
@@ -103,10 +106,11 @@ export class ChannelNotificationsSideEffectsHandler implements OnModuleInit {
     if (await this.presence.isOnline(userId)) return;
     const key = `channel:mention-email:${userId}:${channel.id}`;
     if (await this.cache.getJson(key)) return;
+    const references = await channelReferenceCatalog(this.prisma, groupId, [message.body ?? ''], []);
     const sent = await this.groupEmail.send({
       kind: 'mention', recipientUserId: userId, groupId, actorUserId: message.senderId,
       channel: { id: channel.id, label: channel.displayName ?? channel.name, isPrivate: channel.privacy === 'private' },
-      messageId: message.id, excerpt: trimPushBody(message.body),
+      messageId: message.id, excerpt: trimPushBody(channelReferencePreview(message.body ?? '', references)),
     });
     if (sent) await this.cache.setJson(key, 1, { ttlSeconds: 3600 });
   }

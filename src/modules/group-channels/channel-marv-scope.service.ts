@@ -1,3 +1,5 @@
+import { toUserListDto } from '../../common/dto/user.dto';
+import type { GroupChannelMemberDto } from '../../common/dto/group-channel.dto';
 import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import type { GroupChannelMarvStatusDto } from '../../common/dto/group-channel.dto';
 import { createHash } from 'node:crypto';
@@ -11,7 +13,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PresenceRealtimeService } from '../presence/presence-realtime.service';
 import { ChannelAccessService } from './channel-access.service';
 import { isChannelLeader } from './channel-policy';
-import { USER_BRIEF_SELECT, USER_REF_SELECT } from '../../common/prisma-selects/user.select';
+import { USER_LIST_SELECT, USER_REF_SELECT } from '../../common/prisma-selects/user.select';
 import { NOT_DELETED } from '../../common/prisma/where';
 
 /** A message right after Marv's own is read as a follow-up to him for this long. */
@@ -96,16 +98,17 @@ export class ChannelMarvScopeService {
     };
   }
 
-  async mentionMember(userId: string, groupId: string, channelId: string, query = '') {
+  async mentionMember(userId: string, groupId: string, channelId: string, query = ''): Promise<GroupChannelMemberDto[]> {
     if (!this.enabled(groupId)) return [];
     const status = await this.status(userId, groupId, channelId);
     if (!status.participating || !status.userId) return [];
     const user = await this.prisma.user.findUnique({
       where: { id: status.userId },
-      select: { ...USER_BRIEF_SELECT, isBot: true },
+      select: { ...USER_LIST_SELECT, isBot: true },
     });
     if (!user || (query && !`${user.username} ${user.name}`.toLowerCase().includes(query.toLowerCase()))) return [];
-    return [{ role: 'member', user }];
+    await this.access.channel(userId, groupId, channelId);
+    return [{ role: 'member', user: toUserListDto(user, this.config.r2()?.publicBaseUrl ?? null) }];
   }
 
   async participation(userId: string, groupId: string, channelId: string, invited: boolean, historyAcknowledged: boolean) {

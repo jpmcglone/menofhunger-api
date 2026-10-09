@@ -18,7 +18,7 @@ const enabled = url && new URL(url).hostname === '127.0.0.1' && new URL(url).pat
   const realtime: any = { emitGroupChannelMessages: jest.fn(), emitGroupChannelChanged: jest.fn(), emitGroupChannelViewer: jest.fn() };
   const effects: any = { dispatch: jest.fn() };
   const access = new ChannelAccessService(db as any, config);
-  const channels = new ChannelsService(db as any, access, realtime, effects);
+  const channels = new ChannelsService(db as any, access, realtime, effects, config);
   const attention = new ChannelAttentionService(db as any, access, channels, effects, { onlineUserIds: async () => [] } as any);
   const { reader, writer: messages } = makeChannelMessages({ prisma: db as any, access, channels, attention, config, realtime, media: {} as any, effects });
   let group: string, owner: string, member: string, moderator: string, general: string, announcements: string;

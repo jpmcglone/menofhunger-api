@@ -19,7 +19,9 @@ function setup() {
   const preferences: any = { getPreferencesInternal: jest.fn().mockResolvedValue({ pushMention: true, pushMessage: true, pushGroupActivity: true }) };
   const effects: any = { dispatch: jest.fn() };
   const viewing = new ChannelViewingService(access, cache);
-  return { service: new ChannelNotificationsSideEffectsHandler(prisma, access, push, preferences, {} as any, effects, cache, viewing, { send: jest.fn() } as any, { isOnline: jest.fn().mockResolvedValue(true) } as any, {} as any), viewing, prisma, access, push, cache, preferences, message, channel };
+  const groupEmail = { send: jest.fn().mockResolvedValue(true) };
+  const presence = { isOnline: jest.fn().mockResolvedValue(true) };
+  return { service: new ChannelNotificationsSideEffectsHandler(prisma, access, push, preferences, {} as any, effects, cache, viewing, groupEmail as any, presence as any, {} as any), groupEmail, presence, viewing, prisma, access, push, cache, preferences, message, channel };
 }
 const event = { groupId: 'group', channelId: 'channel', messageId: 'message', edited: false };
 
@@ -75,4 +77,16 @@ describe('channel notification delivery', () => {
     await h.service.messageChanged({ ...event, edited: true });
     expect(h.push.sendWebPushToRecipient).not.toHaveBeenCalled();
   });
+});
+
+
+it('redacts referenced private channels in a public-channel push and mention email', async () => {
+  const h = setup(); h.channel.privacy = 'normal'; h.channel.name = 'general';
+  h.message.body = 'Visit <#secret> and #leadership';
+  h.presence.isOnline.mockResolvedValue(false);
+  h.prisma.groupChannel = { findMany: jest.fn().mockResolvedValue([{ id: 'secret', name: 'leadership', displayName: 'Leaders only', privacy: 'private', access: [] }]) };
+  await h.service.messageChanged(event);
+  expect(h.push.sendWebPushToRecipient.mock.calls[0][1].body).toBe('Visit Private and Private');
+  expect(h.groupEmail.send.mock.calls[0][0].excerpt).toBe('Visit Private and Private');
+  expect(JSON.stringify(h.push.sendWebPushToRecipient.mock.calls)).not.toMatch(/secret|leadership|Leaders only/);
 });

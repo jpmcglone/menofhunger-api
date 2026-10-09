@@ -1,5 +1,8 @@
 import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
-import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
+import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
+import { AppConfigService } from '../app/app-config.service';
+import { toUserListDto } from '../../common/dto/user.dto';
+import type { GroupChannelMemberDto } from '../../common/dto/group-channel.dto';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -29,6 +32,7 @@ export class ChannelsService {
     private readonly access: ChannelAccessService,
     private readonly realtime: PresenceRealtimeService,
     private readonly effects: SideEffectsService,
+    private readonly config: AppConfigService,
   ) {}
 
   private readonly provisioned = new Set<string>();
@@ -175,7 +179,9 @@ export class ChannelsService {
   }
 
   async changed(groupId: string, channelId: string, reason: 'channel' | 'messages' | 'attention' | 'access' = 'channel') {
-    const recipients = await this.access.recipients(groupId, channelId);
+    const recipients = reason === 'channel'
+      ? await this.prisma.communityGroupMember.findMany({ where: { groupId, status: 'active', user: { ...NOT_BANNED_USER_WHERE, isBot: false, verifiedStatus: { not: 'none' } } }, select: { userId: true } })
+      : await this.access.recipients(groupId, channelId);
     // Invalidations intentionally contain no content. Clients refetch through current authorization;
     // a membership change racing delivery cannot disclose a message body or private metadata.
     for (const { userId } of recipients) this.realtime.emitGroupChannelChanged(userId, { groupId, channelId, reason });
@@ -252,9 +258,9 @@ export class ChannelsService {
     return (await this.list(userId, groupId)).find((c) => c.id === channelId)!;
   }
 
-  async members(userId: string, groupId: string, channelId: string, query = '') {
+  async members(userId: string, groupId: string, channelId: string, query = ''): Promise<GroupChannelMemberDto[]> {
     const { channel } = await this.access.channel(userId, groupId, channelId);
-    return this.prisma.communityGroupMember.findMany({
+    const members = await this.prisma.communityGroupMember.findMany({
       where: {
         groupId,
         status: 'active',
@@ -270,10 +276,12 @@ export class ChannelsService {
             : {}),
         },
       },
-      select: { role: true, user: { select: { ...USER_BRIEF_SELECT, isBot: true } } },
+      select: { role: true, user: { select: { ...USER_LIST_SELECT, isBot: true } } },
       take: 100,
       orderBy: [{ createdAt: 'asc' }, { userId: 'asc' }],
     });
+    await this.access.channel(userId, groupId, channelId);
+    return members.map(member => ({ role: member.role, user: toUserListDto(member.user, this.config.r2()?.publicBaseUrl ?? null) }));
   }
 
   async addMember(userId: string, groupId: string, channelId: string, targetId: string, historyAcknowledged: boolean) {
