@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sync canonical guidance to sibling repositories, or detect drift with --check.
 
-Byte-copied: engineering-policy.md, Figma guidelines, shared skills, and the web polish skill.
+Byte-copied: engineering-policy.md, Figma guidelines, and three shared skills.
 
 Shared Cursor rules (15-feed-surface, 20-deletion-deprecation,
 56-notification-seen-vs-read) are canonical in the API repository. Copies keep
@@ -25,10 +25,8 @@ SHARED_RULES = (
 )
 SHARED_SKILLS = (
     "api-contract-sync",
-    "design-simplicity-principles",
     "moh-designer",
     "moh-marketing",
-    "ux-review",
 )
 
 
@@ -97,14 +95,6 @@ def collect_pairs(repos: dict[str, Path]) -> list[tuple[Path, Path]]:
                     (file, repos[name] / ".agents/skills" / skill / file.relative_to(source))
                     for name in present
                 )
-    if "ios" in present:
-        polish = repos["www"] / ".agents/skills/make-interfaces-feel-better"
-        if polish.is_dir():
-            for file in sorted(polish.rglob("*")):
-                if file.is_file():
-                    pairs.append(
-                        (file, repos["ios"] / ".agents/skills/make-interfaces-feel-better" / file.relative_to(polish))
-                    )
     return pairs
 
 
@@ -181,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
     figma_script = present["api"] / "scripts/sync-figma-guidelines.py"
     if args.check and figma_script.is_file() and (present["api"] / "docs/figma-guidelines").is_dir():
         figma_status = subprocess.run(
-            [sys.executable, str(figma_script), "--root", str(present["api"]), "--check"],
+            [sys.executable, str(figma_script), "--root", str(present["api"]), "--check", "--local-only"],
             check=False,
         ).returncode
     if drift:

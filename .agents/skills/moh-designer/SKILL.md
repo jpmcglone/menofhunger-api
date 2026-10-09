@@ -1,117 +1,50 @@
 ---
 name: moh-designer
-description: Design or revise Men of Hunger screen structure, hierarchy, density, and navigation using existing tokens. Use for layout and visual design; use make-interfaces-feel-better for small polish fixes.
+description: Design, polish, or review MOH web and iOS UI, including Figma comparisons, using shared tokens and native behavior.
 ---
+# Men of Hunger design
 
-# Men of Hunger Designer
+Taste: Apple's clarity with Linear's useful density. Content over chrome; calm, scannable
+rows; an obvious primary action. Improve the task, not compliance with a count of controls,
+cards, type sizes, or animations. Preserve useful information and accessible actions.
 
-I like the simplicity of apple, but the function of linear.app
+Follow the [Figma-first workflow](../../../docs/engineering-policy.md#figma-is-the-visual-source-of-truth)
+and [product policy](../../../docs/engineering-policy.md#product-and-visual-decisions).
+Use [Figma guidelines](../../../docs/figma-guidelines/README.md) for library work and motion handoff.
 
-That is the taste. Apple decides what is on the screen. Linear decides how the work gets done.
+## MOH visual language
 
-## Where this sits
+Web tokens live in `assets/css/main.css`; iOS uses `AppTheme.swift` in its own checkout.
+- Surfaces: `--moh-surface-0/1/2/3` / `Color.mohBackground`, `mohSurface1…3`.
+- Text: `--moh-text`, `--moh-text-muted`, `--moh-text-soft` / `Color.mohText*`.
+- Use `moh-divide` for web lists, `moh-border` for section chrome, and existing gutters.
+- Inter for UI; Literata/`moh-serif` for quotes and daily prompts. Reuse semantic type roles.
+- Brass indicates focus; membership, organization, and check-in colors retain their meaning.
+- Reuse shared vector product icons; SF Symbols suit native system controls.
 
-| Skill | Job |
-|---|---|
-| `design-simplicity-principles` | What to ship. Cut features. |
-| **`moh-designer`** | How the screen works and looks. Hierarchy, density, chrome. |
-| `make-interfaces-feel-better` | Pixel polish after the structure is right. Radius, motion, shadows. |
-| `ux-review` | Full-platform UI/UX audit. Review and implement within the user’s requested scope. |
-| `moh-marketing` | Words outside the product. |
+Feeds/settings use full-width rows rather than repetitive card wrappers. Marketing and detail
+pages can breathe. Use shadows for actual elevation. For polish, check alignment, nested radii,
+number stability, contrast, and press/focus/loading feedback. Prefer existing motion helpers;
+respect reduced motion. Do not make hover the only route to an action.
 
-Follow the [Figma-first design workflow](../../../docs/engineering-policy.md#figma-is-the-visual-source-of-truth) before implementation, unless the user specifies otherwise.
+Web keeps real links, keyboard/touch access, and back/filter state. iOS keeps SwiftUI navigation,
+sheets, safe areas, and 44pt targets. Follow its local architecture and native-handoff guidance.
+A native adaptation need not copy web pixels.
 
-Follow the [product and visual policy](../../../docs/engineering-policy.md#product-and-visual-decisions).
+## Reviews and comparisons
 
-Use the [shared Figma library guidelines](../../../docs/figma-guidelines/README.md) in
-Codex and Cursor. For animated interactions inspect Motion context alongside static
-design data; hand off the actual timeline and reduced-motion behavior to native
-SwiftUI and Vue/CSS implementations. Report missing motion data rather than inventing it.
+A review produces findings unless edits were requested. Inspect source and available running
+UI; distinguish observed behavior, source/design evidence, and unverified states. For broad
+reviews, track coverage by screen and platform. Compare both directions: design gaps in the app,
+and useful app behavior absent from a mockup. Preserve the latter during migration.
+A component or icon existing in Figma does not prove a screen is implemented.
 
-## The synthesis
+Inspect states relevant to the change: permissions/identity, empty/error/loading, long content,
+keyboard/back navigation, themes, narrow widths/Dynamic Type, and realtime/optimistic updates.
+Preserve drafts, composer actions, media, scheduling, and audience constraints during restyling.
+Do not infer unread state from badge counts or confuse grouped actors with event counts.
 
-**Apple (simplicity)**
-- One job per screen. Name it in five words.
-- Content over chrome. The page is the card; do not wrap the route in a card.
-- Progressive disclosure. Secondary actions live in a menu, hover, or one tap deeper.
-- Familiar patterns. Do not invent a widget when a list, button, or system control will do.
-- Hierarchy through type and weight, not a rainbow of color.
-- Defaults so good a setting is unnecessary.
-- A stranger understands the next action in ten seconds.
-
-**Linear (function)**
-- The list is the product. Rows are scannable, dense, and calm.
-- Every pixel earns its keep. Sparse is not the same as simple.
-- Metadata is information (name, time, status), not decoration.
-- Primary action is always visible. Secondary actions appear on hover, press, or overflow.
-- Speed is a design feature: optimistic updates, no dead clicks, no extra confirmation for safe acts.
-- One quiet chrome. The row does the talking.
-- Empty states start the next action. No illustrations. No pep talk.
-- Status is a small color or a word — not a badge on every row.
-
-**Not this**
-- Consumer-social candy (gradients, stickers, confetti, bounce).
-- Enterprise dashboard (cards in cards, KPI tiles, six filters).
-- Bro-app chrome (oranges everywhere, shields, "level up").
-
-## Lodge materials (use these, don't restyle)
-
-Web tokens live in `menofhunger-www/assets/css/main.css`. iOS mirrors them in `AppTheme.swift`.
-
-- Surfaces: `--moh-surface-0/1/2/3` / `Color.mohBackground`, `mohSurface1…3`
-- Text: `--moh-text`, `--moh-text-muted`, `--moh-text-soft` / `Color.mohText*`
-- Dividers: `moh-divide` on lists. `border-b moh-border` on section chrome. Never Tailwind `divide-y`.
-- Type roles: `moh-h1`, `moh-h2`, `moh-body`, `moh-meta`. iOS: semantic text styles + `Color.moh*`.
-- Gutter: `moh-gutter-x` / existing screen padding. Do not invent a third inset.
-- Accent: brass for focus. Verified / Premium / check-in colors only for those meanings.
-- Serif (`moh-serif` / Literata): lodge moments only — quotes, daily prompts. Never UI chrome.
-- Font: Inter on web and iOS. Do not add a display face.
-
-Use the linked policy to decide when a semantic token is needed.
-
-## Screen recipe
-
-1. **Name the job.** If you cannot say it in five words, split the screen.
-2. **Cut chrome.** Title, one primary action, the list. Everything else is a candidate for removal.
-3. **Make the row the unit.** Feed, notifications, members, settings: one tappable row, full width, `moh-divide`, metadata in `moh-meta`.
-4. **One primary action.** Join, Check in, Post, Save. Not three equal buttons.
-5. **Hide the rest.** Menus, hover, swipe, or a deeper screen.
-6. **Design empty / loading / error** as first-class. Skeleton over spinner. Specific empty copy over "No results."
-7. **Then polish** with `make-interfaces-feel-better` (concentric radii, tabular nums, 0.96 press, no bounce).
-
-## Density rules
-
-- **Lists:** Linear. Tight vertical rhythm, hairline dividers, two text levels max (body + meta).
-- **Marketing / about / first-run:** Apple. More air, one idea per section, one CTA.
-- **Settings:** Linear. Rows, not cards. Group by job, not by feature inventory.
-- **Detail screens:** Apple structure (one column, one job) with Linear rows inside (replies, members, activity).
-
-If a list feels empty, add information — not padding, not a card wrapper.
-If a screen feels busy, remove a control — not the content.
-
-## Platform
-
-**Web**
-- Edge-to-edge. No full-page `rounded-* border` wrapper.
-- Real `<a>` / `NuxtLink` for navigation.
-- Hover reveals row actions. Keyboard users get the same actions in a menu.
-- Dark mode is first-class; use the shared surface policy for separation and elevation.
-
-**iOS**
-- System chrome first (`TabView`, nav bar, search, sheets via `.mohSheet`).
-- Shared Figma vector icons for product UI; SF Symbols for native system controls without a library equivalent. 44pt hit targets. `.contentShape(Rectangle())` on rows.
-- Semantic type. `Color.moh*`. CSS-style padding shorthands.
-- Do not port web card chrome onto iOS.
-
-## Workflow
-
-Identify the screen’s purpose, inspect the existing components, and apply the
-[product and visual policy](../../../docs/engineering-policy.md#product-and-visual-decisions).
-Implement within the user’s scope, or provide concrete findings for a review-only request.
-Use the [scope policy](../../../docs/engineering-policy.md#scope-and-precedence) for reporting;
-there is no mandatory deletion, table, or word count.
-
-Check that a newcomer can find the primary action, rows are easy to scan, and changes preserve
-accessibility, useful information, and theme consistency.
-
-Shipped patterns: [examples.md](examples.md)
+Report impact, evidence, and a proposed fix; group repeated issues under shared components.
+Explain intentional adaptations and coverage limits. Do not mutate real user content or launch
+servers merely to complete a read-only audit. Use the [validation matrix](../../../docs/engineering-policy.md#validation-matrix)
+for implemented changes.

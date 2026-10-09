@@ -1,4 +1,4 @@
-<!-- MoH guideline: 03-platforms-and-handoff.md; revision: 0190a98b7953970a97c9bc1cdafc2fefc94f797e43da99644c0eb66156b586d5; payload-sha256: 422edeb35c3e9587a5875ac2666465e53e853ced5a06c1b3de8621deba371662 -->
+<!-- MoH guideline: 03-platforms-and-handoff.md; revision: 2822892c20072b132855fa195b91dc10c1548312b81f04e366cc6b0cd26cbf65; payload-sha256: 422edeb35c3e9587a5875ac2666465e53e853ced5a06c1b3de8621deba371662 -->
 # Men of Hunger: platforms and handoff
 
 Design in Men of Hunger — UI Library, then implement the approved direction in

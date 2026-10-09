@@ -97,8 +97,9 @@ uploading these files and observing the confirmation. The UI was verified on Oct
 `applied.json` is created only after the supplied evidence matches the export.
 It records the library URL, manifest hash, verification method, and UTC verification time.
 `--check` fails when the local bundle or last verified application is stale or absent.
-The ordinary `scripts/sync-agent-guidance.py --check` also runs this Figma check, so
-changed canonical guidelines or tracked source policy cannot quietly retain an old receipt.
+The ordinary `scripts/sync-agent-guidance.py --check` validates the local export only.
+Use the separate Figma check when applying guidelines; an unrelated guidance edit does not
+require a remote upload. The original receipt stays historical until a real application is verified.
 It cannot detect a later remote edit without a fresh readback. For that check, download
 the current files and pass `--check --readback /tmp/current-guidelines`, or pass fresh
 `--ui-evidence` with its explicitly limited verification scope.
@@ -131,4 +132,4 @@ Make can explore alternate flows; selected designs return to the UI Library. Wea
 audio, text animation, and Lottie are for an approved media brief. Generated media
 that enters the product follows the [media review policy](../engineering-policy.md#media-ownership-and-review).
 The [engineering policy](../engineering-policy.md#figma-is-the-visual-source-of-truth)
-and shared `moh-designer`/`design-simplicity-principles` skills govern scope and tokens.
+and shared `moh-designer` skill govern scope and tokens.

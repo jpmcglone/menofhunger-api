@@ -1,9 +1,0 @@
----
-description: Apply the Men of Hunger product simplification algorithm before adding or changing API behavior
-alwaysApply: false
----
-
-# Product decisions
-
-Use the [product and visual policy](../../docs/engineering-policy.md#product-and-visual-decisions).
-For deeper scope evaluation, read [design-simplicity-principles](../../.agents/skills/design-simplicity-principles/SKILL.md).

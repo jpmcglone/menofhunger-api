@@ -65,6 +65,12 @@ class SyncCheck(unittest.TestCase):
             self.assertEqual((ios / "docs/figma-guidelines/example.md").read_text(), "# Library guidance\n")
             self.assertEqual(MODULE.main(args + ["--check"]), 0)
             (api / "scripts").mkdir()
+            # Ordinary guidance validation requires local export consistency,
+            # not a new remote Figma application receipt.
+            (api / "scripts/sync-figma-guidelines.py").write_text(
+                "import sys\nraise SystemExit(0 if '--local-only' in sys.argv else 1)\n"
+            )
+            self.assertEqual(MODULE.main(args + ["--check"]), 0)
             (api / "scripts/sync-figma-guidelines.py").write_text("raise SystemExit(1)\n")
             self.assertEqual(MODULE.main(args + ["--check"]), 1)
 

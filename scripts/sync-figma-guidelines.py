@@ -26,7 +26,6 @@ PARTS = (
 UPSTREAM = (
     "docs/engineering-policy.md",
     ".agents/skills/moh-designer/SKILL.md",
-    ".agents/skills/design-simplicity-principles/SKILL.md",
 )
 
 

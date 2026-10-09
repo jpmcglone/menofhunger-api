@@ -1,4 +1,4 @@
-<!-- MoH guideline: 04-motion-and-exploration.md; revision: 0190a98b7953970a97c9bc1cdafc2fefc94f797e43da99644c0eb66156b586d5; payload-sha256: 6fa52e654dc19a016cb889faf0354902e6086a3789cdf3ca059ca39fb9e71fc1 -->
+<!-- MoH guideline: 04-motion-and-exploration.md; revision: 2822892c20072b132855fa195b91dc10c1548312b81f04e366cc6b0cd26cbf65; payload-sha256: 6fa52e654dc19a016cb889faf0354902e6086a3789cdf3ca059ca39fb9e71fc1 -->
 # Men of Hunger: motion and exploration
 
 Motion communicates a user action or a meaningful state change. Keep it calm,

@@ -1,34 +1,24 @@
 ---
-description: Keep notification rows and lock-screen push copy human-readable and free of internal identifiers
+description: MOH notification terminology and APNs Communication copy constraints.
 globs: "src/modules/notifications/**/*.ts,src/modules/side-effects/side-effects.constants.ts"
 alwaysApply: false
 ---
 
-# Notification Copy Is a User-Facing Contract
+# Notification copy
 
-`NotificationKind`, job names, enum values, and database identifiers are never display copy.
+- Kinds, job names, and database IDs are not display copy. Give each push-capable
+  kind readable event-specific copy; avoid generic fallbacks and payload fragments.
+- `sourceLabel` is optional person/group/article context, never a raw kind or
+  filler such as “From notifications.”
+- Actor activity needs an action in its title and subtitle, such as “Checked in:”.
+  iOS Communication notifications replace the title with the actor's name and may
+  omit the subtitle, so `apnsBodyWithVisibleAction` also folds the action into the
+  body. DMs retain message-style bodies; system kinds do not repeat their title
+  as a subtitle. Preserve group context where applicable.
+- Rows, websocket payloads, and pushes may differ in length but must describe the
+  same event consistently. Keep previews appropriate for their audience.
 
-## Push copy
-
-- Every push-capable `NotificationKind` has an explicit human-readable title/body path.
-- Never pass a raw kind (`checkin_reminder`, `followed_article`, etc.) as `sourceLabel`, title,
-  subtitle, or body.
-- `sourceLabel` is optional display context only (person/group/article name). Omit it when it adds
-  no value; do not invent generic text such as "From notifications".
-- Fallback copy must still be specific and readable. Never expose snake_case, camelCase identifiers,
-  "Notification", "New activity", or serialized payload fragments.
-- Keep lock-screen copy concise and understandable without opening the app.
-- Name the action in title **and** subtitle: posted / checked in / replied / boosted / reposted /
-  nudged. iOS Communication notifications replace the alert title with the actor name, so the
-  subtitle is what preserves "Checked in:" vs a bare body preview. Action subtitles end with a
-  colon when a preview follows. Body may carry a content preview.
-
-## Tests
-
-- Maintain a table-driven test over every `NotificationKind` that can reach APNs.
-- Reject snake_case/internal names and generic fallback text in both title and body.
-- Add a targeted assertion whenever a new notification kind or source-label branch is introduced.
-- Preview representative pushes with and without optional actor/group/content context.
-
-Notification database titles/bodies, in-app rows, websocket payloads, and APNs copy may have
-different lengths, but they must describe the same event with the same user-facing terminology.
+Read `notification-push-copy.ts`, `notification-push.rules.ts`, and
+`notification-push-delivery.service.ts` under `src/modules/notifications` before
+changing copy. Extend the kind table and affected context assertions in
+`notification-push.service.spec.ts`, including missing actor/group/preview cases.

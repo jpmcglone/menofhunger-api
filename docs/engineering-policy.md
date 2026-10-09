@@ -4,6 +4,7 @@ Authoritative source: `menofhunger-api/docs/engineering-policy.md`. Web and iOS 
 identical checked copies so a standalone checkout works in both Codex and Cursor.
 Edit the source, then run `python3 scripts/sync-agent-guidance.py` in the API repository.
 Use `--check` to detect drift; no background process or editor-specific skill copies.
+This checks local files/exports; verification of remote Figma application is a separate design task.
 Pass `--ios-root /absolute/path/to/menofhunger-ios` when synchronizing an active iOS worktree.
 The same command also syncs shared Cursor rule *bodies* (`15-feed-surface`,
 `20-deletion-deprecation`, `56-notification-seen-vs-read`). Per-repo frontmatter

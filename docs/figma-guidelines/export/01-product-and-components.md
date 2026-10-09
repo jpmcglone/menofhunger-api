@@ -1,4 +1,4 @@
-<!-- MoH guideline: 01-product-and-components.md; revision: 0190a98b7953970a97c9bc1cdafc2fefc94f797e43da99644c0eb66156b586d5; payload-sha256: ea4255a4422eb9afdc155e89ec46fe5987192aebc796ebccaef01da1532fb041 -->
+<!-- MoH guideline: 01-product-and-components.md; revision: 2822892c20072b132855fa195b91dc10c1548312b81f04e366cc6b0cd26cbf65; payload-sha256: ea4255a4422eb9afdc155e89ec46fe5987192aebc796ebccaef01da1532fb041 -->
 # Men of Hunger: product and components
 
 The screen should feel as simple as Apple and work as efficiently as Linear.

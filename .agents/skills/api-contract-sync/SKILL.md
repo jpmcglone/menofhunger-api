@@ -1,46 +1,22 @@
 ---
 name: api-contract-sync
-description: >-
-  Keep API response contracts and client consumption synchronized across API, web, and iOS. Use
-  for DTO/model/realtime changes, decoding work, or when a feature/preview exists on one client but
-  is missing on another.
+description: Synchronize changed MOH API DTOs, realtime payloads, and web/iOS decoding, including newly consumed fields.
 ---
+# API contract sync
 
-# API Contract Sync
+Inspect the owning DTO and actual consumers before adding a field or endpoint:
+- API: `src/common/dto/**`, domain `*.dto.ts`, and `PresenceRealtimeService`.
+- Web: `types/api.ts`, `types/api-contracts.gen.ts`, consuming composables/socket handlers.
+- iOS: matching domain models, transport decoding, and store/service reducers.
+Paths are relative to each repository; locate active checkouts rather than assuming siblings.
 
-Use this when a response shape, DTO, envelope, realtime payload, or decoded client model changes.
-Also use it when one client already renders richer API-backed UI than another: missing consumption
-of an existing field is still a contract-parity bug.
+Update affected consumers together. Generate contracts with API `npm run emit:contracts`;
+check with `npm run check:contracts` and web `npm run validate-api-types` plus typechecking.
+Use the [validation matrix](../../../docs/engineering-policy.md#validation-matrix) for platform gates.
 
-## Before changing the contract
-
-1. Apply the product algorithm: should this field/endpoint exist, or can an existing resource carry it?
-2. Identify consumers:
-   - API DTOs: `menofhunger-api/src/common/dto/**` and owning-module `*.dto.ts` files
-   - Web types: `menofhunger-www/types/api.ts` and generated contract checks
-   - iOS models: `menofhunger-ios/MenOfHunger/**/Model` and shared models
-   - Realtime payloads: API emit methods and web/iOS socket handlers
-3. Inspect the actual DTO and both clients before adding an endpoint or field. Reuse an existing
-   optional preview/mutation when it already carries the needed data.
-
-## Required sync
-
-- API controllers return the envelope explicitly: `{ data }` or `{ data, pagination }`.
-- Web mirrors changed response shapes in `types/api.ts`; validate using the [canonical matrix](../../../docs/engineering-policy.md#validation-matrix).
-- iOS updates the matching `Decodable` model and adds/updates a decoding test for any non-trivial or newly consumed shape.
-- Choose snapshots, typed patches, and invalidations using the [realtime policy](../../../docs/engineering-policy.md#realtime-contracts-and-ownership).
-- A client feature that starts consuming an existing optional field still requires a fixture that
-  decodes the full nested shape and a UI path that handles missing/null values.
-- Preserve server strings exactly when case is meaningful (for example case-only username edits);
-  do not lowercase/normalize in a client unless the API contract says to.
-- Error envelopes are part of the contract: iOS exposes the API message through `LocalizedError`
-  and UI uses `safeUserFacingMessage`, while technical decoding/transport details stay in Debug logs.
-
-## Red flags
-
-- A field exists only on one client because parity was assumed.
-- A new endpoint exists only because changing an existing DTO felt scary.
-- Web and iOS decode the same data with different names or optionality.
-- A socket payload duplicates a snapshot model, or a partial patch is decoded as a complete entity.
-- Web displays DTO-backed preview/content that iOS silently drops, or vice versa.
-- A client assumes "field absent" without checking the live DTO and the other client first.
+Snapshots reuse DTOs; patches distinguish absent from null. Preserve case-sensitive server
+strings and recipient permissions. Follow the [realtime policy](../../../docs/engineering-policy.md#realtime-contracts-and-ownership).
+Cover meaningful decoding/merge changes with nested fixtures, including missing/null fields.
+When one client lacks an existing preview, inspect its consumption before changing the API.
+Use web `getSafeUserErrorMessage` / iOS `safeUserFacingMessage` for display errors;
+transport/decoding details belong in diagnostics.
