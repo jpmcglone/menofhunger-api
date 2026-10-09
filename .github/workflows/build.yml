@@ -19,6 +19,8 @@ jobs:
           node-version-file: ".nvmrc"
           cache: "npm"
       - run: npm ci --ignore-scripts
+      - run: npm run check:env-docs
+      - run: node --test scripts/kill-port.test.mjs
       - run: npm run lint
 
   verify:
