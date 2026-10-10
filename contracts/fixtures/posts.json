@@ -1,0 +1,347 @@
+{
+  "feed": {
+    "data": [
+      {
+        "id": "22222222-2222-4222-8222-222222222222",
+        "author": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "username": "john",
+          "name": "John",
+          "premium": false,
+          "premiumPlus": false,
+          "isOrganization": false,
+          "verifiedStatus": "manual",
+          "avatarUrl": null,
+          "orgAffiliations": []
+        },
+        "body": "Showed up today.",
+        "createdAt": "2026-10-10T22:00:00.000Z",
+        "kind": "regular",
+        "visibility": "verifiedOnly",
+        "parentId": null,
+        "communityGroupId": null,
+        "deletedAt": null,
+        "media": [],
+        "boostCount": 2,
+        "commentCount": 0,
+        "viewerHasBoosted": false,
+        "checkinPrompt": null,
+        "poll": null
+      }
+    ],
+    "pagination": {
+      "nextCursor": null
+    }
+  },
+  "richPost": {
+    "data": {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "author": {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "username": "john",
+        "name": "John",
+        "premium": false,
+        "premiumPlus": false,
+        "isOrganization": false,
+        "verifiedStatus": "manual",
+        "avatarUrl": null,
+        "orgAffiliations": [],
+        "isNewMember": true
+      },
+      "body": "Showed up today.",
+      "createdAt": "2026-10-10T22:00:00.000Z",
+      "kind": "checkin",
+      "visibility": "verifiedOnly",
+      "parentId": null,
+      "communityGroupId": null,
+      "deletedAt": null,
+      "media": [],
+      "boostCount": 2,
+      "commentCount": 0,
+      "viewerHasBoosted": false,
+      "checkinPrompt": "What did you follow through on?",
+      "poll": {
+        "id": "poll-1",
+        "endsAt": "2026-10-11T22:00:00.000Z",
+        "ended": false,
+        "totalVoteCount": 3,
+        "viewerHasVoted": true,
+        "viewerVotedOptionId": "option-1",
+        "options": [
+          {
+            "id": "option-1",
+            "text": "Show up",
+            "imageUrl": null,
+            "width": null,
+            "height": null,
+            "alt": null,
+            "voteCount": 2,
+            "percent": 67
+          },
+          {
+            "id": "option-2",
+            "text": "Keep going",
+            "imageUrl": null,
+            "width": null,
+            "height": null,
+            "alt": null,
+            "voteCount": 1,
+            "percent": 33
+          }
+        ]
+      },
+      "editedAt": "2026-10-10T22:00:00.000Z",
+      "editCount": 1,
+      "checkinDayKey": "2026-10-10",
+      "isDraft": false,
+      "topics": [],
+      "hashtags": [],
+      "cashtags": [],
+      "bookmarkCount": 3,
+      "repostCount": 2,
+      "viewerCount": 7,
+      "totalViewCount": 31,
+      "mentions": [
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "username": "john",
+          "verifiedStatus": "manual"
+        }
+      ],
+      "viewerHasBookmarked": true,
+      "viewerHasReposted": true,
+      "viewerHasCommented": false,
+      "viewerHasViewed": true,
+      "viewerBookmarkCollectionIds": [
+        "folder-1"
+      ],
+      "replyPrompt": "question",
+      "pickaxUrl": "https://pickax.com/example",
+      "pickaxError": null,
+      "xUrl": null,
+      "xError": null,
+      "groupPreview": {
+        "id": "33333333-3333-4333-8333-333333333333",
+        "slug": "builders",
+        "name": "Builders",
+        "descriptionPreview": "Build together.",
+        "avatarImageUrl": null,
+        "coverImageUrl": null,
+        "joinPolicy": "open",
+        "memberCount": 2,
+        "viewerMembership": {
+          "status": "active",
+          "role": "member"
+        },
+        "viewerPendingApproval": false
+      },
+      "pinnedInGroupAt": "2026-10-10T22:00:00.000Z",
+      "quotedPost": {
+        "id": "22222222-2222-4222-8222-222222222222",
+        "author": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "username": "john",
+          "name": "John",
+          "premium": false,
+          "premiumPlus": false,
+          "isOrganization": false,
+          "verifiedStatus": "manual",
+          "avatarUrl": null,
+          "orgAffiliations": [],
+          "isNewMember": true
+        },
+        "body": "Showed up today.",
+        "createdAt": "2026-10-10T22:00:00.000Z",
+        "kind": "regular",
+        "visibility": "verifiedOnly",
+        "parentId": null,
+        "communityGroupId": null,
+        "deletedAt": null,
+        "media": [],
+        "boostCount": 2,
+        "commentCount": 0,
+        "viewerHasBoosted": false,
+        "checkinPrompt": null,
+        "poll": null,
+        "editedAt": "2026-10-10T22:00:00.000Z",
+        "editCount": 1,
+        "checkinDayKey": "2026-10-10",
+        "isDraft": false,
+        "topics": [],
+        "hashtags": [],
+        "cashtags": [],
+        "bookmarkCount": 3,
+        "repostCount": 2,
+        "viewerCount": 7,
+        "totalViewCount": 31,
+        "mentions": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "username": "john",
+            "verifiedStatus": "manual"
+          }
+        ],
+        "viewerHasBookmarked": true,
+        "viewerHasReposted": true,
+        "viewerHasCommented": false,
+        "viewerHasViewed": true,
+        "viewerBookmarkCollectionIds": [
+          "folder-1"
+        ],
+        "replyPrompt": "question",
+        "pickaxUrl": "https://pickax.com/example",
+        "pickaxError": null,
+        "xUrl": null,
+        "xError": null
+      },
+      "conversationContext": {
+        "kind": "unanswered",
+        "reply": null,
+        "relatedPostId": null
+      }
+    }
+  },
+  "repost": {
+    "data": {
+      "id": "repost-shell",
+      "author": {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "username": "john",
+        "name": "John",
+        "premium": false,
+        "premiumPlus": false,
+        "isOrganization": false,
+        "verifiedStatus": "manual",
+        "avatarUrl": null,
+        "orgAffiliations": [],
+        "isNewMember": true
+      },
+      "body": "Showed up today.",
+      "createdAt": "2026-10-10T22:00:00.000Z",
+      "kind": "repost",
+      "visibility": "verifiedOnly",
+      "parentId": null,
+      "communityGroupId": null,
+      "deletedAt": null,
+      "media": [],
+      "boostCount": 2,
+      "commentCount": 0,
+      "viewerHasBoosted": false,
+      "checkinPrompt": null,
+      "poll": null,
+      "editedAt": "2026-10-10T22:00:00.000Z",
+      "editCount": 1,
+      "checkinDayKey": "2026-10-10",
+      "isDraft": false,
+      "topics": [],
+      "hashtags": [],
+      "cashtags": [],
+      "bookmarkCount": 3,
+      "repostCount": 2,
+      "viewerCount": 7,
+      "totalViewCount": 31,
+      "mentions": [
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "username": "john",
+          "verifiedStatus": "manual"
+        }
+      ],
+      "viewerHasBookmarked": true,
+      "viewerHasReposted": true,
+      "viewerHasCommented": false,
+      "viewerHasViewed": true,
+      "viewerBookmarkCollectionIds": [
+        "folder-1"
+      ],
+      "replyPrompt": "question",
+      "pickaxUrl": "https://pickax.com/example",
+      "pickaxError": null,
+      "xUrl": null,
+      "xError": null,
+      "repostedPost": {
+        "id": "22222222-2222-4222-8222-222222222222",
+        "author": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "username": "john",
+          "name": "John",
+          "premium": false,
+          "premiumPlus": false,
+          "isOrganization": false,
+          "verifiedStatus": "manual",
+          "avatarUrl": null,
+          "orgAffiliations": [],
+          "isNewMember": true
+        },
+        "body": "Showed up today.",
+        "createdAt": "2026-10-10T22:00:00.000Z",
+        "kind": "regular",
+        "visibility": "verifiedOnly",
+        "parentId": null,
+        "communityGroupId": null,
+        "deletedAt": null,
+        "media": [],
+        "boostCount": 2,
+        "commentCount": 0,
+        "viewerHasBoosted": false,
+        "checkinPrompt": null,
+        "poll": null,
+        "editedAt": "2026-10-10T22:00:00.000Z",
+        "editCount": 1,
+        "checkinDayKey": "2026-10-10",
+        "isDraft": false,
+        "topics": [],
+        "hashtags": [],
+        "cashtags": [],
+        "bookmarkCount": 3,
+        "repostCount": 2,
+        "viewerCount": 7,
+        "totalViewCount": 31,
+        "mentions": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "username": "john",
+            "verifiedStatus": "manual"
+          }
+        ],
+        "viewerHasBookmarked": true,
+        "viewerHasReposted": true,
+        "viewerHasCommented": false,
+        "viewerHasViewed": true,
+        "viewerBookmarkCollectionIds": [
+          "folder-1"
+        ],
+        "replyPrompt": "question",
+        "pickaxUrl": "https://pickax.com/example",
+        "pickaxError": null,
+        "xUrl": null,
+        "xError": null
+      },
+      "repostedByAuthors": [
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "username": "john",
+          "name": "John",
+          "premium": false,
+          "premiumPlus": false,
+          "isOrganization": false,
+          "verifiedStatus": "manual",
+          "avatarUrl": null,
+          "orgAffiliations": []
+        },
+        {
+          "id": "second-author",
+          "username": "john",
+          "name": "Marcus",
+          "premium": false,
+          "premiumPlus": false,
+          "isOrganization": false,
+          "verifiedStatus": "manual",
+          "avatarUrl": null,
+          "orgAffiliations": []
+        }
+      ],
+      "repostedByCount": 3
+    }
+  }
+}

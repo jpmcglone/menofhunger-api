@@ -1,0 +1,29 @@
+{
+  "followSummary": {
+    "data": {
+      "canView": true,
+      "followerCount": 24,
+      "followingCount": 18,
+      "viewerFollowsUser": false,
+      "userFollowsViewer": false,
+      "viewerPostNotificationsEnabled": false,
+      "nudge": null,
+      "followedBy": null
+    }
+  },
+  "followSummaryHidden": {
+    "data": {
+      "canView": false,
+      "followerCount": null,
+      "followingCount": null,
+      "viewerFollowsUser": false,
+      "userFollowsViewer": false,
+      "viewerPostNotificationsEnabled": false,
+      "nudge": null,
+      "followedBy": null
+    }
+  },
+  "followSummaryMissing": {
+    "data": {}
+  }
+}

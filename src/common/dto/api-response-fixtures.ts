@@ -1,3 +1,4 @@
+import type { FollowSummary } from "../../modules/follows/follows.constants";
 import type { UserDto } from "./user.dto";
 import { TOPIC_OPTIONS } from "../topics/topic-options";
 import type { PostDto } from "./post.dto";
@@ -11,7 +12,7 @@ import type { NotificationDto } from "../../modules/notifications/notification.d
 import type { CheckinScheduleDto } from "../../modules/checkins/checkin-schedule.dto";
 import { NOT_DELETED } from "../prisma/where";
 
-// Synthetic examples owned by the API. Pick constrains the Android-consumed wire subset
+// Synthetic examples owned by the API. Pick constrains representative wire subsets
 // without inventing server fields or making fixture-only data part of the public contract.
 const createdAt = "2026-10-10T22:00:00.000Z";
 const user = {
@@ -242,7 +243,142 @@ const checkinSchedule = {
   opensAt: "2026-10-10T21:00:00.000Z",
   closesAt: "2026-10-11T04:00:00.000Z",
 } satisfies CheckinScheduleDto;
-export const androidContractFixtures = {
+const completePost = {
+  ...post,
+  editedAt: createdAt,
+  editCount: 1,
+  checkinDayKey: "2026-10-10",
+  isDraft: false,
+  topics: [],
+  hashtags: [],
+  cashtags: [],
+  bookmarkCount: 3,
+  repostCount: 2,
+  viewerCount: 7,
+  totalViewCount: 31,
+  mentions: [
+    {
+      id: user.id,
+      username: user.username,
+      verifiedStatus: user.verifiedStatus,
+    },
+  ],
+  viewerHasBookmarked: true,
+  viewerHasReposted: true,
+  viewerHasCommented: false,
+  viewerHasViewed: true,
+  viewerBookmarkCollectionIds: ["folder-1"],
+  replyPrompt: "question",
+  pickaxUrl: "https://pickax.com/example",
+  pickaxError: null,
+  xUrl: null,
+  xError: null,
+  author: { ...author, isNewMember: true },
+} satisfies PostDto;
+const richPost = {
+  ...completePost,
+  kind: "checkin",
+  checkinPrompt: "What did you follow through on?",
+  groupPreview: {
+    id: group.id,
+    slug: group.slug,
+    name: group.name,
+    descriptionPreview: group.description,
+    avatarImageUrl: null,
+    coverImageUrl: null,
+    joinPolicy: group.joinPolicy,
+    memberCount: group.memberCount,
+    viewerMembership: group.viewerMembership,
+    viewerPendingApproval: false,
+  },
+  pinnedInGroupAt: createdAt,
+  quotedPost: completePost,
+  poll: {
+    id: "poll-1",
+    endsAt: "2026-10-11T22:00:00.000Z",
+    ended: false,
+    totalVoteCount: 3,
+    viewerHasVoted: true,
+    viewerVotedOptionId: "option-1",
+    options: [
+      {
+        id: "option-1",
+        text: "Show up",
+        imageUrl: null,
+        width: null,
+        height: null,
+        alt: null,
+        voteCount: 2,
+        percent: 67,
+      },
+      {
+        id: "option-2",
+        text: "Keep going",
+        imageUrl: null,
+        width: null,
+        height: null,
+        alt: null,
+        voteCount: 1,
+        percent: 33,
+      },
+    ],
+  },
+  conversationContext: { kind: "unanswered", reply: null, relatedPostId: null },
+} satisfies PostDto;
+
+const followSummary = {
+  canView: true,
+  followerCount: 24,
+  followingCount: 18,
+  viewerFollowsUser: false,
+  userFollowsViewer: false,
+  viewerPostNotificationsEnabled: false,
+  nudge: null,
+  followedBy: null,
+} satisfies FollowSummary;
+
+const responses = {
+  followSummary: { data: followSummary },
+  followSummaryHidden: {
+    data: {
+      ...followSummary,
+      canView: false,
+      followerCount: null,
+      followingCount: null,
+    },
+  },
+  followSummaryMissing: { data: {} },
+
+  richPost: { data: richPost },
+  repost: {
+    data: {
+      ...completePost,
+      id: "repost-shell",
+      kind: "repost",
+      repostedPost: completePost,
+      repostedByAuthors: [
+        author,
+        { ...author, id: "second-author", name: "Marcus" },
+      ],
+      repostedByCount: 3,
+    } satisfies PostDto,
+  },
+  notificationPost: {
+    data: [
+      {
+        type: "single",
+        notification: {
+          ...notification,
+          post: richPost,
+          subjectPostPreview: {
+            bodySnippet: completePost.body,
+            kind: completePost.kind,
+            media: [],
+          },
+        },
+      },
+    ],
+  },
   topics: {
     data: TOPIC_OPTIONS.filter((topic) =>
       ["strength_training", "entrepreneurship"].includes(topic.value),
@@ -313,5 +449,41 @@ export const androidContractFixtures = {
       },
     ],
     pagination: { nextCursor: null },
+  },
+};
+
+// Platform-neutral examples grouped by the API domain they describe.
+export const apiResponseFixturesByDomain = {
+  auth: {
+    topics: responses.topics,
+    auth: responses.auth,
+    signedOut: responses.signedOut,
+    login: responses.login,
+  },
+  posts: {
+    feed: responses.feed,
+    richPost: responses.richPost,
+    repost: responses.repost,
+  },
+  follows: {
+    followSummary: responses.followSummary,
+    followSummaryHidden: responses.followSummaryHidden,
+    followSummaryMissing: responses.followSummaryMissing,
+  },
+  checkins: {
+    checkin: responses.checkin,
+  },
+  groups: {
+    groups: responses.groups,
+    channels: responses.channels,
+  },
+  messages: {
+    conversation: responses.conversation,
+    channelHistory: responses.channelHistory,
+  },
+  notifications: {
+    notifications: responses.notifications,
+    notificationsGroup: responses.notificationsGroup,
+    notificationPost: responses.notificationPost,
   },
 };

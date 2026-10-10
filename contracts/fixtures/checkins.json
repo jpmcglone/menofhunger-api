@@ -1,0 +1,16 @@
+{
+  "checkin": {
+    "data": {
+      "dayKey": "2026-10-10",
+      "isOpen": true,
+      "opensAt": "2026-10-10T21:00:00.000Z",
+      "closesAt": "2026-10-11T04:00:00.000Z",
+      "prompt": "What did you follow through on?",
+      "hasCheckedInToday": false,
+      "checkinStreakDays": 3,
+      "allowedVisibilities": [
+        "verifiedOnly"
+      ]
+    }
+  }
+}

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { contractFixtures } from "../src/common/dto/contract-fixtures";
-import { androidContractFixtures } from "../src/common/dto/android-contract-fixtures";
+import { apiResponseFixturesByDomain } from "../src/common/dto/api-response-fixtures";
 
 export function fixtureOutputs(
   root: string,
@@ -9,10 +9,8 @@ export function fixtureOutputs(
   androidRoot?: string,
 ): Map<string, string> {
   const json = JSON.stringify(contractFixtures, null, 2) + "\n";
-  const androidJson = JSON.stringify(androidContractFixtures, null, 2) + "\n";
   const outputs = new Map([
     [resolve(root, "contracts/fixtures/release.json"), json],
-    [resolve(root, "contracts/fixtures/android.json"), androidJson],
   ]);
   const www = resolve(root, "../menofhunger-www");
   const ios = iosRoot ? resolve(iosRoot) : resolve(root, "../menofhunger-ios");
@@ -29,11 +27,17 @@ export function fixtureOutputs(
       resolve(ios, "MenOfHungerTests/Fixtures/release-contracts.json"),
       json,
     );
-  if (androidRoot)
-    outputs.set(
-      resolve(androidRoot, "app/src/test/resources/android-contracts.json"),
-      androidJson,
-    );
+  for (const [domain, fixtures] of Object.entries(
+    apiResponseFixturesByDomain,
+  )) {
+    const domainJson = JSON.stringify(fixtures, null, 2) + "\n";
+    outputs.set(resolve(root, `contracts/fixtures/${domain}.json`), domainJson);
+    if (androidRoot)
+      outputs.set(
+        resolve(androidRoot, `app/src/test/resources/contracts/${domain}.json`),
+        domainJson,
+      );
+  }
   return outputs;
 }
 

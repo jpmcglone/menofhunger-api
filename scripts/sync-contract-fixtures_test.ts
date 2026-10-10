@@ -41,9 +41,34 @@ test("explicit worktree fixtures are copied exactly and drift is read-only", () 
     );
     assert.deepEqual(syncFixtures(outputs, false), []);
     assert.deepEqual(syncFixtures(outputs, true), []);
-    const canonical = join(api, "contracts/fixtures/android.json");
-    const copy = join(android, "app/src/test/resources/android-contracts.json");
-    assert.deepEqual(readFileSync(copy), readFileSync(canonical));
+    const domains = [
+      "auth",
+      "posts",
+      "follows",
+      "checkins",
+      "groups",
+      "messages",
+      "notifications",
+    ];
+    const fixtureKeys = new Set<string>();
+    for (const domain of domains) {
+      const canonical = join(api, `contracts/fixtures/${domain}.json`);
+      const copy = join(
+        android,
+        `app/src/test/resources/contracts/${domain}.json`,
+      );
+      assert.deepEqual(readFileSync(copy), readFileSync(canonical));
+      for (const key of Object.keys(JSON.parse(readFileSync(copy, "utf8")))) {
+        assert.equal(fixtureKeys.has(key), false, `Duplicate fixture: ${key}`);
+        fixtureKeys.add(key);
+      }
+    }
+    assert.equal(fixtureKeys.size, 18);
+    assert.equal(
+      outputs.has(join(api, "contracts/fixtures/android.json")),
+      false,
+    );
+    const copy = join(android, "app/src/test/resources/contracts/follows.json");
     const release = JSON.parse(
       readFileSync(join(api, "contracts/fixtures/release.json"), "utf8"),
     );

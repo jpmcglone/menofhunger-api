@@ -1,0 +1,47 @@
+{
+  "groups": {
+    "data": [
+      {
+        "id": "33333333-3333-4333-8333-333333333333",
+        "slug": "builders",
+        "name": "Builders",
+        "description": "Build together.",
+        "rules": null,
+        "avatarImageUrl": null,
+        "joinPolicy": "open",
+        "memberCount": 2,
+        "viewerMembership": {
+          "status": "active",
+          "role": "member"
+        },
+        "viewerPendingApproval": false,
+        "channelsAvailable": true
+      }
+    ]
+  },
+  "channels": {
+    "data": [
+      {
+        "id": "44444444-4444-4444-8444-444444444444",
+        "groupId": "33333333-3333-4333-8333-333333333333",
+        "name": "general",
+        "displayName": null,
+        "topic": "",
+        "privacy": "normal",
+        "hasUnread": true,
+        "personalCount": 1,
+        "preference": "mentions",
+        "readThrough": 1,
+        "capabilities": {
+          "canSend": true,
+          "canReact": true,
+          "canManage": false,
+          "canInvite": false,
+          "canModerate": false,
+          "canArchive": false,
+          "canRename": false
+        }
+      }
+    ]
+  }
+}
