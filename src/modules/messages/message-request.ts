@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { ConflictException } from "@nestjs/common";
+import { isUniqueViolation } from "../../common/prisma/errors";
 import {
   messageMediaCreateData,
   type MessageMediaInput,
@@ -33,10 +34,5 @@ export function assertMessageRequestHash(
 }
 
 export function isUniqueConflict(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "P2002"
-  );
+  return isUniqueViolation(error);
 }

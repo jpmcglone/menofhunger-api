@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { MessagesRealtimeService } from "../messages/messages-realtime.service";
 import { ChannelMessagesService } from "../group-channels/channel-messages.service";
 import { AdminImageReviewStorageService } from "./admin-image-review-storage.service";
@@ -36,8 +36,16 @@ export class AdminImageReviewActionsService {
       id: string;
       username: string | null;
     }>,
-    private readonly messagesRealtime: MessagesRealtimeService,
-    private readonly channelMessages: ChannelMessagesService,
+    @Inject(MessagesRealtimeService)
+    private readonly messagesRealtime: Pick<
+      MessagesRealtimeService,
+      "rebroadcastMessage"
+    >,
+    @Inject(ChannelMessagesService)
+    private readonly channelMessages: Pick<
+      ChannelMessagesService,
+      "publishMediaChange"
+    >,
   ) {}
 
   async deleteById(params: {

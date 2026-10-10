@@ -502,7 +502,7 @@ export const apiResponseFixturesByDomain = {
               alt: "Trail at dawn",
               transcriptStatus: null,
               transcript: null,
-              deletedAt: null,
+              ...NOT_DELETED,
             },
           ],
         },

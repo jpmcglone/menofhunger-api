@@ -1,6 +1,4 @@
 import type { AppConfigService } from "../app/app-config.service";
-import type { MessagesRealtimeService } from "../messages/messages-realtime.service";
-import type { ChannelMessagesService } from "../group-channels/channel-messages.service";
 import type { PrismaService } from "../prisma/prisma.service";
 import type { PublicProfileCacheService } from "../users/public-profile-cache.service";
 import { AdminImageReviewActionsService } from "./admin-image-review-actions.service";
@@ -29,10 +27,10 @@ export function makeAdminImageReviewService(
     publicProfileCache,
     {
       rebroadcastMessage: async () => undefined,
-    } as unknown as MessagesRealtimeService,
+    },
     {
       publishMediaChange: async () => undefined,
-    } as unknown as ChannelMessagesService,
+    },
   );
   return new AdminImageReviewService(prisma, cfg, storage, references, actions);
 }

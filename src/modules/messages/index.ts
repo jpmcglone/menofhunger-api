@@ -9,3 +9,4 @@ export { MessagesRealtimeService } from "./messages-realtime.service";
 export { MessagesMembershipService } from "./messages-membership.service";
 export { MessagesBotDeliveryService } from "./messages-bot-delivery.service";
 export * from "./messages.models";
+export * from "./message-media-state";

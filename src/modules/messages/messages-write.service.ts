@@ -1,3 +1,5 @@
+import { assertMessageMediaPermissions } from "./message-media-permissions";
+import { enqueueMessageMarvReply } from "./message-marv-reply";
 import { UploadGrantsService } from "../uploads/upload-grants.service";
 import { messageMediaDeletedAt } from "./message-media-state";
 import {
@@ -508,27 +510,7 @@ export class MessagesWriteService {
       });
     }
 
-    if (media.length > 0) {
-      const viewerIsVerified = Boolean(
-        sender?.verifiedStatus && sender.verifiedStatus !== "none",
-      );
-      const viewerIsPremium = Boolean(sender?.premium || sender?.premiumPlus);
-      const hasVideo = media.some((m) => m.kind === "video");
-      const hasAudio = media.some((m) => m.kind === "audio");
-      const hasImageOrGif = media.some(
-        (m) => m.kind !== "video" && m.kind !== "audio",
-      );
-      if ((hasImageOrGif || hasAudio) && !viewerIsVerified) {
-        throw new ForbiddenException(
-          "Verify your account to send photos and voice notes in chat.",
-        );
-      }
-      if (hasVideo && !viewerIsPremium) {
-        throw new ForbiddenException(
-          "Video messages are for premium members only.",
-        );
-      }
-    }
+    assertMessageMediaPermissions(sender, media);
 
     const blockedIds = await this.support._getBlockedUserIds(userId);
     const otherIds = conversation.participants
@@ -699,80 +681,14 @@ export class MessagesWriteService {
       conversation_type: this.support.chatConversationType(conversation.type),
     });
 
-    // ─── Marv: queue an AI reply when this DM is for the configured Marv bot ──
-    // Decoupled from MarvinModule — we only enqueue. The processor handles all gating.
-    // Resolve Marv's user id via the identity service (env var optional) so the gate
-    // doesn't silently skip when `MARV_USER_ID` isn't pinned in `.env`.
-    try {
-      const marvCfg = this.appConfig.marvBot();
-      const marvUserId = marvCfg.enabled
-        ? await this.support.resolveMarvUserId()
-        : null;
-      const isDirect = conversation.type === "direct";
-      const recipientIsMarv =
-        !!marvUserId && otherIds.length === 1 && otherIds[0] === marvUserId;
-      const senderIsMarv = !!marvUserId && userId === marvUserId;
-      const hasBody = trimmed.length > 0;
-
-      if (!marvCfg.enabled) {
-        this.support.logger.log(
-          `[marv] dm-enqueue skip reason=marv_disabled msg=${result.id}`,
-        );
-      } else if (!marvUserId) {
-        this.support.logger.warn(
-          `[marv] dm-enqueue skip reason=marv_user_unresolved msg=${result.id}`,
-        );
-      } else if (!isDirect) {
-        // Group chat or wall — never enqueue for Marv. No log needed; spammy.
-      } else if (!recipientIsMarv) {
-        // DM to someone else — silent skip.
-      } else if (senderIsMarv) {
-        this.support.logger.log(
-          `[marv] dm-enqueue skip reason=sender_is_marv msg=${result.id}`,
-        );
-      } else if (!hasBody) {
-        this.support.logger.log(
-          `[marv] dm-enqueue skip reason=empty_body msg=${result.id}`,
-        );
-      } else {
-        this.support.logger.log(
-          `[marv] dm-enqueue HIT msg=${result.id} convo=${conversationId} sender=${userId}`,
-        );
-        await this.jobs
-          .enqueue(
-            JOBS.marvinReplyPrivate,
-            {
-              conversationId,
-              messageId: result.id,
-              requestingUserId: userId,
-              requestedMode: null,
-            },
-            {
-              jobId: `marv-private-${result.id}`,
-              removeOnComplete: true,
-              removeOnFail: false,
-              attempts: 3,
-              backoff: { type: "exponential" as const, delay: 5000 },
-            },
-          )
-          .then(() => {
-            this.support.logger.log(
-              `[marv] dm-enqueue ok msg=${result.id} job=marv-private-${result.id}`,
-            );
-          })
-          .catch((err) => {
-            this.support.logger.warn(
-              `[marv] Failed to enqueue private reply for message=${result.id}: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            );
-          });
-      }
-    } catch (err) {
-      this.support.logger.warn(
-        `[marv] private-reply enqueue failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    await enqueueMessageMarvReply(this.appConfig, this.support, this.jobs, {
+      userId,
+      conversationId,
+      messageId: result.id,
+      conversationType: conversation.type,
+      otherIds,
+      body: trimmed,
+    });
 
     return { message: dto };
   }
