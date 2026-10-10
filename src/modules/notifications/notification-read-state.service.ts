@@ -1,3 +1,4 @@
+import type { NotificationsUpdatedPayloadDto } from "../../common/dto";
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, type NotificationKind } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -73,7 +74,7 @@ export class NotificationReadStateService {
 
   emitBellUpdated(
     recipientUserId: string,
-    payload: { undeliveredCount: number; clearedPostIds?: string[]; clearedBoardThreadIds?: string[] },
+    payload: NotificationsUpdatedPayloadDto,
   ): void {
     this.presenceRealtime.emitNotificationsUpdated(recipientUserId, payload);
     this.dispatchBadgeSync(recipientUserId, { undeliveredBellCount: payload.undeliveredCount });

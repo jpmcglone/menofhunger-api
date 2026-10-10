@@ -1,3 +1,4 @@
+import { PostsReadService } from "../posts-read/posts-read.service";
 import {
   EmailLifecycleService,
   APPLE_BILLING_URL,
@@ -61,6 +62,7 @@ function harness(overrides: Record<string, unknown> = {}) {
     email,
     { register: jest.fn() } as any,
     effects,
+    new PostsReadService(prisma),
   );
   return { service, user, prisma, email, effects, config };
 }

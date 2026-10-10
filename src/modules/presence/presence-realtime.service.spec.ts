@@ -185,6 +185,18 @@ describe('PresenceRealtimeService without a local socket server', () => {
     });
   });
 
+  it.each([
+    { undeliveredCount: 0 },
+    { undeliveredCount: 2, clearedPostIds: ['post-1'] },
+    { undeliveredCount: 1, clearedPostIds: [], clearedBoardThreadIds: ['thread-1'] },
+  ])('preserves notification read scopes and omitted fields across the Redis transport', (payload) => {
+    const { service, presenceRedis } = makeServerlessService();
+    service.emitNotificationsUpdated('user-1', payload);
+    expect(presenceRedis.publishEmitToUser).toHaveBeenCalledWith({
+      userId: 'user-1', event: 'notifications:updated', payload,
+    });
+  });
+
   it('publishes room emits cross-instance even with no server attached', () => {
     const { service, presenceRedis } = makeServerlessService();
     const payload = { groupId: 'group-1', post: { id: 'p1' } as any };

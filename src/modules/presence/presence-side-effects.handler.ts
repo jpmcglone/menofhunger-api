@@ -9,6 +9,7 @@ import type { SideEffectPayloads } from '../side-effects/side-effects.constants'
 import { SideEffectsRegistry } from '../side-effects/side-effects.registry';
 import { SideEffectsService } from '../side-effects/side-effects.service';
 import { toUserListDto } from '../../common/dto';
+import { NOT_BANNED_USER_WHERE } from '../../common/prisma-selects/user.where';
 import { USER_LIST_SELECT } from '../../common/prisma-selects/user.select';
 import { PresenceRealtimeService } from './presence-realtime.service';
 import { PresenceRedisReadService } from './presence-redis-read.service';
@@ -134,7 +135,7 @@ export class PresenceSideEffectsHandler implements OnModuleInit {
       const currentOnline = await this.presenceRedis.onlineUserIds();
       if (!(await this.isOffline(userId, currentOnline)) || !currentOnline.includes(viewerUserId)
         || !(await this.eligibleViewers(userId, [viewerUserId])).includes(viewerUserId)) return;
-      const rows = await this.prisma.user.findMany({ where: { id: { in: [userId] }, bannedAt: null }, select: USER_LIST_SELECT });
+      const rows = await this.prisma.user.findMany({ where: { id: { in: [userId] }, ...NOT_BANNED_USER_WHERE }, select: USER_LIST_SELECT });
       const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
       const users = rows.filter(row => !row.isBot && row.accountKind !== 'page').map(row => toUserListDto(row, baseUrl));
       if (!(await this.isOffline(userId, await this.presenceRedis.onlineUserIds()))

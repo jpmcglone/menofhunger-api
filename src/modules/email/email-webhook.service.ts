@@ -3,7 +3,7 @@ import {
   Injectable,
   ServiceUnavailableException,
 } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
+import { isUniqueViolation } from "../../common/prisma/errors";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { AppConfigService } from "../app/app-config.service";
@@ -120,13 +120,7 @@ export class EmailWebhookService {
         }
       });
     } catch (error) {
-      if (
-        !(
-          error instanceof Prisma.PrismaClientKnownRequestError &&
-          error.code === "P2002"
-        )
-      )
-        throw error;
+      if (!isUniqueViolation(error)) throw error;
       // A repeated Svix event is already committed; processing is transactional.
     }
     // The send result may bind the provider ID during this transaction. Reading

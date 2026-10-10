@@ -32,6 +32,7 @@ import type {
   GroupChannelTypingPayloadDto,
   UsersMeUpdatedPayloadDto,
   NotificationsDeletedPayloadDto,
+  NotificationsUpdatedPayloadDto,
   NotificationsNavUnreadPayloadDto,
   AccountsBadgeUpdatedPayloadDto,
   NotificationsLockScreenClearPayloadDto,
@@ -195,7 +196,7 @@ export class PresenceRealtimeService {
 
   emitNotificationsUpdated(
     userId: string,
-    payload: { undeliveredCount: number; clearedPostIds?: string[]; clearedBoardThreadIds?: string[] },
+    payload: NotificationsUpdatedPayloadDto,
   ): void {
     this.emitToUser(userId, 'notifications:updated', payload);
   }

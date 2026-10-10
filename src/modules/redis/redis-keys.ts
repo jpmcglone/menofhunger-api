@@ -164,8 +164,8 @@ export const RedisKeys = {
   },
 
   // /presence/online response cache — short TTL since online set changes frequently
-  presenceOnlineList(viewerUserId: string | null): string {
-    return `presence:online:list:${clean(viewerUserId ?? 'anon')}`;
+  presenceOnlineList(viewerUserId: string | null, includeSelf: boolean): string {
+    return `presence:online:list:v2:${clean(viewerUserId ?? 'anon')}:${includeSelf ? 'self' : 'others'}`;
   },
   /** Follow-online pings: this viewer was already told about this person (2h). */
   followOnlinePair(viewerUserId: string, userId: string): string {

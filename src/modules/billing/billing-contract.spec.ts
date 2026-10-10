@@ -35,20 +35,16 @@ describe("billing wire contract consumed by web and iOS", () => {
         {} as any,
         {} as any,
         {} as any,
-        {} as any,
         {
-          getActiveGrants: jest
-            .fn()
-            .mockResolvedValue(
-              expected.grants.map((grant) => ({
-                ...grant,
-                startsAt: new Date(grant.startsAt),
-                endsAt: new Date(grant.endsAt),
-              })),
-            ),
+          getActiveGrants: jest.fn().mockResolvedValue(
+            expected.grants.map((grant) => ({
+              ...grant,
+              startsAt: new Date(grant.startsAt),
+              endsAt: new Date(grant.endsAt),
+            })),
+          ),
         } as any,
         {} as any,
-        { dispatch: jest.fn() } as any,
       );
       expect(await service.getMe("synthetic-user")).toEqual(expected);
     },

@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { buildGroupEmail, type GroupEmailKind } from './email-content-group';
 import { buildGreeting, getVerifiedRecipientEmail, preferredDisplayName } from './email-send.helpers';
 import { EmailService } from './email.service';
+import { findActiveGroupMembershipUpdatedAt } from '../viewer/group-membership.queries';
 import { NOT_DELETED } from '../../common/prisma/where';
 
 export type GroupEmailInput = {
@@ -64,9 +65,7 @@ export class GroupEmailService {
       if (!invite) return false;
       eventKey = `group-invite:${invite.id}:${(invite.lastNotifiedAt ?? invite.updatedAt).toISOString()}`;
     } else if (input.kind === 'approved') {
-      const member = await this.prisma.communityGroupMember.findFirst({
-        where: { groupId: input.groupId, userId: user.id, status: 'active' }, select: { updatedAt: true },
-      });
+      const member = await findActiveGroupMembershipUpdatedAt(this.prisma, input.groupId, user.id);
       if (!member) return false;
       eventKey = `group-approved:${input.groupId}:${user.id}:${member.updatedAt.toISOString()}`;
     } else {

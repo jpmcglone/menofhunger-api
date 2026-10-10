@@ -126,6 +126,44 @@ function makeController(opts?: {
   return { controller, follows, redis, marvIdentity, appConfig, presenceRedis, prisma, callSessions };
 }
 
+describe("PresenceController online cache", () => {
+  it.each([
+    ["1", "0"],
+    ["0", "1"],
+  ])(
+    "keeps includeSelf requests independent in order %s then %s",
+    async (first, second) => {
+      const m = makeController({
+        marvEnabled: false,
+        onlineUserIds: ["user-a", "viewer-v"],
+      });
+      type CachedOnline = Awaited<ReturnType<PresenceController["online"]>>;
+      const cache = new Map<string, CachedOnline>();
+      m.redis.getJson.mockImplementation(
+        async (key: string) => cache.get(key) ?? null,
+      );
+      m.redis.setJson.mockImplementation(
+        async (key: string, value: CachedOnline) => {
+          cache.set(key, value);
+        },
+      );
+
+      for (const includeSelf of [first, second, first, second]) {
+        const response = await m.controller.online("viewer-v", includeSelf);
+        expect(response.data.map((row) => row.id).sort()).toEqual(
+          includeSelf === "1" ? ["user-a", "viewer-v"] : ["user-a"],
+        );
+        expect(response.pagination.totalOnline).toBe(
+          includeSelf === "1" ? 2 : 1,
+        );
+      }
+      // Each variant fetches once; subsequent calls exercise the stored response.
+      expect(m.follows.getFollowListUsersByIds).toHaveBeenCalledTimes(2);
+      expect(cache.size).toBe(2);
+    },
+  );
+});
+
 describe('PresenceController — Marv pin injection', () => {
   describe('GET /presence/online', () => {
     it('prepends Marv with isBot:true and bumps totalOnline when enabled', async () => {

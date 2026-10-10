@@ -1,3 +1,4 @@
+import * as ts from "typescript";
 import {
   existsSync,
   readFileSync,
@@ -65,6 +66,50 @@ function resolveImport(file: string, spec: string): string | null {
   return relative(SRC, join(dirname(file), spec))
     .split(sep)
     .join("/");
+}
+
+/** Token JSON has security-specific signing/verification, distinct from pagination. */
+const TOKEN_CODEC_FUNCTIONS: Record<string, ReadonlySet<string>> = {
+  "modules/email/email-preferences.service.ts": new Set([
+    "unsubscribeToken",
+    "unsubscribe",
+  ]),
+  "modules/pickax/pickax-identity.ts": new Set(["decodeJwtPayload"]),
+};
+
+function countHandRolledJsonCursors(path: string, src: string): number {
+  if (path === "common/pagination/json-cursor.ts") return 0;
+  const tokenFunctions = TOKEN_CODEC_FUNCTIONS[path];
+  const tokenBodies: Array<{ start: number; end: number }> = [];
+  if (tokenFunctions) {
+    const source = ts.createSourceFile(path, src, ts.ScriptTarget.Latest, true);
+    const visit = (node: ts.Node) => {
+      if (
+        (ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) &&
+        node.name &&
+        ts.isIdentifier(node.name) &&
+        tokenFunctions.has(node.name.text) &&
+        node.body
+      ) {
+        tokenBodies.push({
+          start: node.body.getStart(source),
+          end: node.body.getEnd(),
+        });
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  return [
+    ...src.matchAll(
+      /Buffer\.from\(JSON\.stringify\(|JSON\.parse\(Buffer\.from\(/g,
+    ),
+  ].filter(
+    (match) =>
+      !tokenBodies.some(
+        (body) => match.index! >= body.start && match.index! < body.end,
+      ),
+  ).length;
 }
 
 const publicFilesCache = new Map<string, Set<string>>();
@@ -317,11 +362,8 @@ function computeOffenders(): RuleResults {
       path === "common/prisma-selects/user.where.ts",
     );
     counted(/\blimit \+ 1\b|\btake:\s*[\w.]+\s*\+\s*1\b/g, limitPlusOne);
-    counted(
-      /Buffer\.from\(JSON\.stringify\(|JSON\.parse\(Buffer\.from\(/g,
-      jsonCursors,
-      path === "common/pagination/json-cursor.ts",
-    );
+    const jsonCursorCount = countHandRolledJsonCursors(path, src);
+    if (jsonCursorCount > 0) jsonCursors.push(`${path}:${jsonCursorCount}`);
     counted(
       /\bdeletedAt:\s*null\b/g,
       inlineDeletedAt,
@@ -543,4 +585,35 @@ describe("architecture guardrails (ratchet)", () => {
         );
     });
   }
+});
+
+describe("JSON cursor guardrail scope", () => {
+  const encode = "Buffer.from(JSON.stringify(value)).toString('base64url')";
+  const decode = "JSON.parse(Buffer.from(value, 'base64url').toString('utf8'))";
+
+  it("allows only the named token codecs and still catches pagination in their owning file", () => {
+    const source = `class EmailPreferencesService {
+      unsubscribeToken() { return ${encode}; }
+      unsubscribe() { return ${decode}; }
+      encodeCursor() { return ${encode}; }
+      decodeCursor() { return ${decode}; }
+    }`;
+    expect(
+      countHandRolledJsonCursors(
+        "modules/email/email-preferences.service.ts",
+        source,
+      ),
+    ).toBe(2);
+    expect(countHandRolledJsonCursors("modules/posts/example.ts", source)).toBe(
+      4,
+    );
+  });
+
+  it("allows the identity token decoder while detecting a cursor added alongside it", () => {
+    const source = `function decodeJwtPayload() { return ${decode}; }
+      function decodeCursor() { return ${decode}; }`;
+    expect(
+      countHandRolledJsonCursors("modules/pickax/pickax-identity.ts", source),
+    ).toBe(1);
+  });
 });

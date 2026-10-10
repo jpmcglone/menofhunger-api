@@ -1,3 +1,4 @@
+import type { NotificationsUpdatedPayloadDto } from "../../common/dto";
 import { findGroupNotificationPreference } from '../viewer/group-membership.queries';
 import { Injectable, Optional } from "@nestjs/common";
 import { MutesService } from "../mutes/mutes.service";
@@ -41,7 +42,7 @@ export class NotificationWriterSupportService {
 
   emitBellAndInvalidateList(
     recipientUserId: string,
-    payload: { undeliveredCount: number },
+    payload: NotificationsUpdatedPayloadDto,
   ): void {
     const emit = () => {
       this.presenceRealtime.emitNotificationsUpdated(recipientUserId, payload);

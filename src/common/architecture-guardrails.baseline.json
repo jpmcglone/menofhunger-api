@@ -43,7 +43,6 @@
     "modules/prisma/prisma.service.ts:1"
   ],
   "asUnknownCasts": [
-    "modules/billing/billing.service.ts:1",
     "modules/posts/posts-feed-media.service.ts:1",
     "modules/users/public-profiles.service.ts:2"
   ],
@@ -59,7 +58,6 @@
     "modules/marvin/jobs/marvin-private-reply.processor.ts:864",
     "modules/marvin/jobs/marvin-public-reply.processor.ts:913",
     "modules/marvin/services/marvin-ai.service.ts:865",
-    "modules/notifications/notifications-email.cron.ts:886",
     "modules/posts/posts-feed-for-you.service.ts:917",
     "modules/presence/gateway/gateway-spaces.handler.ts:918"
   ],
@@ -111,7 +109,6 @@
     "modules/verification/verification.service.ts:1"
   ],
   "handRolledJsonCursors": [
-    "modules/pickax/pickax-identity.ts:1",
     "modules/posts/posts-feed-access.service.ts:1"
   ],
   "inlineDeletedAtNull": [

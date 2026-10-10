@@ -261,7 +261,7 @@ export class PresenceController {
     // Short-lived cache so rapid tab switches / reconnect polls don't hammer
     // getFollowListUsersByIds (User + relationship batch DB queries) on every call.
     // 10s is acceptable staleness for a "who's online" list.
-    const cacheKey = RedisKeys.presenceOnlineList(viewerUserId);
+    const cacheKey = RedisKeys.presenceOnlineList(viewerUserId, includeSelf);
     try {
       const cached = await this.redis.getJson<{ data: unknown[]; pagination: OnlinePaginationDto }>(cacheKey);
       if (cached) {

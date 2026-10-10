@@ -168,3 +168,11 @@ export async function findGroupOwnershipSuccessor(db: Db, groupId: string, depar
 export function promoteGroupOwner(db: Db, groupId: string, userId: string) {
   return db.communityGroupMember.update({ where: { groupId_userId: { groupId, userId } }, data: { role: 'owner' } });
 }
+
+/** Current approval identity for a queued email; a removed membership cannot send. */
+export function findActiveGroupMembershipUpdatedAt(db: Db, groupId: string, userId: string): Promise<{ updatedAt: Date } | null> {
+  return db.communityGroupMember.findFirst({
+    where: { groupId, userId, status: 'active', group: NOT_DELETED },
+    select: { updatedAt: true },
+  });
+}

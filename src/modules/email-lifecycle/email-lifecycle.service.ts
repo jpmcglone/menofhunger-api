@@ -1,4 +1,5 @@
 import { Injectable, OnModuleInit } from "@nestjs/common";
+import { PostsReadService } from "../posts-read/posts-read.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AppConfigService } from "../app/app-config.service";
 import { EmailService, buildLifecycleEmail, buildGreeting } from "../email";
@@ -18,6 +19,7 @@ export class EmailLifecycleService implements OnModuleInit {
     private readonly email: EmailService,
     private readonly registry: SideEffectsRegistry,
     private readonly effects: SideEffectsService,
+    private readonly postsRead: PostsReadService,
   ) {}
 
   onModuleInit(): void {
@@ -311,7 +313,7 @@ export class EmailLifecycleService implements OnModuleInit {
       )
         return;
       const [scheduled, group, marv] = await Promise.all([
-        this.prisma.post.count({
+        this.postsRead.count({
           where: {
             userId: user.id,
             OR: [

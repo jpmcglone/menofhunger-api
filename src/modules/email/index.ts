@@ -9,3 +9,4 @@ export * from './email.service';
 export * from './group-email.service';
 export * from './onboarding-nudge';
 export * from './templates/moh-email';
+export * from './email-preferences.service';

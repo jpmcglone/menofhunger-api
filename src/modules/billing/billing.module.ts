@@ -1,3 +1,4 @@
+import { BillingStripeSubscriptionService } from "./billing-stripe-subscription.service";
 import { Module } from "@nestjs/common";
 import { BillingController } from "./billing.controller";
 import { BillingService } from "./billing.service";
@@ -33,6 +34,7 @@ import { NotificationsModule } from "../notifications/notifications.module";
   providers: [
     LocalBillingTestService,
     BillingService,
+    BillingStripeSubscriptionService,
     EntitlementService,
     BillingGrantExpiryCron,
     ReferralService,

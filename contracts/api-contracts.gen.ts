@@ -3372,6 +3372,15 @@ export type NotificationsNewPayloadDto = {
   silent?: boolean;
 };
 
+/** Bell count plus optional scopes whose notification read state was cleared. */
+export type NotificationsUpdatedPayloadDto = {
+  undeliveredCount: number;
+  /** Absent means no post read-state patch. */
+  clearedPostIds?: string[];
+  /** Absent means no Board thread read-state patch. */
+  clearedBoardThreadIds?: string[];
+};
+
 export type NotificationsDeletedPayloadDto = {
   notificationIds: string[];
 };

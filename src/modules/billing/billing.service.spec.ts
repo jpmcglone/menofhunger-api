@@ -1,3 +1,4 @@
+import { BillingStripeSubscriptionService } from "./billing-stripe-subscription.service";
 import {
   BadRequestException,
   ForbiddenException,
@@ -8,7 +9,7 @@ import { Prisma } from "@prisma/client";
 import { BillingService } from "./billing.service";
 
 // ─── Stripe mock ─────────────────────────────────────────────────────────────
-// BillingService calls `require('stripe')` inside getStripe(). We replace it
+// BillingStripeSubscriptionService calls `require('stripe')` inside client(). We replace it
 // with a constructor that returns whatever the current test suite stashed on
 // `global.__stripeMock__`, so each test can swap the behavior.
 
@@ -114,7 +115,7 @@ function makeDeps(overrides: Partial<Deps> = {}): Deps {
 
 function makeService(overrides: Partial<Deps> = {}) {
   const deps = makeDeps(overrides);
-  const service = new BillingService(
+  const stripeSubscriptions = new BillingStripeSubscriptionService(
     deps.prisma,
     deps.appConfig,
     deps.publicProfileCache,
@@ -125,6 +126,16 @@ function makeService(overrides: Partial<Deps> = {}) {
     deps.entitlement,
     deps.referral,
     deps.sideEffects,
+  );
+  const service = new BillingService(
+    deps.prisma,
+    deps.appConfig,
+    deps.publicProfileCache,
+    deps.usersMeRealtime,
+    deps.usersPublicRealtime,
+    deps.posthog,
+    deps.entitlement,
+    stripeSubscriptions,
   );
   return { service, deps };
 }
