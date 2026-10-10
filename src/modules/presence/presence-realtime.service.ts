@@ -8,6 +8,7 @@ import { channelRoom } from './gateway/gateway-rooms';
 import type {
   MembersMapChangedPayloadDto,
   PresenceFollowedOnlinePayloadDto,
+  PresenceFollowedOfflinePayloadDto,
   UserListDto,
   AdminUpdatedPayloadDto,
   ArticlesLiveUpdatedPayloadDto,
@@ -402,6 +403,10 @@ export class PresenceRealtimeService {
   }
 
   /** People this viewer follows came online (already throttled by the side-effects handler). */
+  emitFollowedOffline(viewerUserId: string, payload: PresenceFollowedOfflinePayloadDto): void {
+    this.emitToUser(viewerUserId, WsEventNames.presenceFollowedOffline, payload);
+  }
+
   emitFollowedOnline(viewerUserId: string, payload: PresenceFollowedOnlinePayloadDto): void {
     this.emitToUser(viewerUserId, WsEventNames.presenceFollowedOnline, payload);
   }

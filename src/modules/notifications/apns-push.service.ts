@@ -213,6 +213,8 @@ export class ApnsPushService {
       url?: string | null;
       notificationId?: string | null;
       kind?: string;
+      /** Internal context, never an externally supplied audio filename. */
+      soundScope?: "group" | "board";
       /** Collapse identifier (mirrors the web push tag). Max 64 bytes per APNs. */
       collapseId?: string | null;
       badge?: number | null;
@@ -261,7 +263,7 @@ export class ApnsPushService {
           ...(subtitle ? { subtitle } : {}),
           body: (params.body ?? '').trim() || ' ',
         },
-        sound: this.soundForKind(params.kind),
+        sound: this.soundForKind(params.kind, params.soundScope),
         badge: Math.max(0, Math.floor(badge || 0)),
         ...(collapseId ? { collapseId } : {}),
         ...(params.mutableContent ? { mutableContent: true } : {}),
@@ -421,10 +423,14 @@ export class ApnsPushService {
   }
 
   /** Keep in step with the in-app catalog: web `utils/sound-policy.ts` and iOS `InAppSoundPlayer`. */
-  soundForKind(kind?: string): string {
+  soundForKind(kind?: string, scope?: "group" | "board"): string {
     if (kind === 'channel_mention') return CHANNEL_MENTION_PUSH_SOUND;
     if (kind === 'channel_message') return CHANNEL_MESSAGE_PUSH_SOUND;
-    return kind === 'message' ? MESSAGE_PUSH_SOUND : NOTIFICATION_PUSH_SOUND;
+    if (kind === 'message') return MESSAGE_PUSH_SOUND;
+    if (scope === 'board') return 'board-activity.caf';
+    if (scope === 'group' || kind === 'group_join_request' || kind === 'channel_invite'
+      || kind === 'marv_not_in_group' || kind?.startsWith('community_group_')) return 'group-activity.caf';
+    return NOTIFICATION_PUSH_SOUND;
   }
 }
 

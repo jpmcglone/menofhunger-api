@@ -3594,6 +3594,9 @@ export type PresenceFollowedOnlinePayloadDto = {
   total: number;
 };
 
+/** Targeted, throttled offline heads-up after the reconnect grace period; never push. */
+export type PresenceFollowedOfflinePayloadDto = PresenceFollowedOnlinePayloadDto;
+
 /** `presence:online-count` — the only live presence update count-only feed sockets receive. */
 export type PresenceOnlineCountPayloadDto = {
   totalOnline: number;

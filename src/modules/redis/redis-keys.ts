@@ -179,6 +179,15 @@ export const RedisKeys = {
   followOnlinePending(viewerUserId: string): string {
     return `follow-online:pending:${clean(viewerUserId)}`;
   },
+  followOfflineEpoch(userId: string): string {
+    return `follow-offline:epoch:${clean(userId)}`;
+  },
+  followOfflinePair(viewerUserId: string, userId: string): string {
+    return `follow-offline:pair:${clean(viewerUserId)}:${clean(userId)}`;
+  },
+  followOfflineRecent(viewerUserId: string): string {
+    return `follow-offline:recent:${clean(viewerUserId)}`;
+  },
   /** Counts-only members map summary shared by every signed-out and unverified viewer. */
   membersMapCounts(): string {
     return 'cache:members-map:counts';

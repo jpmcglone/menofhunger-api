@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { socketData } from './gateway-socket-data';
 import { Injectable, Logger } from '@nestjs/common';
 import type { Socket } from 'socket.io';
@@ -325,6 +326,7 @@ export class PresenceStatusHandler {
   }
 
   private async emitOnlineOne(userId: string, inheritFromUserId: string): Promise<void> {
+    await this.redis.del(RedisKeys.followOfflineEpoch(userId)).catch(() => undefined);
     const allTargets = this.context.getTargetsForUser(userId);
     if (this.context.logPresenceVerbose) {
       this.logger.debug(`[presence] emitOnline userId=${userId} totalTargets=${allTargets.size}`);
@@ -409,6 +411,13 @@ export class PresenceStatusHandler {
     this.scheduleCountOnlyUpdate();
     for (const displayedId of members) {
       await this.emitOfflineOne(displayedId);
+      const offlineAt = Date.now();
+      const epoch = randomUUID();
+      const stamped = await this.redis.setString(RedisKeys.followOfflineEpoch(displayedId), epoch, { ttlSeconds: 300 }).catch(() => false);
+      if (!stamped) continue;
+      this.sideEffects.dispatch("presence.followed-offline", { userId: displayedId, offlineAt, epoch }, {
+        jobId: `follow-offline:${displayedId}:${epoch}`, delay: 30_000,
+      });
     }
   }
 

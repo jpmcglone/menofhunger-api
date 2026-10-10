@@ -57,6 +57,7 @@ export class NotificationPushKindService {
                 deletedAt: true,
                 rootId: true,
                 communityGroupId: true,
+                kind: true,
                 media: {
                   where: NOT_DELETED,
                   orderBy: { position: 'asc' },
@@ -165,6 +166,7 @@ export class NotificationPushKindService {
         badge: '/android-chrome-192x192.png',
         renotify: true,
         kind,
+        soundScope: mediaPost?.kind === "board" ? "board" : params.subjectGroupId || activityGroupId ? "group" : undefined,
         actorUserId,
         ...(params.sourceLabel ? { sourceLabel: params.sourceLabel } : {}),
       }).catch((err) => {

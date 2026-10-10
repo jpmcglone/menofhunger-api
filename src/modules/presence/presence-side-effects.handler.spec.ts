@@ -1,3 +1,4 @@
+import { RedisKeys } from '../redis/redis-keys';
 import { FOLLOW_ONLINE_MIN_OFFLINE_MS, PresenceSideEffectsHandler } from './presence-side-effects.handler';
 
 function fakeRedis() {
@@ -30,8 +31,10 @@ function makeHandler(opts: {
   optedOut?: string[];
   mutes?: Array<[muter: string, muted: string]>;
   blocks?: Array<[blocker: string, blocked: string]>;
+  cluster?: string[];
 }) {
   const redis = fakeRedis();
+  redis.store.set(RedisKeys.followOfflineEpoch("sam"), "offline-test");
   const prisma = {
     user: {
       findUnique: jest.fn(async ({ where }: any) => ({
@@ -65,7 +68,7 @@ function makeHandler(opts: {
       findMany: jest.fn(async () => (opts.blocks ?? []).map(([blockerId, blockedId]) => ({ blockerId, blockedId }))),
     },
   };
-  const realtime = { emitFollowedOnline: jest.fn() };
+  const realtime = { emitFollowedOnline: jest.fn(), emitFollowedOffline: jest.fn() };
   const sideEffects = { dispatch: jest.fn() };
   const handler = new PresenceSideEffectsHandler(
     prisma as any,
@@ -75,6 +78,7 @@ function makeHandler(opts: {
     realtime as any,
     { register: jest.fn() } as any,
     sideEffects as any,
+    { presenceClusterByUserId: async ([id]: string[]) => new Map([[id, opts.cluster ?? [id]]]) } as any,
   );
   return { handler, realtime, sideEffects, redis };
 }
@@ -146,5 +150,44 @@ describe('PresenceSideEffectsHandler follow-online pings', () => {
       ['me', ['sam'], 1],
       ['me', ['dan', 'tom'], 2],
     ]);
+  });
+});
+
+
+describe('PresenceSideEffectsHandler follow-offline pings', () => {
+  const offline = () => ({ userId: 'sam', offlineAt: Date.now() - 31_000, epoch: 'offline-test' });
+  it('waits for grace and announces only an eligible online follower', async () => {
+    const { handler, realtime } = makeHandler({ online: ['me'], follows: [['me', 'sam'], ['away', 'sam']] });
+    await handler.onFollowedOffline({ userId: 'sam', offlineAt: Date.now(), epoch: 'offline-test' });
+    expect(realtime.emitFollowedOffline).not.toHaveBeenCalled();
+    await handler.onFollowedOffline(offline());
+    expect(realtime.emitFollowedOffline).toHaveBeenCalledWith('me', expect.objectContaining({ total: 1, users: [expect.objectContaining({ id: 'sam' })] }));
+  });
+  it('suppresses reconnects, active linked accounts, stale jobs, bots and pages', async () => {
+    for (const extra of [{ online: ['me', 'sam'] }, { online: ['me', 'linked'], cluster: ['sam', 'linked'] }, { person: { isBot: true } }, { person: { accountKind: 'page' } }]) {
+      const { handler, realtime } = makeHandler({ online: ['me'], follows: [['me', 'sam']], ...extra });
+      await handler.onFollowedOffline(offline());
+      expect(realtime.emitFollowedOffline).not.toHaveBeenCalled();
+    }
+    const { handler, realtime } = makeHandler({ online: ['me'], follows: [['me', 'sam']] });
+    await handler.onFollowedOffline({ userId: 'sam', offlineAt: Date.now() - 301_000, epoch: 'offline-test' });
+    expect(realtime.emitFollowedOffline).not.toHaveBeenCalled();
+  });
+  it('filters opt-out, mutes and blocks in both directions and limits repeats', async () => {
+    const { handler, realtime } = makeHandler({ online: ['a','b','c','d','e'], follows: ['a','b','c','d','e'].map(id => [id,'sam']), optedOut: ['a'], mutes: [['b','sam']], blocks: [['c','sam'],['sam','d']] });
+    await handler.onFollowedOffline(offline());
+    await handler.onFollowedOffline(offline());
+    expect(realtime.emitFollowedOffline).toHaveBeenCalledTimes(1);
+    expect(realtime.emitFollowedOffline.mock.calls[0][0]).toBe('e');
+  });
+  it('drops a reconnect-disconnect that supersedes an older delayed job', async () => {
+    const { handler, realtime, redis } = makeHandler({ online: ['me'], follows: [['me','sam']] });
+    redis.store.set(RedisKeys.followOfflineEpoch('sam'), 'second-disconnect');
+    await handler.onFollowedOffline(offline());
+    expect(realtime.emitFollowedOffline).not.toHaveBeenCalled();
+    await handler.onFollowedOffline({ userId: 'sam', offlineAt: Date.now(), epoch: 'second-disconnect' });
+    expect(realtime.emitFollowedOffline).not.toHaveBeenCalled();
+    await handler.onFollowedOffline({ userId: 'sam', offlineAt: Date.now()-31_000, epoch: 'second-disconnect' });
+    expect(realtime.emitFollowedOffline).toHaveBeenCalledTimes(1);
   });
 });

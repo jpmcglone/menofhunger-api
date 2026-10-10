@@ -128,6 +128,14 @@ describe('ApnsPushService sounds', () => {
     expect(svc.soundForKind('channel_message')).toBe('channel-message.caf');
     expect(svc.soundForKind('message')).toBe('new-message.caf');
     expect(svc.soundForKind('follow')).toBe('notification.caf');
+    expect(svc.soundForKind('community_group_post')).toBe('group-activity.caf');
+    expect(svc.soundForKind('community_group_invite_received')).toBe('group-activity.caf');
+    expect(svc.soundForKind('channel_invite')).toBe('group-activity.caf');
+    expect(svc.soundForKind('comment', 'group')).toBe('group-activity.caf');
+    expect(svc.soundForKind('comment', 'board')).toBe('board-activity.caf');
+    expect(svc.soundForKind('boost', 'board')).toBe('board-activity.caf');
+    expect(svc.soundForKind('message', 'group')).toBe('new-message.caf');
+    expect(svc.soundForKind('channel_mention', 'group')).toBe('channel-mention.caf');
     expect(svc.soundForKind()).toBe('notification.caf');
   });
 });

@@ -1011,8 +1011,29 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
         avatarUrl: 'https://cdn.example.com/groups/builders.jpg',
         groupInviteId: 'invite-1',
         url: '/g/builders',
+        soundScope: 'group',
       }),
     );
+  });
+
+  it.each([
+    { kind: 'board', communityGroupId: null, soundScope: 'board' },
+    { kind: 'regular', communityGroupId: 'group-1', soundScope: 'group' },
+    { kind: 'regular', communityGroupId: null, soundScope: undefined },
+  ])('derives $soundScope alert audio from a comment post without changing its event kind', async (post) => {
+    const prisma = makePrisma();
+    prisma.communityGroupMember = { findUnique: jest.fn(async () => ({ notificationPreference: 'all' })) };
+    const { svc, apnsSendToUser } = makeService({ prisma });
+    prisma.post.findUnique.mockResolvedValue({
+      id: 'post-1', rootId: 'root-1', deletedAt: null, media: [], ...post,
+    });
+    await svc.sendKindPushForActor({
+      recipientUserId: 'user-1', kind: 'comment', actorUserId: 'actor-1', subjectPostId: 'post-1',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(apnsSendToUser).toHaveBeenCalledWith('user-1', expect.objectContaining({
+      kind: 'comment', soundScope: post.soundScope,
+    }));
   });
 
   it('routes join-request pushes to the pending-requests page', async () => {

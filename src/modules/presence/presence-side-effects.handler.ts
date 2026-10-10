@@ -1,3 +1,4 @@
+import { AccountSwitchService } from '../auth/auth-public-api';
 import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -38,11 +39,13 @@ export class PresenceSideEffectsHandler implements OnModuleInit {
     private readonly realtime: PresenceRealtimeService,
     private readonly registry: SideEffectsRegistry,
     private readonly sideEffects: SideEffectsService,
+    private readonly accountSwitch: AccountSwitchService,
   ) {}
 
   onModuleInit(): void {
     this.registry.register('presence.followed-online', (p) => this.onFollowedOnline(p));
     this.registry.register('presence.followed-online.flush', (p) => this.onFlush(p));
+    this.registry.register('presence.followed-offline', (p) => this.onFollowedOffline(p));
   }
 
   async onFollowedOnline({ userId }: SideEffectPayloads['presence.followed-online']): Promise<void> {
@@ -101,6 +104,48 @@ export class PresenceSideEffectsHandler implements OnModuleInit {
       ttlMs: FOLLOW_ONLINE_QUIET_MS,
     });
     await this.send(viewerUserId, stillOnline);
+  }
+
+  /** A disconnect is only a heads-up after 30 seconds without reconnecting. */
+  async onFollowedOffline({ userId, offlineAt, epoch }: SideEffectPayloads['presence.followed-offline']): Promise<void> {
+    const age = Date.now() - offlineAt;
+    if (!Number.isFinite(age) || age < 30_000 || age > 5 * 60_000
+      || await this.redis.getString(RedisKeys.followOfflineEpoch(userId)) !== epoch) return;
+    const onlineIds = await this.presenceRedis.onlineUserIds();
+    if (!(await this.isOffline(userId, onlineIds))) return;
+    const person = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { usernameIsSet: true, bannedAt: true, isBot: true, accountKind: true, lastOnlineAt: true },
+    });
+    if (!person?.usernameIsSet || person.bannedAt || person.isBot || person.accountKind === 'page') return;
+    // The epoch is stamped again for every displayed identity on a later disconnect.
+    const viewers = await this.eligibleViewers(userId, onlineIds.filter(id => id !== userId));
+    await runInBatches(viewers, FANOUT_CONCURRENCY, async viewerUserId => {
+      const fresh = await this.redis.setString(RedisKeys.followOfflinePair(viewerUserId, userId), '1', {
+        ttlSeconds: FOLLOW_ONLINE_PER_PERSON_SECONDS, onlyIfAbsent: true,
+      });
+      if (!fresh) return;
+      // Offline moments are intentionally sparse: one per viewer every five minutes.
+      const opened = await this.redis.setString(RedisKeys.followOfflineRecent(viewerUserId), '1', {
+        ttlMs: FOLLOW_ONLINE_QUIET_MS, onlyIfAbsent: true,
+      });
+      if (!opened) return;
+      // Recheck membership/preferences and presence after asynchronous eligibility work.
+      const currentOnline = await this.presenceRedis.onlineUserIds();
+      if (!(await this.isOffline(userId, currentOnline)) || !currentOnline.includes(viewerUserId)
+        || !(await this.eligibleViewers(userId, [viewerUserId])).includes(viewerUserId)) return;
+      const rows = await this.prisma.user.findMany({ where: { id: { in: [userId] }, bannedAt: null }, select: USER_LIST_SELECT });
+      const baseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+      const users = rows.filter(row => !row.isBot && row.accountKind !== 'page').map(row => toUserListDto(row, baseUrl));
+      if (!(await this.isOffline(userId, await this.presenceRedis.onlineUserIds()))
+        || await this.redis.getString(RedisKeys.followOfflineEpoch(userId)) !== epoch) return;
+      if (users.length) this.realtime.emitFollowedOffline(viewerUserId, { users: users.slice(0, 1), total: 1 });
+    });
+  }
+
+  private async isOffline(userId: string, onlineIds: string[]): Promise<boolean> {
+    const clusters = await this.accountSwitch.presenceClusterByUserId([userId]);
+    return !(clusters.get(userId) ?? [userId]).some(id => onlineIds.includes(id));
   }
 
   /** Online followers who want these pings and haven't muted or blocked (either way) the person. */

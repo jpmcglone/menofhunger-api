@@ -62,6 +62,8 @@ export interface SideEffectPayloads {
     viewerUserId: string;
   };
 
+  "presence.followed-offline": { userId: string; offlineAt: number; epoch: string };
+
   // ─── Posts ────────────────────────────────────────────────────────────
   "post.created": {
     postId: string;

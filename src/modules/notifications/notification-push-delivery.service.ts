@@ -148,6 +148,7 @@ export class NotificationPushDeliveryService {
       renotify?: boolean;
       kind?: string;
       sourceLabel?: string;
+      soundScope?: "group" | "board";
       subtitle?: string | null;
       threadId?: string | null;
       category?: string | null;
@@ -242,6 +243,7 @@ export class NotificationPushDeliveryService {
             url,
             notificationId: params.notificationId ?? null,
             kind,
+            soundScope: params.soundScope,
             collapseId: tag,
             mutableContent: Boolean(params.avatarUrl || params.mediaUrl || params.actorUsername),
             subtitle: params.subtitle ?? null,
