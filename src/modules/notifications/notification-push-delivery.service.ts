@@ -1,5 +1,5 @@
 import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { NotificationKind } from '@prisma/client';
 import * as webpush from 'web-push';
 import { randomUUID } from 'node:crypto';
@@ -25,7 +25,8 @@ export class NotificationPushDeliveryService {
     private readonly appConfig: AppConfigService,
     private readonly apnsPush: ApnsPushService,
     private readonly cache: CacheService,
-    @Optional() private readonly fcmPush?: FcmPushService,
+    @Inject(FcmPushService)
+    private readonly fcmPush: Pick<FcmPushService, 'configured' | 'hasTokens' | 'sendToUser'>,
   ) {}
 
   /**
@@ -49,11 +50,11 @@ export class NotificationPushDeliveryService {
 
   /** True if at least one push channel (Web Push VAPID or native APNs) can send. */
   pushChannelConfigured(): boolean {
-    return this.appConfig.vapidConfigured() || this.apnsPush.configured() || Boolean(this.fcmPush?.configured());
+    return this.appConfig.vapidConfigured() || this.apnsPush.configured() || this.fcmPush.configured();
   }
 
   async hasFcmTokens(userId: string): Promise<boolean> {
-    return this.fcmPush?.hasTokens(userId) ?? false;
+    return this.fcmPush.hasTokens(userId);
   }
 
   /**

@@ -9,6 +9,7 @@ import type {
 } from "../../modules/messages/message.dto";
 import type { NotificationDto } from "../../modules/notifications/notification.dto";
 import type { CheckinScheduleDto } from "../../modules/checkins/checkin-schedule.dto";
+import { NOT_DELETED } from "../prisma/where";
 
 // Synthetic examples owned by the API. Pick constrains the Android-consumed wire subset
 // without inventing server fields or making fixture-only data part of the public contract.
@@ -69,7 +70,7 @@ const post = {
   visibility: "verifiedOnly",
   parentId: null,
   communityGroupId: null,
-  deletedAt: null,
+  ...NOT_DELETED,
   media: [],
   boostCount: 2,
   commentCount: 0,

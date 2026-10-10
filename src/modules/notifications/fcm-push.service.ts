@@ -6,10 +6,15 @@ import {
 } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
-import type { AuthedRequest } from "../auth/auth.guard";
+import type { AuthedRequest } from "../auth/auth-public-api";
 import { PrismaService } from "../prisma/prisma.service";
 import { FcmMessagingProvider } from "./fcm-messaging.provider";
 import { checkinSchedule } from "../checkins/checkin-schedule";
+import {
+  isSerializationFailure,
+  isUniqueViolation,
+} from "../../common/prisma/errors";
+import { NOT_BANNED_USER_WHERE } from "../../common/prisma-selects/user.where";
 import type {
   FcmPushPayloadDto,
   FcmRegisterRequestDto,
@@ -67,7 +72,7 @@ export class FcmPushService {
       operatedByUserId: null,
       user: {
         accountKind: "person",
-        bannedAt: null,
+        ...NOT_BANNED_USER_WHERE,
         deletionScheduledAt: null,
       },
     };
@@ -125,8 +130,10 @@ export class FcmPushService {
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
         );
       } catch (error) {
-        const code = (error as { code?: string })?.code;
-        if (attempt >= 2 || (code !== "P2034" && code !== "P2002")) {
+        if (
+          attempt >= 2 ||
+          (!isSerializationFailure(error) && !isUniqueViolation(error))
+        ) {
           if (error instanceof ForbiddenException) throw error;
           throw new ServiceUnavailableException(
             "Device registration is unavailable.",

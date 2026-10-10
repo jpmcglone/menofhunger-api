@@ -1,7 +1,7 @@
 import { Body, Controller, Post, Req, UseGuards } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import { z } from "zod";
-import { AuthGuard, type AuthedRequest } from "../auth/auth.guard";
+import { AuthGuard, type AuthedRequest } from "../auth/auth-public-api";
 import { FcmPushService } from "./fcm-push.service";
 import type { FcmRegistrationDto } from "../../common/dto/fcm-device.dto";
 import {
