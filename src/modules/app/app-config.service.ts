@@ -6,6 +6,19 @@ export type { NodeEnv, TwilioVerifyConfig, R2Config, StravaConfig, XConfig, Stri
 
 @Injectable()
 export class AppConfigService extends AppConfigValues {
+  /** FCM service-account credentials remain server-side; never expose them to clients. */
+  fcm(): { projectId: string; clientEmail: string; privateKey: string } | null {
+    const projectId = this.config.get<string>("FCM_PROJECT_ID")?.trim() ?? "";
+    const clientEmail =
+      this.config.get<string>("FCM_CLIENT_EMAIL")?.trim() ?? "";
+    const privateKey = (this.config.get<string>("FCM_PRIVATE_KEY") ?? "")
+      .replace(/\\n/g, "\n")
+      .trim();
+    return projectId && clientEmail && privateKey
+      ? { projectId, clientEmail, privateKey }
+      : null;
+  }
+
   emailWebhookSecret(): string | null {
     return this.config.get<string>('RESEND_WEBHOOK_SECRET')?.trim() || null;
   }

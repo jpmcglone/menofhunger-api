@@ -25,6 +25,8 @@ function makePrisma(opts?: {
   coalesceRow?: { sentAt: Date } | null;
 }) {
   return {
+    messageParticipant: { findUnique: jest.fn(async () => ({ status: 'accepted', mutedAt: null, user: { bannedAt: null, deletionScheduledAt: null } })) },
+    userBlock: { findFirst: jest.fn(async () => null) },
     follow: { findUnique: jest.fn(async () => ({ notificationPreference: 'all', postNotificationsEnabled: true })) },
     pushSubscription: {
       count: jest.fn(async () => (opts?.pushSubscriptions ?? []).length),
@@ -699,6 +701,82 @@ describe('NotificationPushService — sendKindPushForActor integration', () => {
         mutableContent: true,
       }),
     );
+  });
+
+  it.each([
+    "muted",
+    "missing",
+    "blocked",
+    "banned",
+    "deleting",
+    "preferences-unavailable",
+  ])("suppresses DM delivery when %s", async (reason) => {
+    const prisma = makePrisma();
+    const prefs = makePreferences();
+    if (reason === "muted")
+      prisma.messageParticipant.findUnique.mockResolvedValue({
+        status: "accepted",
+        mutedAt: new Date(),
+        user: { bannedAt: null, deletionScheduledAt: null },
+      });
+    if (reason === "missing")
+      prisma.messageParticipant.findUnique.mockResolvedValue(null);
+    if (reason === "blocked")
+      prisma.userBlock.findFirst.mockResolvedValue({ blockerId: "user-1" });
+    if (reason === "banned" || reason === "deleting")
+      prisma.messageParticipant.findUnique.mockResolvedValue({
+        status: "accepted",
+        mutedAt: null,
+        user: {
+          bannedAt: reason === "banned" ? new Date() : null,
+          deletionScheduledAt: reason === "deleting" ? new Date() : null,
+        },
+      });
+    if (reason === "preferences-unavailable")
+      jest
+        .spyOn(prefs, "getPreferencesInternal")
+        .mockRejectedValue(new Error("unavailable"));
+    const { svc, apnsSendToUser } = makeService({ prisma, preferences: prefs });
+    await svc.sendMessagePush({
+      recipientUserId: "user-1",
+      senderUserId: "sender-1",
+      senderName: "Bob",
+      conversationId: "conv-1",
+    });
+    expect(apnsSendToUser).not.toHaveBeenCalled();
+    expect(webpush.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("rechecks DM mute before a later transport and allows the initial pending request", async () => {
+    const prisma = makePrisma();
+    let mutedAt: Date | null = null;
+    prisma.messageParticipant.findUnique.mockImplementation(
+      async (query: {
+        where: { conversationId_userId: { userId: string } };
+      }) => ({
+        status:
+          query.where.conversationId_userId.userId === "user-1"
+            ? "pending"
+            : "accepted",
+        mutedAt,
+        user: { bannedAt: null, deletionScheduledAt: null },
+      }),
+    );
+    const apns = makeApns();
+    apns.apnsSendToUser.mockImplementation(async () => {
+      mutedAt = new Date();
+    });
+    const { svc } = makeService({ prisma, apns });
+    await svc.sendMessagePush({
+      recipientUserId: "user-1",
+      senderUserId: "sender-1",
+      senderName: "Bob",
+      conversationId: "conv-1",
+    });
+    expect(apns.apnsSendToUser).toHaveBeenCalledTimes(1);
+    expect(webpush.sendNotification).not.toHaveBeenCalled();
+    const callback = (apns.apnsSendToUser as jest.Mock).mock.calls[0][1].canDeliver;
+    await expect(callback()).resolves.toBe(false);
   });
 
   it('sendMessagePush passes actorUsername, actorName, and avatarUrl to APNs', async () => {

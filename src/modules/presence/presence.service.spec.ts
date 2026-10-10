@@ -282,3 +282,24 @@ describe('PresenceService.markSeenFromHttp', () => {
     jest.useRealTimers();
   });
 });
+
+describe("PresenceService native client channels", () => {
+  it("tracks Android separately from web and iOS", () => {
+    const service = new PresenceService(
+      {
+        presenceIdleAfterMinutes: () => 5,
+        presenceIdleDisconnectMinutes: () => 10,
+      } as never,
+      {} as never,
+      stubDomainEvents,
+    );
+    service.register("android-socket", "android-user", "android");
+    expect(service.isUserActivelyOnChannel("android-user", "android")).toBe(
+      true,
+    );
+    expect(service.isUserActivelyOnChannel("android-user", "ios")).toBe(false);
+    expect(service.isUserActivelyOnChannel("android-user", "web")).toBe(false);
+    service.register("web-socket", "android-user", "web");
+    expect(service.isUserActivelyOnChannel("android-user", "web")).toBe(true);
+  });
+});

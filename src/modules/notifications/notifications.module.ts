@@ -11,6 +11,9 @@ import { EmailModule } from "../email/email.module";
 import { DailyContentModule } from "../daily-content/daily-content.module";
 import { MessagesModule } from "../messages/messages.module";
 import { ViewerContextModule } from "../viewer/viewer-context.module";
+import { FcmDevicesController } from "./fcm-devices.controller";
+import { FcmPushService } from "./fcm-push.service";
+import { FcmMessagingProvider } from "./fcm-messaging.provider";
 import { NotificationsController } from "./notifications.controller";
 import { NotificationsCleanupCron } from "./notifications-cleanup.cron";
 import { NotificationsOrphanCleanupCron } from "./notifications-orphan-cleanup.cron";
@@ -49,13 +52,15 @@ import { OnThisDayCron } from "./on-this-day.cron";
     MessagesModule,
     ViewerContextModule,
   ],
-  controllers: [NotificationsController],
+  controllers: [NotificationsController, FcmDevicesController],
   providers: [
     NotificationPreferencesService,
     NotificationPushDeliveryService,
     NotificationPushKindService,
     NotificationPushService,
     ApnsPushService,
+    FcmPushService,
+    FcmMessagingProvider,
     NotificationReadStateService,
     NotificationQueryService,
     NotificationWriterSupportService,

@@ -37,3 +37,5 @@ export * from './admin-operations.dto';
 
 export * from './account-deletion.dto';
 export * from './members-map.dto';
+
+export * from './fcm-device.dto';

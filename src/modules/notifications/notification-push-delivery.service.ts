@@ -1,7 +1,9 @@
 import { USER_BRIEF_SELECT } from '../../common/prisma-selects/user.select';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import type { NotificationKind } from '@prisma/client';
 import * as webpush from 'web-push';
+import { randomUUID } from 'node:crypto';
+import { FcmPushService } from './fcm-push.service';
 import { AppConfigService } from '../app/app-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../redis/cache.service';
@@ -23,6 +25,7 @@ export class NotificationPushDeliveryService {
     private readonly appConfig: AppConfigService,
     private readonly apnsPush: ApnsPushService,
     private readonly cache: CacheService,
+    @Optional() private readonly fcmPush?: FcmPushService,
   ) {}
 
   /**
@@ -46,7 +49,11 @@ export class NotificationPushDeliveryService {
 
   /** True if at least one push channel (Web Push VAPID or native APNs) can send. */
   pushChannelConfigured(): boolean {
-    return this.appConfig.vapidConfigured() || this.apnsPush.configured();
+    return this.appConfig.vapidConfigured() || this.apnsPush.configured() || Boolean(this.fcmPush?.configured());
+  }
+
+  async hasFcmTokens(userId: string): Promise<boolean> {
+    return this.fcmPush?.hasTokens(userId) ?? false;
   }
 
   /**
@@ -264,6 +271,29 @@ export class NotificationPushDeliveryService {
             this.logger.warn(`[apns] Failed to send push (${kind}): ${err instanceof Error ? err.message : String(err)}`);
           });
         if (params.canDeliver) await delivery;
+      }
+    }
+
+    // One event id across installation fanout. Persisted notifications retain their id on retries.
+    if (this.fcmPush?.configured()) {
+      let destination = "/notifications";
+      try {
+        const resolved = new URL(url, `${safeBase}/`);
+        if (resolved.origin === new URL(safeBase).origin)
+          destination = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+      } catch {
+        /* Invalid destinations fall back to the authenticated inbox. */
+      }
+      const eventId = params.notificationId ?? randomUUID();
+      for (const tokenOwnerId of tokenOwners) {
+        await this.fcmPush.sendToUser(tokenOwnerId, {
+          recipientUserId,
+          eventId,
+          kind,
+          destination,
+          tag,
+          canDeliver: params.canDeliver,
+        });
       }
     }
 

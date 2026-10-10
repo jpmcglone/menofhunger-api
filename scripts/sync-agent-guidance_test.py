@@ -45,6 +45,32 @@ class SharedRuleParsing(unittest.TestCase):
 
 
 class SyncCheck(unittest.TestCase):
+    def test_android_is_opt_in_and_preserves_local_rule_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            for name in ("api", "www", "ios", "android"):
+                repo = root / f"menofhunger-{name}"
+                (repo / "docs").mkdir(parents=True)
+                (repo / ".cursor/rules").mkdir(parents=True)
+                (repo / "AGENTS.md").write_text("# Repository\n")
+            api = root / "menofhunger-api"
+            android = root / "menofhunger-android"
+            (api / "docs/engineering-policy.md").write_text("# Policy\n")
+            for name in MODULE.SHARED_RULES:
+                (api / ".cursor/rules" / name).write_text("# Shared body\n")
+                (android / ".cursor/rules" / name).write_text('---\nglobs: "app/**/*.kt"\n---\n# Old body\n\n<!-- guidance-addendum -->\nAndroid specifics.\n')
+            args = ["--repos-root", str(root)]
+            self.assertEqual(MODULE.main(args), 0)
+            self.assertFalse((android / "docs/engineering-policy.md").exists())
+            args += ["--android-root", str(android)]
+            self.assertEqual(MODULE.main(args), 0)
+            self.assertEqual((android / "docs/engineering-policy.md").read_bytes(), (api / "docs/engineering-policy.md").read_bytes())
+            mirrored = (android / ".cursor/rules/15-feed-surface.mdc").read_text()
+            self.assertIn('globs: "app/**/*.kt"', mirrored)
+            self.assertIn("Android specifics.", mirrored)
+            self.assertIn("# Shared body", mirrored)
+            self.assertEqual(MODULE.main(args + ["--check"]), 0)
+
     def test_sync_guidelines_to_explicit_ios_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as raw, tempfile.TemporaryDirectory() as ios_raw:
             root = Path(raw)

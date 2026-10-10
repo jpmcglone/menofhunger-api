@@ -573,17 +573,17 @@ export class PresenceService {
 
   /**
    * True if the user has at least one active (non-idle) socket on the given channel.
-   * channel='ios' matches client='ios'; channel='web' matches everything else (browser, PWA, etc.).
+   * Native channels match their client; web matches browser/PWA clients.
    * Used for per-channel push suppression: a device that isn't actively connected still gets pushed.
    */
-  isUserActivelyOnChannel(userId: string, channel: 'web' | 'ios'): boolean {
+  isUserActivelyOnChannel(userId: string, channel: 'web' | 'ios' | 'android'): boolean {
     if (this.isUserIdle(userId)) return false;
     const set = this.userSockets.get(userId);
     if (!set) return false;
     for (const socketId of set) {
       const client = this.socketMeta.get(socketId)?.client ?? 'web';
-      const isIos = client === 'ios';
-      if (channel === 'ios' ? isIos : !isIos) return true;
+      const isNative = client === 'ios' || client === 'android';
+      if (channel === 'web' ? !isNative : client === channel) return true;
     }
     return false;
   }

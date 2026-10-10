@@ -133,3 +133,41 @@ Recommended Render split:
 
 - **API service**: `RUN_HTTP=true`, `RUN_SCHEDULERS=true`, `RUN_JOB_CONSUMERS=false`
 - **Worker service**: `RUN_HTTP=false`, `RUN_SCHEDULERS=false` (or true on exactly one instance), `RUN_JOB_CONSUMERS=true`
+
+
+### Android push (FCM)
+
+Android uses data-only Firebase Cloud Messaging; its client validates the server-owned
+installation/session binding before displaying a local notification. Apply the reviewed
+`20261010180000_fcm_device_registration` migration through the normal release process
+before enabling Android device registration. This migration has no existing-data rewrite.
+
+Configure `FCM_PROJECT_ID`, `FCM_CLIENT_EMAIL`, and `FCM_PRIVATE_KEY` on the API only.
+Use a service account with the Firebase Cloud Messaging API Admin role for the target
+project and enable the FCM HTTP v1 API. Literal `\n` sequences in the PEM key are accepted.
+Unconfigured environments store registrations but never attempt FCM delivery. No
+Firebase credentials belong in client source, logs, or generated contracts.
+
+`POST /v1/notifications/fcm/register` accepts `{installationId, token, notificationsEnabled}`
+and returns `{data:{bindingId}}`. The installation id is a random app-generated UUID.
+The cookie-authenticated personal session owns the binding; page/impersonated sessions
+cannot register devices. Identical installation/session/token registrations are idempotent;
+changing any of these rotates the server-generated binding. Re-register after login,
+launch/activation, token refresh, and permission changes. `POST /v1/notifications/fcm/unregister`
+accepts `{installationId,bindingId}` and deletes only the caller's exact session binding.
+Serialize registration and account transitions in the client. Clear the local binding,
+queued display work, and visible notifications before logout/switch, including offline;
+a delayed unregister cannot delete a newer binding. Session revocation immediately
+suppresses subsequent server sends even if an unregister request never arrives.
+
+FCM payloads contain only string data: `schemaVersion`, `bindingId`, `recipientUserId`,
+`eventId`, `kind`, `destination`, `expiresAt`, `tag`, `title`, and `body`. `destination`
+is a same-site relative path and `expiresAt` is an ISO timestamp (one-hour TTL). Discard
+unknown versions, expired events, and mismatched bindings/users; deduplicate `eventId`
+and resolve the destination only through the authenticated app router. The display copy
+is generic and contains no authored text, avatar, or private channel name. Never bypass
+the inbox/API authorization based on a push. Android renders locally; the payload has
+no system-rendered `notification` object. FCM is best effort (including force-stop and
+OEM background restrictions), so refresh the API inbox on app activation. The existing
+auth cleanup removes revoked/expired bindings and installations unseen for 90 days;
+invalid registration-token responses also prune only the exact obsolete binding.

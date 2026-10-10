@@ -584,6 +584,7 @@ model User {
   notificationsAsSubjectUser   Notification[]             @relation("Notification_subjectUser")
   pushSubscriptions            PushSubscription[]
   apnsDeviceTokens             ApnsDeviceToken[]
+  fcmDeviceRegistrations       FcmDeviceRegistration[]
   notificationPreferences      NotificationPreferences?
   articleTagPreferences        UserArticleTagPreference[]
   taxonomyPreferences          UserTaxonomyPreference[]
@@ -1084,6 +1085,26 @@ model ApnsDeviceToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+/** Android installations bind to one live personal session, never to caller-supplied identity. */
+model FcmDeviceRegistration {
+  id                   String   @id @default(cuid())
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  lastSeenAt           DateTime @default(now())
+  installationId       String   @unique @db.Uuid
+  bindingId            String   @db.Uuid
+  token                String   @unique @db.Text
+  notificationsEnabled Boolean  @default(true)
+  userId               String
+  sessionId            String
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session              Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([sessionId])
+  @@index([lastSeenAt])
 }
 
 enum FollowNotificationPreference {
@@ -2341,6 +2362,7 @@ model Session {
    */
   operatedByUserId String?
   operatedBy       User?   @relation("SessionOperatedBy", fields: [operatedByUserId], references: [id], onDelete: Cascade)
+  fcmDeviceRegistrations FcmDeviceRegistration[]
 
   @@index([userId])
   @@index([expiresAt])

@@ -68,6 +68,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--repos-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--ios-root", type=Path, help="Use an explicit iOS checkout/worktree")
+    parser.add_argument("--android-root", type=Path, help="Include an explicit Android checkout")
     parser.add_argument(
         "--allow-missing",
         nargs="*",
@@ -99,7 +100,7 @@ def collect_pairs(repos: dict[str, Path]) -> list[tuple[Path, Path]]:
 
 
 def collect_shared_rules(repos: dict[str, Path]) -> list[tuple[Path, Path]]:
-    present = {name for name in ("www", "ios") if name in repos}
+    present = {name for name in ("www", "ios", "android") if name in repos}
     return [
         (repos["api"] / ".cursor/rules" / name, repos[target] / ".cursor/rules" / name)
         for name in SHARED_RULES
@@ -144,6 +145,8 @@ def main(argv: list[str] | None = None) -> int:
     repos = {name: args.repos_root / f"menofhunger-{name}" for name in ("api", "www", "ios")}
     if args.ios_root:
         repos["ios"] = args.ios_root.resolve()
+    if args.android_root:
+        repos["android"] = args.android_root.resolve()
     allow_missing = set(args.allow_missing)
     missing = [name for name, path in repos.items() if not (path / "AGENTS.md").is_file()]
     unexpected = [name for name in missing if name not in allow_missing]

@@ -1,9 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
-import { PrismaService } from '../prisma/prisma.service';
-import { JobsService } from '../jobs/jobs.service';
-import { JOBS } from '../jobs/jobs.constants';
-import { AppConfigService } from '../app/app-config.service';
+import { Injectable, Logger } from "@nestjs/common";
+import { Cron } from "@nestjs/schedule";
+import { PrismaService } from "../prisma/prisma.service";
+import { JobsService } from "../jobs/jobs.service";
+import { JOBS } from "../jobs/jobs.constants";
+import { AppConfigService } from "../app/app-config.service";
 
 @Injectable()
 export class AuthCleanupCron {
@@ -20,13 +20,13 @@ export class AuthCleanupCron {
    * Housekeeping: remove expired auth records so tables don't grow forever.
    * Safe to run repeatedly.
    */
-  @Cron('0 */6 * * *')
+  @Cron("0 */6 * * *")
   async cleanupExpiredAuthRecords() {
     if (!this.appConfig.runSchedulers()) return;
     try {
-      await this.jobs.enqueueCron(JOBS.authCleanup, {}, 'cron-authCleanup', {
+      await this.jobs.enqueueCron(JOBS.authCleanup, {}, "cron-authCleanup", {
         attempts: 2,
-        backoff: { type: 'exponential', delay: 5 * 60_000 },
+        backoff: { type: "exponential", delay: 5 * 60_000 },
       });
     } catch {
       // likely duplicate jobId while previous run is active; treat as no-op
@@ -41,19 +41,45 @@ export class AuthCleanupCron {
       const now = new Date();
       // Revoked sessions older than 7 days are pruned for storage hygiene.
       // Recent revocations are kept briefly as an audit trail.
-      const revokedRetentionCutoff = new Date(now.getTime() - 7 * 24 * 60 * 60_000);
+      const revokedRetentionCutoff = new Date(
+        now.getTime() - 7 * 24 * 60 * 60_000,
+      );
 
-      const [sessions, otps, revokedSessions] = await this.prisma.$transaction([
-        this.prisma.session.deleteMany({ where: { expiresAt: { lt: now } } }),
-        this.prisma.phoneOtp.deleteMany({ where: { expiresAt: { lt: now } } }),
-        this.prisma.session.deleteMany({ where: { revokedAt: { lt: revokedRetentionCutoff } } }),
-      ]);
+      const [fcmDevices, sessions, otps, revokedSessions] =
+        await this.prisma.$transaction([
+          this.prisma.fcmDeviceRegistration.deleteMany({
+            where: {
+              OR: [
+                {
+                  lastSeenAt: {
+                    lt: new Date(now.getTime() - 90 * 24 * 60 * 60_000),
+                  },
+                },
+                { session: { revokedAt: { not: null } } },
+                { session: { expiresAt: { lte: now } } },
+                { user: { bannedAt: { not: null } } },
+                { user: { deletionScheduledAt: { not: null } } },
+              ],
+            },
+          }),
+          this.prisma.session.deleteMany({ where: { expiresAt: { lt: now } } }),
+          this.prisma.phoneOtp.deleteMany({
+            where: { expiresAt: { lt: now } },
+          }),
+          this.prisma.session.deleteMany({
+            where: { revokedAt: { lt: revokedRetentionCutoff } },
+          }),
+        ]);
 
       const ms = Date.now() - startedAt;
-      const total = (sessions.count ?? 0) + (otps.count ?? 0) + (revokedSessions.count ?? 0);
+      const total =
+        (fcmDevices.count ?? 0) +
+        (sessions.count ?? 0) +
+        (otps.count ?? 0) +
+        (revokedSessions.count ?? 0);
       if (total > 0) {
         this.logger.log(
-          `Auth cleanup: sessions=${sessions.count} phoneOtps=${otps.count} revokedSessions=${revokedSessions.count} (${ms}ms)`,
+          `Auth cleanup: fcmDevices=${fcmDevices.count} sessions=${sessions.count} phoneOtps=${otps.count} revokedSessions=${revokedSessions.count} (${ms}ms)`,
         );
       }
     } catch (err) {
@@ -63,4 +89,3 @@ export class AuthCleanupCron {
     }
   }
 }
-

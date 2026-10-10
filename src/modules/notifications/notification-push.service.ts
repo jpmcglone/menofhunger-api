@@ -84,7 +84,7 @@ export class NotificationPushService {
     }
     const subCount = await this.prisma.pushSubscription.count({ where: { userId } });
     const hasApnsTokens = await this.apnsPush.hasTokens(userId);
-    if (subCount === 0 && !hasApnsTokens) {
+    if (subCount === 0 && !hasApnsTokens && !(await this.delivery.hasFcmTokens(userId))) {
       return { sent: false, message: 'No push subscription for this account. Enable notifications first.' };
     }
     await this.sendWebPushToRecipient(userId, {
@@ -292,19 +292,74 @@ export class NotificationPushService {
     /** Direct-call rows: the ring reaches iPhones via PushKit/CallKit, so the DM alert would double up. */
     skipIfVoipRegistered?: boolean;
   }): Promise<void> {
-    try {
-      const prefs = await this.preferences.getPreferencesInternal(params.recipientUserId);
-      if (!prefs.pushMessage) return;
-    } catch {
-      // Best-effort: if prefs read fails, still attempt push (default behavior).
-    }
-    if (params.skipIfVoipRegistered && (await this.apnsPush.hasVoipToken(params.recipientUserId).catch(() => false))) {
-      return;
-    }
-    if (this.presence.isUserViewingConversation(params.recipientUserId, params.conversationId)) {
-      this.logger.debug(
-        `[push] Skipping DM push — recipient ${params.recipientUserId} is viewing conversation ${params.conversationId}`,
+    const canDeliver = async (): Promise<boolean> => {
+      // Reads fail closed. A muted/deleted conversation, block, or preference change
+      // must suppress every transport, including a queued job or a second device.
+      const [participant, senderParticipant, block, prefs] = await Promise.all([
+        this.prisma.messageParticipant.findUnique({
+          where: {
+            conversationId_userId: {
+              conversationId: params.conversationId,
+              userId: params.recipientUserId,
+            },
+          },
+          select: {
+            mutedAt: true,
+            status: true,
+            user: { select: { bannedAt: true, deletionScheduledAt: true } },
+          },
+        }),
+        this.prisma.messageParticipant.findUnique({
+          where: {
+            conversationId_userId: {
+              conversationId: params.conversationId,
+              userId: params.senderUserId,
+            },
+          },
+          select: { status: true },
+        }),
+        this.prisma.userBlock.findFirst({
+          where: {
+            OR: [
+              {
+                blockerId: params.recipientUserId,
+                blockedId: params.senderUserId,
+              },
+              {
+                blockerId: params.senderUserId,
+                blockedId: params.recipientUserId,
+              },
+            ],
+          },
+          select: { blockerId: true },
+        }),
+        this.preferences.getPreferencesInternal(params.recipientUserId),
+      ]);
+      if (
+        !participant ||
+        !senderParticipant ||
+        senderParticipant.status !== "accepted" ||
+        participant.mutedAt ||
+        participant.user.bannedAt ||
+        participant.user.deletionScheduledAt ||
+        block ||
+        !prefs.pushMessage
+      )
+        return false;
+      if (
+        params.skipIfVoipRegistered &&
+        (await this.apnsPush.hasVoipToken(params.recipientUserId))
+      )
+        return false;
+      return !this.presence.isUserViewingConversation(
+        params.recipientUserId,
+        params.conversationId,
       );
+    };
+    try {
+      if (!(await canDeliver())) return;
+    } catch {
+      this.logger.warn("DM push eligibility unavailable; suppressing delivery");
       return;
     }
     const sender = (params.senderName ?? '').trim();
@@ -335,6 +390,7 @@ export class NotificationPushService {
         actorUsername: senderUser?.username ?? null,
         actorName: senderUser?.name ?? null,
         actorUserId: params.senderUserId,
+        canDeliver,
       });
     } catch (err) {
       this.logger.warn(`[push] Failed to send DM web push: ${err instanceof Error ? err.message : String(err)}`);

@@ -81,6 +81,7 @@
     "bullmq": "^5.70.0",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
+    "firebase-admin": "14.5.0",
     "helmet": "^7.2.0",
     "image-size": "^2.0.2",
     "ioredis": "^5.9.3",

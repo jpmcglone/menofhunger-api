@@ -121,10 +121,10 @@ export class PresenceStatusHandler {
         ? client.handshake.query.anon[0]
         : client.handshake.query.anon) ?? '';
     const requestedAnonId = userId ? null : sanitizeAnonViewerId(String(rawAnon));
-    // iOS is not browsable until login and never sends `anon`. Ignore it if a
+    // Native apps require login and never send `anon`. Ignore it if a
     // stale or forged handshake includes one anyway.
     const anonId =
-      requestedAnonId && String(clientType).toLowerCase() !== 'ios' ? requestedAnonId : null;
+      requestedAnonId && !['ios', 'android'].includes(String(clientType).toLowerCase()) ? requestedAnonId : null;
     let isNewlyOnline = false;
     let isNewlyAnonymous = false;
     if (userId) {

@@ -590,7 +590,7 @@ describe("PresenceStatusHandler", () => {
       presenceRedis,
       presenceRedis,
       follows as any,
-      {} as any,
+      { del: jest.fn().mockResolvedValue(0) } as any,
       {} as any,
       {} as any,
       new GatewayThrottleService(),
@@ -1245,19 +1245,22 @@ describe("PresenceStatusHandler — anonymous guest sockets", () => {
     expect((socket.data as { anonId?: string }).anonId).toBe(VALID_ANON);
   });
 
-  it("ignores anon from an iOS handshake", async () => {
-    const { handler, presenceRedis, socket, emitAnonymousCount } =
-      makeAnonFixture({
-        anon: VALID_ANON,
-      });
-    (socket as any).handshake.query = { client: "ios", anon: VALID_ANON };
+  it.each(["ios", "android"])(
+    "ignores anon from a %s handshake",
+    async (platform) => {
+      const { handler, presenceRedis, socket, emitAnonymousCount } =
+        makeAnonFixture({
+          anon: VALID_ANON,
+        });
+      (socket as any).handshake.query = { client: platform, anon: VALID_ANON };
 
-    await handler.handleConnection(socket as any);
+      await handler.handleConnection(socket as any);
 
-    expect(presenceRedis.registerAnonSocket).not.toHaveBeenCalled();
-    expect(emitAnonymousCount).not.toHaveBeenCalled();
-    expect((socket.data as { anonId?: string }).anonId).toBeUndefined();
-  });
+      expect(presenceRedis.registerAnonSocket).not.toHaveBeenCalled();
+      expect(emitAnonymousCount).not.toHaveBeenCalled();
+      expect((socket.data as { anonId?: string }).anonId).toBeUndefined();
+    },
+  );
 
   it("ignores anon when the socket is signed in", async () => {
     const { handler, presenceRedis, socket, emitAnonymousCount } =

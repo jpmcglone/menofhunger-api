@@ -2,6 +2,10 @@ import { z } from "zod";
 
 /** Third-party integrations: PostHog, Strava, Pickax, X, Sentry, channels. */
 export const integrationsEnvShape = {
+  // Optional server-only Android FCM service account; all three values enable delivery.
+  FCM_PROJECT_ID: z.string().trim().optional(),
+  FCM_CLIENT_EMAIL: z.string().trim().optional(),
+  FCM_PRIVATE_KEY: z.string().optional(),
     // PostHog product analytics (optional; events silently no-op when unset)
     // ─── Strava integration ─────────────────────────────────────────────────
     STRAVA_CLIENT_ID: z.preprocess(

@@ -6,6 +6,8 @@ import { AuthService } from './auth.service';
 export type AuthedRequest = Request & {
   user?: {
     id: string;
+    /** Resolved by AuthGuard; never accept a session id from the request body. */
+    sessionId?: string;
     /**
      * Set when a site admin is driving this session via impersonation. The effective
      * identity is still `id`; this is the admin really behind the request, so handlers
@@ -35,6 +37,7 @@ export class AuthGuard implements CanActivate {
 
     req.user = {
       id: result.user.id,
+      sessionId: result.sessionId,
       impersonatedByUserId: result.impersonatedByUserId,
       operatedByUserId: result.operatedByUserId,
       accountKind: result.user.accountKind,
