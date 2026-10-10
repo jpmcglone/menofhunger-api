@@ -1,4 +1,6 @@
 import { BoardModule } from "../board/board.module";
+import { MessagesModule } from "../messages/messages.module";
+import { GroupChannelsModule } from "../group-channels/group-channels.module";
 import { DelegationService } from "./delegation/delegation.service";
 import { DelegationPolicyService } from "./delegation/delegation-policy.service";
 import { DelegationActionsService } from "./delegation/delegation-actions.service";
@@ -93,6 +95,8 @@ import { AdminOperationsService } from "./admin-operations.service";
 
 @Module({
   imports: [
+    MessagesModule,
+    GroupChannelsModule,
     BoardModule,
     BookmarksModule,
     SpacesModule,
@@ -189,6 +193,11 @@ import { AdminOperationsService } from "./admin-operations.service";
     AdminIntroBriefService,
     AdminIntroBriefCron,
   ],
-  exports: [DelegationRunnerService, AdminDailyDigestCron, AdminIntroBriefCron, AdminImageReviewService],
+  exports: [
+    DelegationRunnerService,
+    AdminDailyDigestCron,
+    AdminIntroBriefCron,
+    AdminImageReviewService,
+  ],
 })
 export class AdminModule {}

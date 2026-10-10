@@ -1,8 +1,20 @@
-import { toAvatarVideoDto, type AvatarVideoDto } from '../../common/dto/avatar-video.dto';
-import type { Message, MessageMedia, MessageParticipantStatus, MessageParticipantRole } from '@prisma/client';
-import { toUserListDto, type UserListDto, type UserListRow } from '../../common/dto';
-import type { CallSessionDto, MessageCallDto } from '../../common/dto/call.dto';
-import { publicAssetUrl } from '../../common/assets/public-asset-url';
+import {
+  toAvatarVideoDto,
+  type AvatarVideoDto,
+} from "../../common/dto/avatar-video.dto";
+import type {
+  Message,
+  MessageMedia,
+  MessageParticipantStatus,
+  MessageParticipantRole,
+} from "@prisma/client";
+import {
+  toUserListDto,
+  type UserListDto,
+  type UserListRow,
+} from "../../common/dto";
+import type { CallSessionDto, MessageCallDto } from "../../common/dto/call.dto";
+import { publicAssetUrl } from "../../common/assets/public-asset-url";
 
 export type MessageParticipantDto = {
   user: UserListDto;
@@ -18,7 +30,12 @@ export type MessageReactionSummaryDto = {
   emoji: string;
   count: number;
   reactedByMe: boolean;
-  reactors: { id: string; username: string | null; avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null }[];
+  reactors: {
+    id: string;
+    username: string | null;
+    avatarUrl: string | null;
+    avatarVideo?: AvatarVideoDto | null;
+  }[];
 };
 
 export type MessageReplySnippetDto = {
@@ -31,8 +48,8 @@ export type MessageReplySnippetDto = {
 
 export type MessageMediaDto = {
   id: string;
-  kind: MessageMedia['kind'];
-  source: MessageMedia['source'];
+  kind: MessageMedia["kind"];
+  source: MessageMedia["source"];
   url: string;
   mp4Url: string | null;
   thumbnailUrl: string | null;
@@ -40,19 +57,23 @@ export type MessageMediaDto = {
   height: number | null;
   durationSeconds: number | null;
   alt: string | null;
+  /** Authoritative storage tombstone. Deleted uploads have no usable URLs. */
+  deletedAt: string | null;
   /** Audio only: `pending` until the transcript is ready. Null when never requested. */
-  transcriptStatus: 'pending' | 'ready' | 'failed' | null;
+  transcriptStatus: "pending" | "ready" | "failed" | null;
   transcript: string | null;
 };
 
 export type MessageDto = {
   id: string;
+  /** Echoed only to the sender, for matching pending sends with HTTP/socket results. */
+  clientRequestId: string | null;
   createdAt: string;
   body: string;
   conversationId: string;
   sender: UserListDto;
   /** `text` for ordinary chat; `call` for the one-per-call timeline row. */
-  kind: Message['kind'];
+  kind: Message["kind"];
   /** Present only when `kind === 'call'`. */
   call: MessageCallDto | null;
   reactions: MessageReactionSummaryDto[];
@@ -75,12 +96,13 @@ export type MessageConversationCrewSummaryDto = {
   slug: string;
   /** Display name; null when the crew hasn't been named yet. */
   name: string | null;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
 };
 
 export type MessageConversationDto = {
   id: string;
-  type: 'direct' | 'group' | 'crew_wall';
+  type: "direct" | "group" | "crew_wall";
   title: string | null;
   createdAt: string;
   updatedAt: string;
@@ -90,7 +112,12 @@ export type MessageConversationDto = {
    * otherwise Voice message / Photo / GIF / Video. Null when the conversation
    * has no messages — clients show "No chats yet." only in that case.
    */
-  lastMessage: { id: string; body: string; createdAt: string; senderId: string } | null;
+  lastMessage: {
+    id: string;
+    body: string;
+    createdAt: string;
+    senderId: string;
+  } | null;
   participants: MessageParticipantDto[];
   viewerStatus: MessageParticipantStatus;
   unreadCount: number;
@@ -117,14 +144,26 @@ type MessageReactionRow = {
   reactionId: string;
   emoji: string;
   userId: string;
-  user: { id: string; username: string | null; avatarKey: string | null; avatarVideoKey?: string | null; avatarVideoDurationMs?: number | null; avatarUpdatedAt: Date | null };
+  user: {
+    id: string;
+    username: string | null;
+    avatarKey: string | null;
+    avatarVideoKey?: string | null;
+    avatarVideoDurationMs?: number | null;
+    avatarUpdatedAt: Date | null;
+  };
 };
 
 type MessageWithRelations = Message & {
   sender: UserListRow;
   reactions?: MessageReactionRow[];
   deletions?: { userId: string }[];
-  replyTo?: (Message & { sender: { username: string | null }; media?: MessageMedia[] }) | null;
+  replyTo?:
+    | (Message & {
+        sender: { username: string | null };
+        media?: MessageMedia[];
+      })
+    | null;
   media?: MessageMedia[];
   editedAt?: Date | null;
   deletedForAll?: boolean;
@@ -157,9 +196,9 @@ export function toMessageConversationCrewSummaryDto(params: {
 }): MessageConversationCrewSummaryDto | null {
   const { crewWall } = params;
   if (!crewWall) return null;
-  const name = (crewWall.name ?? '').trim();
+  const name = (crewWall.name ?? "").trim();
   // Mirror crewAvatarUrl(): the column is already a full URL — just trim it.
-  const avatar = (crewWall.avatarImageUrl ?? '').trim();
+  const avatar = (crewWall.avatarImageUrl ?? "").trim();
   return {
     id: crewWall.id,
     slug: crewWall.slug,
@@ -177,7 +216,13 @@ function buildReactionSummaries(
   for (const r of reactions) {
     let group = byReactionId.get(r.reactionId);
     if (!group) {
-      group = { reactionId: r.reactionId, emoji: r.emoji, count: 0, reactedByMe: false, reactors: [] };
+      group = {
+        reactionId: r.reactionId,
+        emoji: r.emoji,
+        count: 0,
+        reactedByMe: false,
+        reactors: [],
+      };
       byReactionId.set(r.reactionId, group);
     }
     group.count++;
@@ -186,7 +231,12 @@ function buildReactionSummaries(
       r.user.avatarKey && publicBaseUrl
         ? `${publicBaseUrl}/${r.user.avatarKey}`
         : null;
-    group.reactors.push({ id: r.user.id, username: r.user.username, avatarUrl, avatarVideo: toAvatarVideoDto(r.user, publicBaseUrl) });
+    group.reactors.push({
+      id: r.user.id,
+      username: r.user.username,
+      avatarUrl,
+      avatarVideo: toAvatarVideoDto(r.user, publicBaseUrl),
+    });
   }
   return [...byReactionId.values()];
 }
@@ -196,23 +246,36 @@ function buildReactionSummaries(
  * null rather than a 500 on the whole conversation.
  */
 export function toMessageCallDto(raw: unknown): MessageCallDto | null {
-  if (!raw || typeof raw !== 'object') return null;
+  if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
-  const callId = typeof r.callId === 'string' ? r.callId : '';
-  const type = r.type === 'audio' || r.type === 'video' ? r.type : null;
+  const callId = typeof r.callId === "string" ? r.callId : "";
+  const type = r.type === "audio" || r.type === "video" ? r.type : null;
   const outcome =
-    r.outcome === 'started' ||
-    r.outcome === 'active' ||
-    r.outcome === 'ended' ||
-    r.outcome === 'missed' ||
-    r.outcome === 'declined' ||
-    r.outcome === 'cancelled'
+    r.outcome === "started" ||
+    r.outcome === "active" ||
+    r.outcome === "ended" ||
+    r.outcome === "missed" ||
+    r.outcome === "declined" ||
+    r.outcome === "cancelled"
       ? r.outcome
       : null;
   if (!callId || !type || !outcome) return null;
-  const duration = typeof r.durationSeconds === 'number' && Number.isFinite(r.durationSeconds) ? r.durationSeconds : null;
-  const peak = typeof r.peakParticipantCount === 'number' && Number.isFinite(r.peakParticipantCount) ? r.peakParticipantCount : 0;
-  return { callId, type, outcome, durationSeconds: duration, peakParticipantCount: peak };
+  const duration =
+    typeof r.durationSeconds === "number" && Number.isFinite(r.durationSeconds)
+      ? r.durationSeconds
+      : null;
+  const peak =
+    typeof r.peakParticipantCount === "number" &&
+    Number.isFinite(r.peakParticipantCount)
+      ? r.peakParticipantCount
+      : 0;
+  return {
+    callId,
+    type,
+    outcome,
+    durationSeconds: duration,
+    peakParticipantCount: peak,
+  };
 }
 
 export type LastMessagePreviewRow = {
@@ -230,15 +293,15 @@ export function messagePreviewText(message: {
   deletedForAll?: boolean;
   media?: Array<{ kind: string }> | null;
 }): string {
-  if (message.deletedForAll) return 'Message deleted';
-  const body = (message.body ?? '').trim();
+  if (message.deletedForAll) return "Message deleted";
+  const body = (message.body ?? "").trim();
   if (body) return body;
   const kinds = message.media ?? [];
-  if (kinds.some((m) => m.kind === 'audio')) return 'Voice message';
-  if (kinds.some((m) => m.kind === 'video')) return 'Video';
-  if (kinds.some((m) => m.kind === 'gif')) return 'GIF';
-  if (kinds.length > 0) return 'Photo';
-  return '';
+  if (kinds.some((m) => m.kind === "audio")) return "Voice message";
+  if (kinds.some((m) => m.kind === "video")) return "Video";
+  if (kinds.some((m) => m.kind === "gif")) return "GIF";
+  if (kinds.length > 0) return "Photo";
+  return "";
 }
 
 /** Lock-screen copy keeps the verb; list rows use `messagePreviewText`. */
@@ -246,19 +309,19 @@ export function messagePushPreview(params: {
   body?: string | null;
   media?: Array<{ kind: string }> | null;
 }): string {
-  const body = (params.body ?? '').trim();
+  const body = (params.body ?? "").trim();
   if (body) return body;
   const kinds = params.media ?? [];
-  if (kinds.some((m) => m.kind === 'audio')) return '🎙️ Sent a voice message';
-  if (kinds.some((m) => m.kind === 'video')) return '📹 Sent a video';
-  if (kinds.some((m) => m.kind === 'gif')) return 'Sent a GIF';
-  if (kinds.length > 0) return '📷 Sent a photo';
-  return '';
+  if (kinds.some((m) => m.kind === "audio")) return "🎙️ Sent a voice message";
+  if (kinds.some((m) => m.kind === "video")) return "📹 Sent a video";
+  if (kinds.some((m) => m.kind === "gif")) return "Sent a GIF";
+  if (kinds.length > 0) return "📷 Sent a photo";
+  return "";
 }
 
 export function toLastMessagePreviewDto(
   message: LastMessagePreviewRow | null | undefined,
-): MessageConversationDto['lastMessage'] {
+): MessageConversationDto["lastMessage"] {
   if (!message) return null;
   return {
     id: message.id,
@@ -268,34 +331,53 @@ export function toLastMessagePreviewDto(
   };
 }
 
-export function transcriptFields(m: Pick<MessageMedia, 'transcriptStatus' | 'transcript'>): Pick<MessageMediaDto, 'transcriptStatus' | 'transcript'> {
+export function transcriptFields(
+  m: Pick<MessageMedia, "transcriptStatus" | "transcript">,
+): Pick<MessageMediaDto, "transcriptStatus" | "transcript"> {
   const status = m.transcriptStatus;
-  if (status === 'ready') return { transcriptStatus: 'ready', transcript: m.transcript?.trim() || null };
-  if (status === 'failed') return { transcriptStatus: 'failed', transcript: null };
-  return { transcriptStatus: status ? 'pending' : null, transcript: null };
+  if (status === "ready")
+    return {
+      transcriptStatus: "ready",
+      transcript: m.transcript?.trim() || null,
+    };
+  if (status === "failed")
+    return { transcriptStatus: "failed", transcript: null };
+  return { transcriptStatus: status ? "pending" : null, transcript: null };
 }
 
-function toMessageMediaDto(m: MessageMedia, publicBaseUrl: string | null): MessageMediaDto {
+function toMessageMediaDto(
+  m: MessageMedia,
+  publicBaseUrl: string | null,
+  deleted: ReadonlyMap<string, Date>,
+): MessageMediaDto {
+  const deletedAt =
+    m.source === "upload" && m.r2Key ? deleted.get(m.r2Key) : null;
   const url =
-    m.source === 'upload'
-      ? (publicAssetUrl({ publicBaseUrl, key: m.r2Key }) ?? '')
-      : (m.url ?? '');
+    m.source === "upload"
+      ? (publicAssetUrl({ publicBaseUrl, key: m.r2Key }) ?? "")
+      : (m.url ?? "");
   const thumbnailUrl =
-    m.source === 'upload' && m.thumbnailR2Key
+    m.source === "upload" && m.thumbnailR2Key
       ? (publicAssetUrl({ publicBaseUrl, key: m.thumbnailR2Key }) ?? null)
       : null;
   return {
     id: m.id,
     kind: m.kind,
     source: m.source,
-    url,
-    mp4Url: m.mp4Url ?? null,
-    thumbnailUrl,
+    url: deletedAt ? "" : url,
+    mp4Url: deletedAt ? null : (m.mp4Url ?? null),
+    thumbnailUrl:
+      deletedAt || (m.thumbnailR2Key && deleted.has(m.thumbnailR2Key))
+        ? null
+        : thumbnailUrl,
+    deletedAt: deletedAt?.toISOString() ?? null,
     width: m.width ?? null,
     height: m.height ?? null,
     durationSeconds: m.durationSeconds ?? null,
-    alt: m.alt ?? null,
-    ...transcriptFields(m),
+    alt: deletedAt ? null : (m.alt ?? null),
+    ...(deletedAt
+      ? { transcriptStatus: null, transcript: null }
+      : transcriptFields(m)),
   };
 }
 
@@ -303,49 +385,88 @@ export function toMessageDto(params: {
   message: MessageWithRelations;
   publicBaseUrl: string | null;
   viewerUserId?: string;
+  mediaDeletedAt?: ReadonlyMap<string, Date>;
 }): MessageDto {
-  const { message, publicBaseUrl, viewerUserId = '' } = params;
+  const {
+    message,
+    publicBaseUrl,
+    viewerUserId = "",
+    mediaDeletedAt = new Map<string, Date>(),
+  } = params;
   return {
     id: message.id,
+    clientRequestId:
+      message.senderId === viewerUserId
+        ? (message.clientRequestId ?? null)
+        : null,
     createdAt: message.createdAt.toISOString(),
-    body: message.deletedForAll ? '' : message.body,
+    body: message.deletedForAll ? "" : message.body,
     conversationId: message.conversationId,
     sender: toUserListDto(message.sender, publicBaseUrl),
-    kind: message.kind ?? 'text',
-    call: !message.deletedForAll && message.kind === 'call' ? toMessageCallDto(message.callMeta) : null,
-    reactions: message.deletedForAll ? [] : buildReactionSummaries(message.reactions ?? [], viewerUserId, publicBaseUrl),
-    deletedForMe: (message.deletions ?? []).some((d) => d.userId === viewerUserId),
+    kind: message.kind ?? "text",
+    call:
+      !message.deletedForAll && message.kind === "call"
+        ? toMessageCallDto(message.callMeta)
+        : null,
+    reactions: message.deletedForAll
+      ? []
+      : buildReactionSummaries(
+          message.reactions ?? [],
+          viewerUserId,
+          publicBaseUrl,
+        ),
+    deletedForMe: (message.deletions ?? []).some(
+      (d) => d.userId === viewerUserId,
+    ),
     deletedForAll: Boolean(message.deletedForAll),
     editedAt: message.editedAt ? message.editedAt.toISOString() : null,
-    replyTo: !message.deletedForAll && message.replyTo
-      ? (() => {
-          if (message.replyTo.deletedForAll) {
-            return { id: message.replyTo.id, senderUsername: message.replyTo.sender.username, bodyPreview: 'Message deleted', mediaThumbnailUrl: null };
-          }
-          const rm = (message.replyTo.media ?? [])[0] ?? null;
-          let mediaThumbnailUrl: string | null = null;
-          if (rm) {
-            if (rm.source === 'upload') {
-              // For videos prefer the thumbnail key; images use r2Key directly.
-              const key = rm.kind === 'video' ? (rm.thumbnailR2Key ?? rm.r2Key) : rm.r2Key;
-              mediaThumbnailUrl = key ? (publicAssetUrl({ publicBaseUrl, key }) ?? null) : null;
-            } else {
-              // Giphy — url is already a CDN URL we can use directly.
-              mediaThumbnailUrl = rm.url ?? null;
+    replyTo:
+      !message.deletedForAll && message.replyTo
+        ? (() => {
+            if (message.replyTo.deletedForAll) {
+              return {
+                id: message.replyTo.id,
+                senderUsername: message.replyTo.sender.username,
+                bodyPreview: "Message deleted",
+                mediaThumbnailUrl: null,
+              };
             }
-          }
-          return {
-            id: message.replyTo.id,
-            senderUsername: message.replyTo.sender.username,
-            bodyPreview: messagePreviewText({
-              body: message.replyTo.body,
-              media: message.replyTo.media ?? [],
-            }).slice(0, 200),
-            mediaThumbnailUrl,
-          };
-        })()
-      : null,
-    media: message.deletedForAll ? [] : (message.media ?? []).map((m) => toMessageMediaDto(m, publicBaseUrl)),
+            const rm = (message.replyTo.media ?? [])[0] ?? null;
+            let mediaThumbnailUrl: string | null = null;
+            if (rm) {
+              if (rm.source === "upload") {
+                // For videos prefer the thumbnail key; images use r2Key directly.
+                const key =
+                  rm.kind === "video"
+                    ? (rm.thumbnailR2Key ?? rm.r2Key)
+                    : rm.r2Key;
+                mediaThumbnailUrl =
+                  key &&
+                  !mediaDeletedAt.has(key) &&
+                  !(rm.r2Key && mediaDeletedAt.has(rm.r2Key))
+                    ? (publicAssetUrl({ publicBaseUrl, key }) ?? null)
+                    : null;
+              } else {
+                // Giphy — url is already a CDN URL we can use directly.
+                mediaThumbnailUrl = rm.url ?? null;
+              }
+            }
+            return {
+              id: message.replyTo.id,
+              senderUsername: message.replyTo.sender.username,
+              bodyPreview: messagePreviewText({
+                body: message.replyTo.body,
+                media: message.replyTo.media ?? [],
+              }).slice(0, 200),
+              mediaThumbnailUrl,
+            };
+          })()
+        : null,
+    media: message.deletedForAll
+      ? []
+      : (message.media ?? []).map((m) =>
+          toMessageMediaDto(m, publicBaseUrl, mediaDeletedAt),
+        ),
   };
 }
 

@@ -1,3 +1,4 @@
+import { messageMediaDeletedAt } from "./message-media-state";
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AppConfigService } from "../app/app-config.service";
@@ -60,8 +61,10 @@ export class MessagesReactionsEditsService {
       where: { id: messageId },
       include: MESSAGE_INCLUDE,
     });
+    const mediaDeletedAt = await messageMediaDeletedAt(this.prisma, [updated]);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const dto = toMessageDto({
+      mediaDeletedAt,
       message: updated,
       publicBaseUrl,
       viewerUserId: userId,
@@ -73,6 +76,7 @@ export class MessagesReactionsEditsService {
     });
     for (const p of participants) {
       const participantDto = toMessageDto({
+        mediaDeletedAt,
         message: updated,
         publicBaseUrl,
         viewerUserId: p.userId,
@@ -106,6 +110,7 @@ export class MessagesReactionsEditsService {
     });
     if (!updated) return;
 
+    const mediaDeletedAt = await messageMediaDeletedAt(this.prisma, [updated]);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const participants = await this.prisma.messageParticipant.findMany({
       where: { conversationId },
@@ -113,6 +118,7 @@ export class MessagesReactionsEditsService {
     });
     for (const p of participants) {
       const participantDto = toMessageDto({
+        mediaDeletedAt,
         message: updated,
         publicBaseUrl,
         viewerUserId: p.userId,
@@ -176,14 +182,17 @@ export class MessagesReactionsEditsService {
       });
     });
 
+    const mediaDeletedAt = await messageMediaDeletedAt(this.prisma, [updated]);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const dto = toMessageDto({
+      mediaDeletedAt,
       message: updated,
       publicBaseUrl,
       viewerUserId: userId,
     });
     for (const p of conversation.participants) {
       const viewerDto = toMessageDto({
+        mediaDeletedAt,
         message: updated,
         publicBaseUrl,
         viewerUserId: p.userId,
@@ -250,8 +259,10 @@ export class MessagesReactionsEditsService {
       include: MESSAGE_INCLUDE,
     });
 
+    const mediaDeletedAt = await messageMediaDeletedAt(this.prisma, [updated]);
     for (const p of conversation.participants) {
       const dto = toMessageDto({
+        mediaDeletedAt,
         message: updated,
         publicBaseUrl,
         viewerUserId: p.userId,

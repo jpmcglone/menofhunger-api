@@ -1,8 +1,11 @@
-import { cursorPageQuerySchema, limitQuery } from '../../common/pagination/cursor-query.schema';
-import { z } from 'zod';
+import {
+  cursorPageQuerySchema,
+  limitQuery,
+} from "../../common/pagination/cursor-query.schema";
+import { z } from "zod";
 
 export const listConversationsSchema = z.object({
-  tab: z.enum(['primary', 'requests']).optional(),
+  tab: z.enum(["primary", "requests"]).optional(),
   limit: limitQuery(50),
   cursor: z.string().optional(),
 });
@@ -14,10 +17,10 @@ export const searchConversationsSchema = z.object({
 
 export const listMessagesSchema = cursorPageQuerySchema();
 
-export const messageMediaSchema = z.discriminatedUnion('source', [
+export const messageMediaSchema = z.discriminatedUnion("source", [
   z.object({
-    source: z.literal('upload'),
-    kind: z.enum(['image', 'gif', 'video', 'audio']),
+    source: z.literal("upload"),
+    kind: z.enum(["image", "gif", "video", "audio"]),
     r2Key: z.string().min(1),
     thumbnailR2Key: z.string().optional().nullable(),
     width: z.coerce.number().int().positive().optional().nullable(),
@@ -26,8 +29,8 @@ export const messageMediaSchema = z.discriminatedUnion('source', [
     alt: z.string().max(500).optional().nullable(),
   }),
   z.object({
-    source: z.literal('giphy'),
-    kind: z.literal('gif'),
+    source: z.literal("giphy"),
+    kind: z.literal("gif"),
     url: z.string().url(),
     mp4Url: z.string().url().optional().nullable(),
     width: z.coerce.number().int().positive().optional().nullable(),
@@ -41,25 +44,35 @@ export const createConversationSchema = z
     user_ids: z.array(z.string().trim().min(1)).min(1).max(50),
     title: z.string().trim().max(120).optional(),
     body: z.string().trim().max(2000).optional(),
+    clientRequestId: z.string().uuid().optional(),
     media: z.array(messageMediaSchema).max(1).optional(),
   })
-  .refine((val) => (val.body?.trim()?.length ?? 0) > 0 || (val.media?.length ?? 0) > 0, {
-    message: 'Message must have a body or media.',
-  });
+  .refine(
+    (val) =>
+      (val.body?.trim()?.length ?? 0) > 0 || (val.media?.length ?? 0) > 0,
+    {
+      message: "Message must have a body or media.",
+    },
+  );
 
 export const sendMessageSchema = z
   .object({
     body: z.string().trim().max(2000).optional(),
+    clientRequestId: z.string().uuid().optional(),
     replyToId: z.string().trim().min(1).optional(),
     media: z.array(messageMediaSchema).max(1).optional(),
   })
-  .refine((val) => (val.body?.trim()?.length ?? 0) > 0 || (val.media?.length ?? 0) > 0, {
-    message: 'Message must have a body or media.',
-  });
+  .refine(
+    (val) =>
+      (val.body?.trim()?.length ?? 0) > 0 || (val.media?.length ?? 0) > 0,
+    {
+      message: "Message must have a body or media.",
+    },
+  );
 
 export const voicemailSchema = z.object({
-  source: z.literal('upload'),
-  kind: z.literal('video'),
+  source: z.literal("upload"),
+  kind: z.literal("video"),
   r2Key: z.string().min(1),
   thumbnailR2Key: z.string().optional().nullable(),
   width: z.coerce.number().int().positive().optional().nullable(),

@@ -1,10 +1,12 @@
-import { Injectable } from '@nestjs/common';
-import { AdminImageReviewStorageService } from './admin-image-review-storage.service';
-import { AdminImageReferencesService } from './admin-image-review-references.service';
-import { AdminImageReviewSyncService } from './admin-image-review-sync.service';
-import { PrismaService } from '../prisma/prisma.service';
-import { PublicProfileCacheService } from '../users/public-profile-cache.service';
-import { clampLimit } from '../../common/pagination/page';
+import { Injectable, Logger } from "@nestjs/common";
+import { MessagesRealtimeService } from "../messages/messages-realtime.service";
+import { ChannelMessagesService } from "../group-channels/channel-messages.service";
+import { AdminImageReviewStorageService } from "./admin-image-review-storage.service";
+import { AdminImageReferencesService } from "./admin-image-review-references.service";
+import { AdminImageReviewSyncService } from "./admin-image-review-sync.service";
+import { PrismaService } from "../prisma/prisma.service";
+import { PublicProfileCacheService } from "../users/public-profile-cache.service";
+import { clampLimit } from "../../common/pagination/page";
 import { USER_REF_SELECT } from "../../common/prisma-selects/user.select";
 import { isProtectedChannelKey } from "../group-channels/channel-media.service";
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
@@ -15,32 +17,44 @@ import {
 } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { scrubKeyFromArticleBody } from "./admin-image-review.references";
-import { decodeCursor, emptyAssetRefs, encodeCursor, referencesToken } from "./admin-image-review.types";
+import {
+  decodeCursor,
+  emptyAssetRefs,
+  encodeCursor,
+  referencesToken,
+} from "./admin-image-review.types";
 
 @Injectable()
 export class AdminImageReviewActionsService {
+  private readonly logger = new Logger(AdminImageReviewActionsService.name);
   constructor(
     private readonly storage: AdminImageReviewStorageService,
     private readonly references: AdminImageReferencesService,
     private readonly sync: AdminImageReviewSyncService,
     private readonly prisma: PrismaService,
-    private readonly publicProfileCache: PublicProfileCacheService<{ id: string; username: string | null }>,
+    private readonly publicProfileCache: PublicProfileCacheService<{
+      id: string;
+      username: string | null;
+    }>,
+    private readonly messagesRealtime: MessagesRealtimeService,
+    private readonly channelMessages: ChannelMessagesService,
   ) {}
 
   async deleteById(params: {
-      id: string;
-      adminUserId: string;
-      reason?: string | null;
-      onlyOrphans?: boolean;
-      expectedReferencesToken?: string | null;
-    },
-  ) {
+    id: string;
+    adminUserId: string;
+    reason?: string | null;
+    onlyOrphans?: boolean;
+    expectedReferencesToken?: string | null;
+  }) {
     const assetId = (params.id ?? "").trim();
     if (!assetId) throw new NotFoundException("Not found.");
     const reason = (params.reason ?? "").trim() || null;
     if (!reason) throw new BadRequestException("Reason is required.");
 
-    const a = await this.prisma.mediaAsset.findUnique({ where: { id: assetId } });
+    const a = await this.prisma.mediaAsset.findUnique({
+      where: { id: assetId },
+    });
     if (!a) throw new NotFoundException("Not found.");
     if (a.deletedAt) {
       return { success: true, alreadyDeleted: true };
@@ -60,7 +74,9 @@ export class AdminImageReviewActionsService {
     }
 
     if (params.onlyOrphans) {
-      const refs = (await this.references.resolveAllReferences([a.r2Key])).get(a.r2Key)!;
+      const refs = (await this.references.resolveAllReferences([a.r2Key])).get(
+        a.r2Key,
+      )!;
       if (refs.primaryType !== "orphan") {
         throw new BadRequestException(
           "This media is now in use and is no longer an orphan. Refresh media review before deleting.",
@@ -75,7 +91,8 @@ export class AdminImageReviewActionsService {
     ).get(a.r2Key)!;
     if (
       publicationRefs.announcements.length ||
-      publicationRefs.newsletters.length || publicationRefs.emailDeliveries.length
+      publicationRefs.newsletters.length ||
+      publicationRefs.emailDeliveries.length
     ) {
       throw new BadRequestException(
         "This media is still used by an announcement, newsletter, or retained email. Sent email images must remain available.",
@@ -104,6 +121,9 @@ export class AdminImageReviewActionsService {
 
       // Prevent future "same file" uploads from reusing this tombstoned key.
       await tx.mediaContentHash.deleteMany({ where: { r2Key } });
+      await tx.mediaUploadGrant.deleteMany({
+        where: { OR: [{ r2Key }, { thumbnailR2Key: r2Key }] },
+      });
       await tx.mediaSearchNote.deleteMany({ where: { r2Key } });
 
       // ── PostMedia: tombstone rows where this is the main asset ─────────────
@@ -128,18 +148,31 @@ export class AdminImageReviewActionsService {
         data: { thumbnailR2Key: null },
       });
 
-      // ── MessageMedia: hard-delete rows where this is the main upload ───────
-      // (MessageMedia has no tombstone field; the message body still exists)
-      const { count: messageMediaCount } = await tx.messageMedia.deleteMany({
-        where: { r2Key, source: "upload" },
+      // Keep stable media identity and ownership; canonical DTOs resolve the asset
+      // tombstone and remove every unusable URL instead of dropping the attachment.
+      const messageMedia = await tx.messageMedia.findMany({
+        where: { source: "upload", OR: [{ r2Key }, { thumbnailR2Key: r2Key }] },
+        select: {
+          r2Key: true,
+          thumbnailR2Key: true,
+          messageId: true,
+          message: {
+            select: {
+              conversation: {
+                select: {
+                  groupChannel: { select: { id: true, groupId: true } },
+                },
+              },
+            },
+          },
+        },
       });
-
-      // ── MessageMedia: null out thumbnail ───────────────────────────────────
-      const { count: messageMediaThumbnailCount } =
-        await tx.messageMedia.updateMany({
-          where: { thumbnailR2Key: r2Key },
-          data: { thumbnailR2Key: null },
-        });
+      const messageMediaCount = messageMedia.filter(
+        (media) => media.r2Key === r2Key,
+      ).length;
+      const messageMediaThumbnailCount = messageMedia.filter(
+        (media) => media.thumbnailR2Key === r2Key,
+      ).length;
 
       await tx.avatarVideoUpload.updateMany({
         where: {
@@ -164,7 +197,8 @@ export class AdminImageReviewActionsService {
           bannerKey: true,
         },
       });
-      const invalidatedUsers: Array<{ id: string; username: string | null }> = [];
+      const invalidatedUsers: Array<{ id: string; username: string | null }> =
+        [];
       for (const u of users) {
         const data: Prisma.UserUpdateInput = {};
         if (u.avatarKey === r2Key || u.avatarVideoKey === r2Key) {
@@ -301,10 +335,29 @@ export class AdminImageReviewActionsService {
         articleThumbCount,
         articleInlineCount,
         invalidatedUsers,
+        changedMessages: messageMedia,
       };
     });
 
-    const { invalidatedUsers, ...affectedCounts } = affected;
+    const { invalidatedUsers, changedMessages, ...affectedCounts } = affected;
+    for (const media of new Map(
+      changedMessages.map((media) => [media.messageId, media]),
+    ).values()) {
+      const channel = media.message.conversation.groupChannel;
+      try {
+        if (channel)
+          await this.channelMessages.publishMediaChange(
+            channel.groupId,
+            channel.id,
+            media.messageId,
+          );
+        else await this.messagesRealtime.rebroadcastMessage(media.messageId);
+      } catch {
+        this.logger.warn(
+          `Could not broadcast media deletion for message ${media.messageId}; HTTP reads remain redacted.`,
+        );
+      }
+    }
     for (const u of invalidatedUsers) {
       await this.publicProfileCache.invalidateForUser(u);
     }
@@ -313,7 +366,10 @@ export class AdminImageReviewActionsService {
     const { s3 } = this.storage.requireR2();
     try {
       await s3.send(
-        new DeleteObjectCommand({ Bucket: this.storage.bucketForKey(r2Key), Key: r2Key }),
+        new DeleteObjectCommand({
+          Bucket: this.storage.bucketForKey(r2Key),
+          Key: r2Key,
+        }),
       );
       await this.prisma.mediaAsset.update({
         where: { id: a.id },
@@ -337,15 +393,14 @@ export class AdminImageReviewActionsService {
   }
 
   async list(params: {
-      limit: number;
-      cursor: string | null;
-      q?: string | null;
-      showDeleted?: boolean;
-      onlyOrphans?: boolean;
-      sync?: boolean;
-      kind?: "all" | "image" | "video" | null;
-    },
-  ) {
+    limit: number;
+    cursor: string | null;
+    q?: string | null;
+    showDeleted?: boolean;
+    onlyOrphans?: boolean;
+    sync?: boolean;
+    kind?: "all" | "image" | "video" | null;
+  }) {
     const take = clampLimit(params.limit, { default: 30, max: 100 });
     const showDeleted = Boolean(params.showDeleted);
     const onlyOrphans = Boolean(params.onlyOrphans);
@@ -374,7 +429,7 @@ export class AdminImageReviewActionsService {
       ...kindWhere,
     };
 
-    const out: any[] = [];
+    const out: Array<Record<string, string | null>> = [];
     let scannedThrough: { r2LastModified: Date; id: string } | null = null;
     let scanCursor = decoded
       ? { lm: cursorLm as Date, id: cursorId as string }
@@ -426,6 +481,7 @@ export class AdminImageReviewActionsService {
         const articleRef = refs.articles[0];
         const msgRef = refs.messages[0];
         const upload = refs.channelUploads[0];
+        const grant = refs.uploadGrants[0];
 
         out.push({
           id: a.id,
@@ -451,8 +507,13 @@ export class AdminImageReviewActionsService {
           channelId: msgRef?.channelId ?? upload?.channelId ?? null,
           channelName: msgRef?.channelName ?? upload?.channelName ?? null,
           channelPrivacy: msgRef?.channelPrivacy ?? null,
-          uploaderUsername: msgRef?.senderUsername ?? upload?.username ?? null,
-          uploaderId: msgRef?.senderId ?? upload?.userId ?? null,
+          uploaderUsername:
+            msgRef?.senderUsername ??
+            upload?.username ??
+            grant?.username ??
+            null,
+          uploaderId:
+            msgRef?.senderId ?? upload?.userId ?? grant?.userId ?? null,
           crewId: crewRef?.crewId ?? null,
           crewName: crewRef?.name ?? null,
           crewSlug: crewRef?.slug ?? null,
@@ -483,5 +544,3 @@ export class AdminImageReviewActionsService {
     return { items: out, nextCursor };
   }
 }
-
-

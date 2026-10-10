@@ -35,6 +35,7 @@
       "messages": [
         {
           "id": "55555555-5555-4555-8555-555555555555",
+          "clientRequestId": null,
           "conversationId": "66666666-6666-4666-8666-666666666666",
           "body": "Good to see you.",
           "createdAt": "2026-10-10T22:00:00.000Z",
@@ -61,6 +62,7 @@
     "data": [
       {
         "id": "55555555-5555-4555-8555-555555555555",
+        "clientRequestId": null,
         "conversationId": "66666666-6666-4666-8666-666666666666",
         "body": "Good to see you.",
         "createdAt": "2026-10-10T22:00:00.000Z",
@@ -83,13 +85,96 @@
         "sequence": 2,
         "revision": 1,
         "threadRootId": null,
-        "clientRequestId": null,
         "replyCount": 0
       }
     ],
     "pagination": {
       "nextCursor": null,
       "latestSequence": 2
+    }
+  },
+  "photo": {
+    "data": {
+      "message": {
+        "id": "55555555-5555-4555-8555-555555555555",
+        "clientRequestId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "conversationId": "66666666-6666-4666-8666-666666666666",
+        "body": "",
+        "createdAt": "2026-10-10T22:00:00.000Z",
+        "sender": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "username": "john",
+          "name": "John",
+          "premium": false,
+          "premiumPlus": false,
+          "isOrganization": false,
+          "verifiedStatus": "manual",
+          "avatarUrl": null,
+          "orgAffiliations": []
+        },
+        "kind": "text",
+        "deletedForAll": false,
+        "deletedForMe": false,
+        "media": [
+          {
+            "id": "uploaded-photo",
+            "source": "upload",
+            "kind": "image",
+            "url": "https://cdn.example.test/uploads/member/images/photo.jpg",
+            "thumbnailUrl": null,
+            "mp4Url": null,
+            "width": 640,
+            "height": 480,
+            "durationSeconds": null,
+            "alt": "Trail at dawn",
+            "transcriptStatus": null,
+            "transcript": null,
+            "deletedAt": null
+          }
+        ]
+      }
+    }
+  },
+  "deletedPhoto": {
+    "data": {
+      "message": {
+        "id": "55555555-5555-4555-8555-555555555555",
+        "clientRequestId": null,
+        "conversationId": "66666666-6666-4666-8666-666666666666",
+        "body": "",
+        "createdAt": "2026-10-10T22:00:00.000Z",
+        "sender": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "username": "john",
+          "name": "John",
+          "premium": false,
+          "premiumPlus": false,
+          "isOrganization": false,
+          "verifiedStatus": "manual",
+          "avatarUrl": null,
+          "orgAffiliations": []
+        },
+        "kind": "text",
+        "deletedForAll": false,
+        "deletedForMe": false,
+        "media": [
+          {
+            "id": "deleted-photo",
+            "source": "upload",
+            "kind": "image",
+            "url": "",
+            "thumbnailUrl": null,
+            "mp4Url": null,
+            "width": 640,
+            "height": 480,
+            "durationSeconds": null,
+            "alt": null,
+            "transcriptStatus": null,
+            "transcript": null,
+            "deletedAt": "2026-10-10T22:00:00.000Z"
+          }
+        ]
+      }
     }
   }
 }

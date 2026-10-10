@@ -1,8 +1,13 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
-import { UploadsStorageService } from './uploads-storage.service';
-import { MAX_POST_VIDEO_BYTES_PREMIUM, MAX_POST_VIDEO_BYTES_PREMIUM_PLUS, MAX_POST_VIDEO_DURATION_SECONDS_PREMIUM_PLUS } from './uploads.constants';
+import { UploadGrantsService } from "./upload-grants.service";
+import { ForbiddenException, Injectable } from "@nestjs/common";
+import { UploadsStorageService } from "./uploads-storage.service";
+import {
+  MAX_POST_VIDEO_BYTES_PREMIUM,
+  MAX_POST_VIDEO_BYTES_PREMIUM_PLUS,
+  MAX_POST_VIDEO_DURATION_SECONDS_PREMIUM_PLUS,
+} from "./uploads.constants";
 
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from "../prisma/prisma.service";
 import {
   DeleteObjectCommand,
   HeadObjectCommand,
@@ -36,9 +41,11 @@ export class UploadsPostMediaService {
   constructor(
     private readonly storage: UploadsStorageService,
     private readonly prisma: PrismaService,
+    private readonly grants: UploadGrantsService,
   ) {}
 
-  async initPostMediaUpload(userId: string,
+  async initPostMediaUpload(
+    userId: string,
     contentType: string,
     opts?: {
       contentHash?: string;
@@ -55,7 +62,9 @@ export class UploadsPostMediaService {
       }
     } else if (purpose === "group") {
       if (!ALLOWED_CONTENT_TYPES.has(ct)) {
-        throw new BadRequestException("Group images must be JPG, PNG, or WebP.");
+        throw new BadRequestException(
+          "Group images must be JPG, PNG, or WebP.",
+        );
       }
     } else if (purpose === "crew") {
       if (!ALLOWED_CONTENT_TYPES.has(ct)) {
@@ -100,6 +109,7 @@ export class UploadsPostMediaService {
             await s3.send(
               new HeadObjectCommand({ Bucket: bucket, Key: existing.r2Key }),
             );
+            await this.grants.pending(userId, existing.r2Key, ct);
             return {
               key: existing.r2Key,
               skipUpload: true,
@@ -141,6 +151,7 @@ export class UploadsPostMediaService {
                   : "images";
     const key = `${prefix}uploads/${userId}/${subdir}/${randomUUID()}.${ext}`;
 
+    await this.grants.pending(userId, key, ct);
     const uploadUrl = await getSignedUrl(
       s3,
       new PutObjectCommand({
@@ -168,7 +179,8 @@ export class UploadsPostMediaService {
     };
   }
 
-  async commitPostMediaUpload(userId: string,
+  async commitPostMediaUpload(
+    userId: string,
     body: {
       key: string;
       contentHash?: string;
@@ -180,6 +192,7 @@ export class UploadsPostMediaService {
   ) {
     const { s3, bucket } = this.storage.requireR2();
     const cleaned = (body.key ?? "").trim();
+    await this.grants.assertCommitAccess(userId, cleaned, body.contentHash);
     const prefix = this.storage.objectKeyPrefix();
     const imagesPrefix = `${prefix}uploads/${userId}/images/`;
     const videosPrefix = `${prefix}uploads/${userId}/videos/`;
@@ -239,14 +252,15 @@ export class UploadsPostMediaService {
       let bytes =
         typeof existingByKey.bytes === "number" ? existingByKey.bytes : size;
       if (existingByKey.kind === "image") {
-        const normalized = await this.storage.getImageInfoAndNormalizeJpegIfNeeded({
-          s3,
-          bucket,
-          key: cleaned,
-          contentType,
-          maxBytes: MAX_POST_MEDIA_BYTES,
-          cacheControl: "public, max-age=31536000, immutable",
-        });
+        const normalized =
+          await this.storage.getImageInfoAndNormalizeJpegIfNeeded({
+            s3,
+            bucket,
+            key: cleaned,
+            contentType,
+            maxBytes: MAX_POST_MEDIA_BYTES,
+            cacheControl: "public, max-age=31536000, immutable",
+          });
         width = normalized.width ?? width;
         height = normalized.height ?? height;
         bytes = normalized.bytes ?? bytes;
@@ -264,6 +278,13 @@ export class UploadsPostMediaService {
         }
       }
 
+      if (thumbnailKey) await this.grants.commitThumbnail(userId, thumbnailKey);
+      await this.grants.committed(userId, cleaned, {
+        width,
+        height,
+        durationSeconds: existingByKey.durationSeconds,
+        thumbnailR2Key: thumbnailKey,
+      });
       return {
         key: cleaned,
         contentType,
@@ -332,13 +353,17 @@ export class UploadsPostMediaService {
           ? Math.floor(body.durationSeconds)
           : null;
       if (durationSeconds == null) {
-        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
+        await s3.send(
+          new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }),
+        );
         throw new BadRequestException(
           "Audio uploads must include durationSeconds.",
         );
       }
       if (durationSeconds > MAX_AUDIO_DURATION_SECONDS) {
-        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
+        await s3.send(
+          new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }),
+        );
         throw new BadRequestException(
           "Voice notes must be 2 minutes or shorter.",
         );
@@ -360,7 +385,9 @@ export class UploadsPostMediaService {
           : null;
 
       if (width == null || height == null || durationSeconds == null) {
-        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
+        await s3.send(
+          new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }),
+        );
         throw new BadRequestException(
           "Video uploads must include width, height, and durationSeconds.",
         );
@@ -370,7 +397,9 @@ export class UploadsPostMediaService {
         : (videoLimits?.maxDurationSeconds ??
           MAX_POST_VIDEO_DURATION_SECONDS_PREMIUM);
       if (durationSeconds > maxDuration) {
-        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }));
+        await s3.send(
+          new DeleteObjectCommand({ Bucket: bucket, Key: cleaned }),
+        );
         if (isVoicemail) {
           throw new BadRequestException(
             "Video messages must be 60 seconds or shorter.",
@@ -383,14 +412,15 @@ export class UploadsPostMediaService {
       }
     } else {
       try {
-        const normalized = await this.storage.getImageInfoAndNormalizeJpegIfNeeded({
-          s3,
-          bucket,
-          key: cleaned,
-          contentType,
-          maxBytes: MAX_POST_MEDIA_BYTES,
-          cacheControl: "public, max-age=31536000, immutable",
-        });
+        const normalized =
+          await this.storage.getImageInfoAndNormalizeJpegIfNeeded({
+            s3,
+            bucket,
+            key: cleaned,
+            contentType,
+            maxBytes: MAX_POST_MEDIA_BYTES,
+            cacheControl: "public, max-age=31536000, immutable",
+          });
         width = normalized.width;
         height = normalized.height;
         finalBytes = normalized.bytes;
@@ -435,6 +465,13 @@ export class UploadsPostMediaService {
         ? body.thumbnailKey.trim()
         : undefined;
 
+    if (thumbnailKey) await this.grants.commitThumbnail(userId, thumbnailKey);
+    await this.grants.committed(userId, cleaned, {
+      width,
+      height,
+      durationSeconds,
+      thumbnailR2Key: thumbnailKey,
+    });
     return {
       key: cleaned,
       contentType,
@@ -446,7 +483,9 @@ export class UploadsPostMediaService {
     };
   }
 
-  async videoLimitsForUserOrThrow(userId: string): Promise<{ maxBytes: number; maxDurationSeconds: number }> {
+  async videoLimitsForUserOrThrow(
+    userId: string,
+  ): Promise<{ maxBytes: number; maxDurationSeconds: number }> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { premium: true, premiumPlus: true },
@@ -463,8 +502,6 @@ export class UploadsPostMediaService {
         maxDurationSeconds: MAX_POST_VIDEO_DURATION_SECONDS_PREMIUM,
       };
     }
-    throw new ForbiddenException('Video uploads are for premium members only.');
+    throw new ForbiddenException("Video uploads are for premium members only.");
   }
 }
-
-

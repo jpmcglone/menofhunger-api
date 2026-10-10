@@ -26,6 +26,10 @@ function fixture(surface: Surface) {
       ),
       findMany: jest.fn().mockResolvedValue(assets),
     },
+    mediaUploadGrant: {
+      findMany: jest.fn().mockResolvedValue([]),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
     postMedia: { findMany: jest.fn().mockResolvedValue([]) },
     messageMedia: { findMany: jest.fn().mockResolvedValue([]) },
     groupChannelUpload: { findMany: jest.fn().mockResolvedValue([]) },

@@ -243,6 +243,7 @@ export class MessagesController {
     const result = await this.messagesWriteService.createConversation({
       userId,
       recipientUserIds: parsed.user_ids,
+      clientRequestId: parsed.clientRequestId,
       title: parsed.title ?? null,
       body: parsed.body ?? "",
       media: (parsed.media ?? []) as MessageMediaInput[],
@@ -286,6 +287,7 @@ export class MessagesController {
       userId,
       conversationId: id,
       body: parsed.body ?? "",
+      clientRequestId: parsed.clientRequestId,
       replyToId: parsed.replyToId ?? null,
       media: (parsed.media ?? []) as MessageMediaInput[],
     });

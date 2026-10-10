@@ -1,14 +1,26 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { AdminImageReviewStorageService } from './admin-image-review-storage.service';
-import { AppConfigService } from '../app/app-config.service';
-import { PrismaService } from '../prisma/prisma.service';
-import { Prisma } from '@prisma/client';
-import { type AssetRefs, type MessageRef, type PostRef, type PublicationRef, type UserRef, emptyAssetRefs } from './admin-image-review.types';
-import { isProtectedChannelKey } from '../group-channels/channel-media.service';
-import { articleBodyContainsKey, matchStoredAssetToKey } from './admin-image-review.references';
-import { USER_BRIEF_SELECT, USER_REF_SELECT } from '../../common/prisma-selects/user.select';
-import { GROUP_MEDIA_SELECT } from '../../common/prisma-selects/group.select';
-
+import { Injectable, Logger } from "@nestjs/common";
+import { AdminImageReviewStorageService } from "./admin-image-review-storage.service";
+import { AppConfigService } from "../app/app-config.service";
+import { PrismaService } from "../prisma/prisma.service";
+import { Prisma } from "@prisma/client";
+import {
+  type AssetRefs,
+  type MessageRef,
+  type PostRef,
+  type PublicationRef,
+  type UserRef,
+  emptyAssetRefs,
+} from "./admin-image-review.types";
+import { isProtectedChannelKey } from "../group-channels/channel-media.service";
+import {
+  articleBodyContainsKey,
+  matchStoredAssetToKey,
+} from "./admin-image-review.references";
+import {
+  USER_BRIEF_SELECT,
+  USER_REF_SELECT,
+} from "../../common/prisma-selects/user.select";
+import { GROUP_MEDIA_SELECT } from "../../common/prisma-selects/group.select";
 
 @Injectable()
 export class AdminImageReferencesService {
@@ -31,28 +43,82 @@ export class AdminImageReferencesService {
     if (!keySet.size) return result;
 
     const keyArr = [...keySet];
-    const protectedKeys = keyArr.filter(isProtectedChannelKey);
-    if (protectedKeys.length) {
-      const uploads = await this.prisma.groupChannelUpload.findMany({ where: {
-        expiresAt: { gt: new Date() }, OR: [{ sourceKey: { in: protectedKeys } }, { r2Key: { in: protectedKeys } }],
-      }, select: {
-        id: true, channelId: true, userId: true, sourceKey: true, r2Key: true, expiresAt: true,
+    // A grant protects an unfinished composer only for its explicit retention period.
+    // Hash/index records remain non-owners; sent content survives grant expiry independently.
+    const grants = await this.prisma.mediaUploadGrant.findMany({
+      where: {
+        expiresAt: { gt: new Date() },
+        OR: [{ r2Key: { in: keyArr } }, { thumbnailR2Key: { in: keyArr } }],
+      },
+      select: {
+        userId: true,
+        r2Key: true,
+        thumbnailR2Key: true,
+        committedAt: true,
+        expiresAt: true,
         user: { select: { username: true } },
-        channel: { select: { name: true, displayName: true, groupId: true, group: { select: { name: true, slug: true } } } },
-      } });
-      for (const upload of uploads) for (const key of [upload.sourceKey, upload.r2Key]) {
-        result.get(key)?.channelUploads.push({
-          uploadId: upload.id, channelId: upload.channelId, userId: upload.userId, username: upload.user.username,
-          channelName: upload.channel.displayName ?? upload.channel.name, groupId: upload.channel.groupId,
-          groupName: upload.channel.group.name, groupSlug: upload.channel.group.slug, expiresAt: upload.expiresAt.toISOString(),
+      },
+    });
+    for (const grant of grants)
+      for (const key of [grant.r2Key, grant.thumbnailR2Key]) {
+        if (!key) continue;
+        result.get(key)?.uploadGrants.push({
+          userId: grant.userId,
+          username: grant.user.username,
+          committedAt: grant.committedAt?.toISOString() ?? null,
+          expiresAt: grant.expiresAt.toISOString(),
+          isThumbnail: key !== grant.r2Key,
         });
       }
+    const protectedKeys = keyArr.filter(isProtectedChannelKey);
+    if (protectedKeys.length) {
+      const uploads = await this.prisma.groupChannelUpload.findMany({
+        where: {
+          expiresAt: { gt: new Date() },
+          OR: [
+            { sourceKey: { in: protectedKeys } },
+            { r2Key: { in: protectedKeys } },
+          ],
+        },
+        select: {
+          id: true,
+          channelId: true,
+          userId: true,
+          sourceKey: true,
+          r2Key: true,
+          expiresAt: true,
+          user: { select: { username: true } },
+          channel: {
+            select: {
+              name: true,
+              displayName: true,
+              groupId: true,
+              group: { select: { name: true, slug: true } },
+            },
+          },
+        },
+      });
+      for (const upload of uploads)
+        for (const key of [upload.sourceKey, upload.r2Key]) {
+          result.get(key)?.channelUploads.push({
+            uploadId: upload.id,
+            channelId: upload.channelId,
+            userId: upload.userId,
+            username: upload.user.username,
+            channelName: upload.channel.displayName ?? upload.channel.name,
+            groupId: upload.channel.groupId,
+            groupName: upload.channel.group.name,
+            groupSlug: upload.channel.group.slug,
+            expiresAt: upload.expiresAt.toISOString(),
+          });
+        }
     }
-
 
     // ── 1. PostMedia (r2Key + thumbnailR2Key) ──────────────────────────────
     const postMediaRows = await this.prisma.postMedia.findMany({
-      where: { OR: [{ r2Key: { in: keyArr } }, { thumbnailR2Key: { in: keyArr } }] },
+      where: {
+        OR: [{ r2Key: { in: keyArr } }, { thumbnailR2Key: { in: keyArr } }],
+      },
       select: {
         id: true,
         postId: true,
@@ -68,7 +134,7 @@ export class AdminImageReferencesService {
           },
         },
       },
-      orderBy: [{ createdAt: 'desc' }],
+      orderBy: [{ createdAt: "desc" }],
     });
     for (const m of postMediaRows) {
       const base: PostRef = {
@@ -85,23 +151,43 @@ export class AdminImageReferencesService {
         result.get(m.r2Key)!.posts.push(base);
       }
       if (m.thumbnailR2Key && keySet.has(m.thumbnailR2Key)) {
-        result.get(m.thumbnailR2Key)!.posts.push({ ...base, isThumbnail: true });
+        result
+          .get(m.thumbnailR2Key)!
+          .posts.push({ ...base, isThumbnail: true });
       }
     }
 
     // ── 2. MessageMedia (r2Key + thumbnailR2Key) ───────────────────────────
     const msgMediaRows = await this.prisma.messageMedia.findMany({
-      where: { OR: [{ r2Key: { in: keyArr } }, { thumbnailR2Key: { in: keyArr } }] },
+      where: {
+        OR: [{ r2Key: { in: keyArr } }, { thumbnailR2Key: { in: keyArr } }],
+      },
       select: {
         id: true,
         messageId: true,
         r2Key: true,
         thumbnailR2Key: true,
-        message: { select: {
-          conversationId: true, createdAt: true,
-          sender: { select: USER_BRIEF_SELECT },
-          conversation: { select: { groupChannel: { select: { id: true, name: true, displayName: true, privacy: true, groupId: true, group: { select: { name: true, slug: true } } } } } },
-        } },
+        message: {
+          select: {
+            conversationId: true,
+            createdAt: true,
+            sender: { select: USER_BRIEF_SELECT },
+            conversation: {
+              select: {
+                groupChannel: {
+                  select: {
+                    id: true,
+                    name: true,
+                    displayName: true,
+                    privacy: true,
+                    groupId: true,
+                    group: { select: { name: true, slug: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
     for (const m of msgMediaRows) {
@@ -113,33 +199,47 @@ export class AdminImageReferencesService {
         senderId: m.message.sender.id,
         senderUsername: m.message.sender.username,
         senderName: m.message.sender.name,
-        ...(m.message.conversation?.groupChannel ? {
-          channelId: m.message.conversation.groupChannel.id,
-          channelName: m.message.conversation.groupChannel.displayName ?? m.message.conversation.groupChannel.name,
-          channelPrivacy: m.message.conversation.groupChannel.privacy,
-          groupId: m.message.conversation.groupChannel.groupId,
-          groupName: m.message.conversation.groupChannel.group.name,
-          groupSlug: m.message.conversation.groupChannel.group.slug,
-        } : {}),
+        ...(m.message.conversation?.groupChannel
+          ? {
+              channelId: m.message.conversation.groupChannel.id,
+              channelName:
+                m.message.conversation.groupChannel.displayName ??
+                m.message.conversation.groupChannel.name,
+              channelPrivacy: m.message.conversation.groupChannel.privacy,
+              groupId: m.message.conversation.groupChannel.groupId,
+              groupName: m.message.conversation.groupChannel.group.name,
+              groupSlug: m.message.conversation.groupChannel.group.slug,
+            }
+          : {}),
         isThumbnail: false,
       };
       if (m.r2Key && keySet.has(m.r2Key)) {
         result.get(m.r2Key)!.messages.push(base);
       }
       if (m.thumbnailR2Key && keySet.has(m.thumbnailR2Key)) {
-        result.get(m.thumbnailR2Key)!.messages.push({ ...base, isThumbnail: true });
+        result
+          .get(m.thumbnailR2Key)!
+          .messages.push({ ...base, isThumbnail: true });
       }
     }
 
     // ── 3. User (photo/poster + avatar MP4 + banner) ───────────────────────
     const userRows = await this.prisma.user.findMany({
-      where: { OR: [{ avatarKey: { in: keyArr } }, { avatarVideoKey: { in: keyArr } }, { bannerKey: { in: keyArr } }] },
+      where: {
+        OR: [
+          { avatarKey: { in: keyArr } },
+          { avatarVideoKey: { in: keyArr } },
+          { bannerKey: { in: keyArr } },
+        ],
+      },
       select: {
         ...USER_BRIEF_SELECT,
         premium: true,
         premiumPlus: true,
         verifiedStatus: true,
-        avatarKey: true, avatarVideoKey: true, avatarVideoDurationMs: true,
+        avatarKey: true,
+        avatarVideoKey: true,
+        avatarVideoDurationMs: true,
         bannerKey: true,
       },
     });
@@ -166,16 +266,39 @@ export class AdminImageReferencesService {
     }
 
     const avatarUploads = await this.prisma.avatarVideoUpload.findMany({
-      where: { OR: [{ sourceKey: { in: keyArr } }, { videoKey: { in: keyArr } }, { posterKey: { in: keyArr } }] },
-      include: { user: { select: { ...USER_BRIEF_SELECT, premium: true, premiumPlus: true, verifiedStatus: true } } },
+      where: {
+        OR: [
+          { sourceKey: { in: keyArr } },
+          { videoKey: { in: keyArr } },
+          { posterKey: { in: keyArr } },
+        ],
+      },
+      include: {
+        user: {
+          select: {
+            ...USER_BRIEF_SELECT,
+            premium: true,
+            premiumPlus: true,
+            verifiedStatus: true,
+          },
+        },
+      },
     });
     for (const upload of avatarUploads) {
       for (const key of [upload.sourceKey, upload.videoKey, upload.posterKey]) {
         if (!keySet.has(key)) continue;
         const refs = result.get(key)!.users;
-        if (!refs.some(ref => ref.userId === upload.userId)) refs.push({ userId: upload.userId,
-          username: upload.user.username, name: upload.user.name, premium: upload.user.premium,
-          premiumPlus: upload.user.premiumPlus, verifiedStatus: upload.user.verifiedStatus, isAvatar: true, isBanner: false });
+        if (!refs.some((ref) => ref.userId === upload.userId))
+          refs.push({
+            userId: upload.userId,
+            username: upload.user.username,
+            name: upload.user.name,
+            premium: upload.user.premium,
+            premiumPlus: upload.user.premiumPlus,
+            verifiedStatus: upload.user.verifiedStatus,
+            isAvatar: true,
+            isBanner: false,
+          });
       }
     }
 
@@ -190,7 +313,7 @@ export class AdminImageReferencesService {
       }
     } else {
       this.logger.warn(
-        '[media-review] R2 publicBaseUrl not configured — group/crew URL matching is limited to raw keys / path suffix',
+        "[media-review] R2 publicBaseUrl not configured — group/crew URL matching is limited to raw keys / path suffix",
       );
     }
 
@@ -198,7 +321,10 @@ export class AdminImageReferencesService {
     const groupOrCrewWhere: Prisma.CommunityGroupWhereInput = {
       OR: [
         ...(urlArr.length
-          ? [{ avatarImageUrl: { in: urlArr } }, { coverImageUrl: { in: urlArr } }]
+          ? [
+              { avatarImageUrl: { in: urlArr } },
+              { coverImageUrl: { in: urlArr } },
+            ]
           : []),
         { avatarImageUrl: { in: keyArr } },
         { coverImageUrl: { in: keyArr } },
@@ -210,7 +336,11 @@ export class AdminImageReferencesService {
       select: GROUP_MEDIA_SELECT,
     });
     for (const g of groupRows) {
-      const avatarKey = matchStoredAssetToKey(g.avatarImageUrl, keySet, urlToKey);
+      const avatarKey = matchStoredAssetToKey(
+        g.avatarImageUrl,
+        keySet,
+        urlToKey,
+      );
       if (avatarKey) {
         result.get(avatarKey)!.groups.push({
           groupId: g.id,
@@ -233,7 +363,9 @@ export class AdminImageReferencesService {
     }
 
     // Path-suffix fallback for host/CDN drift (exact IN miss). Cap scan size.
-    const unresolvedForGroups = [...keySet].filter((k) => result.get(k)!.groups.length === 0);
+    const unresolvedForGroups = [...keySet].filter(
+      (k) => result.get(k)!.groups.length === 0,
+    );
     if (unresolvedForGroups.length > 0) {
       const suffixGroups = await this.prisma.communityGroup.findMany({
         where: {
@@ -245,8 +377,17 @@ export class AdminImageReferencesService {
         select: GROUP_MEDIA_SELECT,
       });
       for (const g of suffixGroups) {
-        const avatarKey = matchStoredAssetToKey(g.avatarImageUrl, keySet, urlToKey);
-        if (avatarKey && !result.get(avatarKey)!.groups.some((x) => x.groupId === g.id && x.isAvatar)) {
+        const avatarKey = matchStoredAssetToKey(
+          g.avatarImageUrl,
+          keySet,
+          urlToKey,
+        );
+        if (
+          avatarKey &&
+          !result
+            .get(avatarKey)!
+            .groups.some((x) => x.groupId === g.id && x.isAvatar)
+        ) {
           result.get(avatarKey)!.groups.push({
             groupId: g.id,
             slug: g.slug,
@@ -255,8 +396,17 @@ export class AdminImageReferencesService {
             isCover: false,
           });
         }
-        const coverKey = matchStoredAssetToKey(g.coverImageUrl, keySet, urlToKey);
-        if (coverKey && !result.get(coverKey)!.groups.some((x) => x.groupId === g.id && x.isCover)) {
+        const coverKey = matchStoredAssetToKey(
+          g.coverImageUrl,
+          keySet,
+          urlToKey,
+        );
+        if (
+          coverKey &&
+          !result
+            .get(coverKey)!
+            .groups.some((x) => x.groupId === g.id && x.isCover)
+        ) {
           result.get(coverKey)!.groups.push({
             groupId: g.id,
             slug: g.slug,
@@ -272,7 +422,10 @@ export class AdminImageReferencesService {
       where: {
         OR: [
           ...(urlArr.length
-            ? [{ avatarImageUrl: { in: urlArr } }, { coverImageUrl: { in: urlArr } }]
+            ? [
+                { avatarImageUrl: { in: urlArr } },
+                { coverImageUrl: { in: urlArr } },
+              ]
             : []),
           { avatarImageUrl: { in: keyArr } },
           { coverImageUrl: { in: keyArr } },
@@ -281,7 +434,11 @@ export class AdminImageReferencesService {
       select: GROUP_MEDIA_SELECT,
     });
     for (const c of crewRows) {
-      const avatarKey = matchStoredAssetToKey(c.avatarImageUrl, keySet, urlToKey);
+      const avatarKey = matchStoredAssetToKey(
+        c.avatarImageUrl,
+        keySet,
+        urlToKey,
+      );
       if (avatarKey) {
         result.get(avatarKey)!.crews.push({
           crewId: c.id,
@@ -303,7 +460,9 @@ export class AdminImageReferencesService {
       }
     }
 
-    const unresolvedForCrews = [...keySet].filter((k) => result.get(k)!.crews.length === 0);
+    const unresolvedForCrews = [...keySet].filter(
+      (k) => result.get(k)!.crews.length === 0,
+    );
     if (unresolvedForCrews.length > 0) {
       const suffixCrews = await this.prisma.crew.findMany({
         where: {
@@ -315,8 +474,17 @@ export class AdminImageReferencesService {
         select: GROUP_MEDIA_SELECT,
       });
       for (const c of suffixCrews) {
-        const avatarKey = matchStoredAssetToKey(c.avatarImageUrl, keySet, urlToKey);
-        if (avatarKey && !result.get(avatarKey)!.crews.some((x) => x.crewId === c.id && x.isAvatar)) {
+        const avatarKey = matchStoredAssetToKey(
+          c.avatarImageUrl,
+          keySet,
+          urlToKey,
+        );
+        if (
+          avatarKey &&
+          !result
+            .get(avatarKey)!
+            .crews.some((x) => x.crewId === c.id && x.isAvatar)
+        ) {
           result.get(avatarKey)!.crews.push({
             crewId: c.id,
             slug: c.slug,
@@ -325,8 +493,17 @@ export class AdminImageReferencesService {
             isCover: false,
           });
         }
-        const coverKey = matchStoredAssetToKey(c.coverImageUrl, keySet, urlToKey);
-        if (coverKey && !result.get(coverKey)!.crews.some((x) => x.crewId === c.id && x.isCover)) {
+        const coverKey = matchStoredAssetToKey(
+          c.coverImageUrl,
+          keySet,
+          urlToKey,
+        );
+        if (
+          coverKey &&
+          !result
+            .get(coverKey)!
+            .crews.some((x) => x.crewId === c.id && x.isCover)
+        ) {
           result.get(coverKey)!.crews.push({
             crewId: c.id,
             slug: c.slug,
@@ -360,7 +537,13 @@ export class AdminImageReferencesService {
     // ── 6. Article cover thumbnails (thumbnailR2Key) ───────────────────────
     const articleThumbRows = await this.prisma.article.findMany({
       where: { thumbnailR2Key: { in: keyArr } },
-      select: { id: true, slug: true, title: true, thumbnailR2Key: true, authorId: true },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        thumbnailR2Key: true,
+        authorId: true,
+      },
     });
     for (const a of articleThumbRows) {
       if (!a.thumbnailR2Key || !keySet.has(a.thumbnailR2Key)) continue;
@@ -393,13 +576,20 @@ export class AdminImageReferencesService {
         where: {
           OR: keysNeedingBodyScan.map((k) => ({ body: { contains: k } })),
         },
-        select: { id: true, slug: true, title: true, authorId: true, body: true },
+        select: {
+          id: true,
+          slug: true,
+          title: true,
+          authorId: true,
+          body: true,
+        },
       });
       for (const a of bodyArticles) {
         for (const key of keysNeedingBodyScan) {
           if (!articleBodyContainsKey(a.body, key)) continue;
           const bucket = result.get(key)!;
-          if (bucket.articles.some((x) => x.articleId === a.id && x.isInline)) continue;
+          if (bucket.articles.some((x) => x.articleId === a.id && x.isInline))
+            continue;
           bucket.articles.push({
             articleId: a.id,
             slug: a.slug,
@@ -422,30 +612,43 @@ export class AdminImageReferencesService {
 
     // ── Determine primaryType for each key ─────────────────────────────────
     for (const refs of result.values()) {
-      if (refs.posts.some((p) => !p.isThumbnail)) refs.primaryType = 'post';
-      else if (refs.messages.some((m) => !m.isThumbnail)) refs.primaryType = 'message';
-      else if (refs.users.length > 0) refs.primaryType = 'user';
-      else if (refs.groups.length > 0) refs.primaryType = 'group';
-      else if (refs.crews.length > 0) refs.primaryType = 'crew';
-      else if (refs.polls.length > 0) refs.primaryType = 'poll';
-      else if (refs.articles.some((a) => !a.isInline)) refs.primaryType = 'article';
-      else if (refs.articles.some((a) => a.isInline)) refs.primaryType = 'article_inline';
-      else if (refs.posts.some((p) => p.isThumbnail)) refs.primaryType = 'post_thumbnail';
-      else if (refs.messages.some((m) => m.isThumbnail)) refs.primaryType = 'message_thumbnail';
-      else if (refs.announcements.length) refs.primaryType = 'announcement';
-      else if (refs.newsletters.length) refs.primaryType = 'newsletter';
-      else if (refs.emailDeliveries.length) refs.primaryType = 'email_delivery';
-      else if (refs.channelUploads.length) refs.primaryType = 'channel_upload';
-      else refs.primaryType = 'orphan';
+      if (refs.posts.some((p) => !p.isThumbnail)) refs.primaryType = "post";
+      else if (refs.messages.some((m) => !m.isThumbnail))
+        refs.primaryType = "message";
+      else if (refs.users.length > 0) refs.primaryType = "user";
+      else if (refs.groups.length > 0) refs.primaryType = "group";
+      else if (refs.crews.length > 0) refs.primaryType = "crew";
+      else if (refs.polls.length > 0) refs.primaryType = "poll";
+      else if (refs.articles.some((a) => !a.isInline))
+        refs.primaryType = "article";
+      else if (refs.articles.some((a) => a.isInline))
+        refs.primaryType = "article_inline";
+      else if (refs.posts.some((p) => p.isThumbnail))
+        refs.primaryType = "post_thumbnail";
+      else if (refs.messages.some((m) => m.isThumbnail))
+        refs.primaryType = "message_thumbnail";
+      else if (refs.announcements.length) refs.primaryType = "announcement";
+      else if (refs.newsletters.length) refs.primaryType = "newsletter";
+      else if (refs.emailDeliveries.length) refs.primaryType = "email_delivery";
+      else if (refs.channelUploads.length) refs.primaryType = "channel_upload";
+      else if (refs.uploadGrants.length) refs.primaryType = "pending_upload";
+      else refs.primaryType = "orphan";
     }
 
     return result;
   }
 
   async resolvePublicationReferences(keys: string[]) {
-    const refs = new Map(keys.map((key) => [key, {
-      announcements: [] as PublicationRef[], newsletters: [] as PublicationRef[], emailDeliveries: [] as PublicationRef[],
-    }]));
+    const refs = new Map(
+      keys.map((key) => [
+        key,
+        {
+          announcements: [] as PublicationRef[],
+          newsletters: [] as PublicationRef[],
+          emailDeliveries: [] as PublicationRef[],
+        },
+      ]),
+    );
     if (!keys.length) return refs;
     const [announcements, newsletters, deliveries] = await Promise.all([
       this.prisma.announcement.findMany({
@@ -453,35 +656,63 @@ export class AdminImageReferencesService {
         select: { id: true, title: true, status: true, imageKey: true },
       }),
       this.prisma.newsletter.findMany({
-        where: { OR: [{ imageKey: { in: keys } }, ...keys.map((key) => ({ bodyJson: { contains: key } }))] },
-        select: { id: true, subject: true, status: true, imageKey: true, bodyJson: true },
+        where: {
+          OR: [
+            { imageKey: { in: keys } },
+            ...keys.map((key) => ({ bodyJson: { contains: key } })),
+          ],
+        },
+        select: {
+          id: true,
+          subject: true,
+          status: true,
+          imageKey: true,
+          bodyJson: true,
+        },
       }),
-      this.prisma.emailDelivery.findMany({ where: { mediaUrls: { isEmpty: false } }, select: { id: true, status: true, mediaUrls: true } }),
+      this.prisma.emailDelivery.findMany({
+        where: { mediaUrls: { isEmpty: false } },
+        select: { id: true, status: true, mediaUrls: true },
+      }),
     ]);
     for (const row of deliveries) {
       for (const key of keys) {
         const keySet = new Set([key]);
         const urlMap = new Map<string, string>();
-        const used = row.mediaUrls.some(url => matchStoredAssetToKey(url, keySet, urlMap) === key);
-        if (used) refs.get(key)!.emailDeliveries.push({ id: row.id, title: 'Retained email image', status: row.status, isInline: true });
+        const used = row.mediaUrls.some(
+          (url) => matchStoredAssetToKey(url, keySet, urlMap) === key,
+        );
+        if (used)
+          refs.get(key)!.emailDeliveries.push({
+            id: row.id,
+            title: "Retained email image",
+            status: row.status,
+            isInline: true,
+          });
       }
     }
     for (const row of announcements) {
-      if (row.imageKey) refs.get(row.imageKey)?.announcements.push({
-        id: row.id, title: row.title, status: row.status, isInline: false,
-      });
+      if (row.imageKey)
+        refs.get(row.imageKey)?.announcements.push({
+          id: row.id,
+          title: row.title,
+          status: row.status,
+          isInline: false,
+        });
     }
     for (const row of newsletters) {
       for (const key of keys) {
         const cover = row.imageKey === key;
         const inline = articleBodyContainsKey(row.bodyJson, key);
-        if (cover || inline) refs.get(key)!.newsletters.push({
-          id: row.id, title: row.subject, status: row.status, isInline: !cover,
-        });
+        if (cover || inline)
+          refs.get(key)!.newsletters.push({
+            id: row.id,
+            title: row.subject,
+            status: row.status,
+            isInline: !cover,
+          });
       }
     }
     return refs;
   }
 }
-
-

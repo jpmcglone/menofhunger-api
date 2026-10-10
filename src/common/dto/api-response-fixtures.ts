@@ -158,6 +158,7 @@ const channel = {
 >;
 const message = {
   id: "55555555-5555-4555-8555-555555555555",
+  clientRequestId: null,
   conversationId: "66666666-6666-4666-8666-666666666666",
   body: "Good to see you.",
   createdAt,
@@ -169,6 +170,7 @@ const message = {
 } satisfies Pick<
   MessageDto,
   | "id"
+  | "clientRequestId"
   | "conversationId"
   | "body"
   | "createdAt"
@@ -480,6 +482,57 @@ export const apiResponseFixturesByDomain = {
   messages: {
     conversation: responses.conversation,
     channelHistory: responses.channelHistory,
+    photo: {
+      data: {
+        message: {
+          ...message,
+          clientRequestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          body: "",
+          media: [
+            {
+              id: "uploaded-photo",
+              source: "upload",
+              kind: "image",
+              url: "https://cdn.example.test/uploads/member/images/photo.jpg",
+              thumbnailUrl: null,
+              mp4Url: null,
+              width: 640,
+              height: 480,
+              durationSeconds: null,
+              alt: "Trail at dawn",
+              transcriptStatus: null,
+              transcript: null,
+              deletedAt: null,
+            },
+          ],
+        },
+      },
+    },
+    deletedPhoto: {
+      data: {
+        message: {
+          ...message,
+          body: "",
+          media: [
+            {
+              id: "deleted-photo",
+              source: "upload",
+              kind: "image",
+              url: "",
+              thumbnailUrl: null,
+              mp4Url: null,
+              width: 640,
+              height: 480,
+              durationSeconds: null,
+              alt: null,
+              transcriptStatus: null,
+              transcript: null,
+              deletedAt: createdAt,
+            },
+          ],
+        },
+      },
+    },
   },
   notifications: {
     notifications: responses.notifications,

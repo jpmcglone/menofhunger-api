@@ -1,3 +1,10 @@
+import { UploadGrantsService } from "../uploads/upload-grants.service";
+import { messageMediaDeletedAt } from "./message-media-state";
+import {
+  messageRequestHash,
+  assertMessageRequestHash,
+  isUniqueConflict,
+} from "./message-request";
 import { assertPublishableText } from "../../common/moderation/content-filter";
 import { requireAiConsent } from "../marvin/services/ai-consent";
 import {
@@ -42,7 +49,23 @@ export class MessagesWriteService {
     private readonly marvIdentity: MarvinBotIdentityService,
     private readonly sideEffects: SideEffectsService,
     private readonly support: MessagesSupportService,
+    private readonly grants: UploadGrantsService,
   ) {}
+
+  private async validatePhotos(
+    userId: string,
+    media: MessageMediaInput[],
+    tx: import("@prisma/client").Prisma.TransactionClient,
+  ) {
+    return Promise.all(
+      media.map((item) =>
+        item.source === "upload" &&
+        (item.kind === "image" || item.kind === "gif")
+          ? this.grants.photo(userId, item, tx)
+          : item,
+      ),
+    );
+  }
 
   async createConversation(params: {
     userId: string;
@@ -50,6 +73,7 @@ export class MessagesWriteService {
     title?: string | null;
     body: string;
     media?: MessageMediaInput[];
+    clientRequestId?: string;
   }) {
     assertPublishableText(params.body, params.title);
     const { userId, recipientUserIds, title, body } = params;
@@ -109,6 +133,19 @@ export class MessagesWriteService {
       // must be able to reply in admin-initiated threads). This is the primary sender check.
       throw new ForbiddenException("Verify to use chat.");
     }
+    if (
+      media.some(
+        (m) => m.kind === "image" || m.kind === "gif" || m.kind === "audio",
+      ) &&
+      !senderIsVerified
+    )
+      throw new ForbiddenException(
+        "Verify your account to send photos and voice notes in chat.",
+      );
+    if (media.some((m) => m.kind === "video") && !senderIsPremium)
+      throw new ForbiddenException(
+        "Video messages are for premium members only.",
+      );
     await this.support.assertNotBlocked(userId, uniqueRecipients);
 
     const isDirect = uniqueRecipients.length === 1;
@@ -136,6 +173,7 @@ export class MessagesWriteService {
           conversationId: existing.id,
           body: trimmed,
           media,
+          clientRequestId: params.clientRequestId,
         });
         return { conversationId: existing.id, message: sent.message };
       }
@@ -207,65 +245,102 @@ export class MessagesWriteService {
     const followerSet = new Set(followers.map((f) => f.followerId));
     const now = new Date();
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      const conversation = await tx.messageConversation.create({
-        data: {
-          type,
-          title: title?.trim() || null,
-          createdByUserId: userId,
-          directKey: directKey ?? undefined,
-          lastMessageAt: now,
-        },
-      });
+    const result = await this.prisma
+      .$transaction(
+        async (tx) => {
+          const conversation = await tx.messageConversation.create({
+            data: {
+              type,
+              title: title?.trim() || null,
+              createdByUserId: userId,
+              directKey: directKey ?? undefined,
+              lastMessageAt: now,
+            },
+          });
 
-      const participantRows = [
-        {
-          conversationId: conversation.id,
+          const participantRows = [
+            {
+              conversationId: conversation.id,
+              userId,
+              role: "owner" as const,
+              status: "accepted" as const,
+              acceptedAt: now,
+              lastReadAt: now,
+            },
+            ...uniqueRecipients.map((recipientId) => ({
+              conversationId: conversation.id,
+              userId: recipientId,
+              role: "member" as const,
+              // Admin-initiated threads are always accepted so the message lands in the
+              // primary inbox (not the Requests tab) and push shows the real body.
+              status:
+                senderIsAdmin || followerSet.has(recipientId)
+                  ? ("accepted" as const)
+                  : ("pending" as const),
+              acceptedAt:
+                senderIsAdmin || followerSet.has(recipientId) ? now : null,
+            })),
+          ];
+
+          await tx.messageParticipant.createMany({ data: participantRows });
+
+          const validatedMedia = await this.validatePhotos(userId, media, tx);
+          const message = await tx.message.create({
+            data: {
+              conversationId: conversation.id,
+              senderId: userId,
+              body: trimmed,
+              clientRequestId: params.clientRequestId,
+              requestHash: params.clientRequestId
+                ? messageRequestHash(trimmed, null, media)
+                : null,
+              ...(media.length > 0
+                ? { media: { create: messageMediaCreateData(validatedMedia) } }
+                : {}),
+            },
+            include: MESSAGE_INCLUDE,
+          });
+
+          await tx.messageConversation.update({
+            where: { id: conversation.id },
+            data: { lastMessageId: message.id, lastMessageAt: now },
+          });
+
+          return { conversationId: conversation.id, message };
+        },
+        { timeout: 30_000 },
+      )
+      .catch(async (error: unknown) => {
+        if (!directKey || !isUniqueConflict(error)) throw error;
+        const existing = await this.prisma.messageConversation.findFirst({
+          where: { type: "direct", directKey },
+          select: { id: true },
+        });
+        if (!existing) throw error;
+        // The winner owns all first-message side effects. Route this caller through the
+        // same request identity so a concurrent creation/retry cannot send it twice.
+        const sent = await this.sendMessage({
           userId,
-          role: "owner" as const,
-          status: "accepted" as const,
-          acceptedAt: now,
-          lastReadAt: now,
-        },
-        ...uniqueRecipients.map((recipientId) => ({
-          conversationId: conversation.id,
-          userId: recipientId,
-          role: "member" as const,
-          // Admin-initiated threads are always accepted so the message lands in the
-          // primary inbox (not the Requests tab) and push shows the real body.
-          status:
-            senderIsAdmin || followerSet.has(recipientId)
-              ? ("accepted" as const)
-              : ("pending" as const),
-          acceptedAt:
-            senderIsAdmin || followerSet.has(recipientId) ? now : null,
-        })),
-      ];
-
-      await tx.messageParticipant.createMany({ data: participantRows });
-
-      const message = await tx.message.create({
-        data: {
-          conversationId: conversation.id,
-          senderId: userId,
+          conversationId: existing.id,
           body: trimmed,
-          ...(media.length > 0
-            ? { media: { create: messageMediaCreateData(media) } }
-            : {}),
-        },
-        include: MESSAGE_INCLUDE,
+          media,
+          clientRequestId: params.clientRequestId,
+        });
+        return {
+          conversationId: existing.id,
+          message: null,
+          replay: sent.message,
+        };
       });
-
-      await tx.messageConversation.update({
-        where: { id: conversation.id },
-        data: { lastMessageId: message.id, lastMessageAt: now },
-      });
-
-      return { conversationId: conversation.id, message };
-    });
+    if ("replay" in result)
+      return { conversationId: result.conversationId, message: result.replay };
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const mediaDeletedAt = await messageMediaDeletedAt(this.prisma, [
+      result.message,
+    ]);
     const dto = toMessageDto({
+      mediaDeletedAt,
       message: result.message,
       publicBaseUrl,
       viewerUserId: userId,
@@ -291,7 +366,12 @@ export class MessagesWriteService {
       this.support.emitUnreadCounts(recipientId);
       this.presenceRealtime.emitMessageCreated(recipientId, {
         conversationId: result.conversationId,
-        message: dto,
+        message: toMessageDto({
+          message: result.message,
+          publicBaseUrl,
+          viewerUserId: recipientId,
+          mediaDeletedAt,
+        }),
       });
     }
     for (const recipientId of uniqueRecipients) {
@@ -370,6 +450,7 @@ export class MessagesWriteService {
     body: string;
     replyToId?: string | null;
     media?: MessageMediaInput[];
+    clientRequestId?: string;
   }) {
     assertPublishableText(params.body);
     const { userId, conversationId } = params;
@@ -479,51 +560,103 @@ export class MessagesWriteService {
     )
       await requireAiConsent(this.prisma, userId);
 
+    const requestHash = params.clientRequestId
+      ? messageRequestHash(trimmed, replyToId, media)
+      : null;
+    let createdNow = false;
     const now = new Date();
-    const result = await this.prisma.$transaction(async (tx) => {
-      const message = await tx.message.create({
-        data: {
-          conversationId,
-          senderId: userId,
-          body: trimmed,
-          ...(replyToId ? { replyToId } : {}),
-          ...(media.length > 0
-            ? { media: { create: messageMediaCreateData(media) } }
-            : {}),
+    const result = await this.prisma
+      .$transaction(
+        async (tx) => {
+          if (params.clientRequestId) {
+            const existing = await tx.message.findUnique({
+              where: {
+                conversationId_senderId_clientRequestId: {
+                  conversationId,
+                  senderId: userId,
+                  clientRequestId: params.clientRequestId,
+                },
+              },
+              include: MESSAGE_INCLUDE,
+            });
+            if (existing) {
+              assertMessageRequestHash(existing, requestHash!);
+              return existing;
+            }
+          }
+          const validatedMedia = await this.validatePhotos(userId, media, tx);
+          const message = await tx.message.create({
+            data: {
+              conversationId,
+              senderId: userId,
+              body: trimmed,
+              clientRequestId: params.clientRequestId,
+              requestHash,
+              ...(replyToId ? { replyToId } : {}),
+              ...(media.length > 0
+                ? { media: { create: messageMediaCreateData(validatedMedia) } }
+                : {}),
+            },
+            include: MESSAGE_INCLUDE,
+          });
+
+          await tx.messageConversation.update({
+            where: { id: conversationId },
+            data: { lastMessageId: message.id, lastMessageAt: now },
+          });
+
+          await tx.messageParticipant.update({
+            where: { conversationId_userId: { conversationId, userId } },
+            data: {
+              lastReadAt: now,
+              status: "accepted",
+              acceptedAt: participant.acceptedAt ?? now,
+            },
+          });
+
+          if (
+            conversation.type === "direct" &&
+            participant.status === "pending"
+          ) {
+            await tx.messageParticipant.updateMany({
+              where: { conversationId, status: "pending" },
+              data: { status: "accepted", acceptedAt: now },
+            });
+          }
+
+          createdNow = true;
+          return message;
         },
-        include: MESSAGE_INCLUDE,
-      });
-
-      await tx.messageConversation.update({
-        where: { id: conversationId },
-        data: { lastMessageId: message.id, lastMessageAt: now },
-      });
-
-      await tx.messageParticipant.update({
-        where: { conversationId_userId: { conversationId, userId } },
-        data: {
-          lastReadAt: now,
-          status: "accepted",
-          acceptedAt: participant.acceptedAt ?? now,
-        },
-      });
-
-      if (conversation.type === "direct" && participant.status === "pending") {
-        await tx.messageParticipant.updateMany({
-          where: { conversationId, status: "pending" },
-          data: { status: "accepted", acceptedAt: now },
+        { timeout: 30_000 },
+      )
+      .catch(async (error: unknown) => {
+        if (!params.clientRequestId || !isUniqueConflict(error)) throw error;
+        const existing = await this.prisma.message.findUnique({
+          where: {
+            conversationId_senderId_clientRequestId: {
+              conversationId,
+              senderId: userId,
+              clientRequestId: params.clientRequestId,
+            },
+          },
+          include: MESSAGE_INCLUDE,
         });
-      }
-
-      return message;
-    });
+        if (!existing) throw error;
+        assertMessageRequestHash(existing, requestHash!);
+        return existing;
+      });
+    if (!createdNow)
+      await this.support.getConversationOrThrow({ userId, conversationId });
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const mediaDeletedAt = await messageMediaDeletedAt(this.prisma, [result]);
     const dto = toMessageDto({
+      mediaDeletedAt,
       message: result,
       publicBaseUrl,
       viewerUserId: userId,
     });
+    if (!createdNow) return { message: dto };
     if (media.some((m) => m.kind === "audio")) {
       this.sideEffects.dispatch(
         "media.transcribe.request",
@@ -538,7 +671,12 @@ export class MessagesWriteService {
     for (const id of [userId, ...otherIds]) {
       this.presenceRealtime.emitMessageCreated(id, {
         conversationId,
-        message: dto,
+        message: toMessageDto({
+          message: result,
+          publicBaseUrl,
+          viewerUserId: id,
+          mediaDeletedAt,
+        }),
       });
       this.support.emitUnreadCounts(id);
     }

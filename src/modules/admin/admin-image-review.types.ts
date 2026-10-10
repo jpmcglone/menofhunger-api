@@ -1,5 +1,8 @@
-import { createHash } from 'node:crypto';
-import { decodeJsonCursor, encodeJsonCursor } from '../../common/pagination/json-cursor';
+import { createHash } from "node:crypto";
+import {
+  decodeJsonCursor,
+  encodeJsonCursor,
+} from "../../common/pagination/json-cursor";
 
 export type UserRef = {
   userId: string;
@@ -82,6 +85,14 @@ export type ChannelUploadRef = {
   expiresAt: string;
 };
 
+export type UploadGrantRef = {
+  userId: string;
+  username: string | null;
+  committedAt: string | null;
+  expiresAt: string;
+  isThumbnail: boolean;
+};
+
 export type AssetPrimaryType =
   | "post"
   | "post_thumbnail"
@@ -97,6 +108,7 @@ export type AssetPrimaryType =
   | "newsletter"
   | "email_delivery"
   | "channel_upload"
+  | "pending_upload"
   | "orphan";
 
 export type ArticleRef = {
@@ -111,6 +123,7 @@ export type ArticleRef = {
 export type CursorToken = { lm: string; id: string };
 
 export type AssetRefs = {
+  uploadGrants: UploadGrantRef[];
   channelUploads: ChannelUploadRef[];
   posts: PostRef[];
   messages: MessageRef[];
@@ -147,6 +160,7 @@ export function encodeCursor(c: CursorToken): string {
 
 export function emptyAssetRefs(): AssetRefs {
   return {
+    uploadGrants: [],
     channelUploads: [],
     posts: [],
     messages: [],

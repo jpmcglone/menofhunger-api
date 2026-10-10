@@ -476,6 +476,7 @@ model User {
   avatarVideoDurationMs        Int?
   avatarRevision               Int       @default(0)
   avatarVideoUploads           AvatarVideoUpload[]
+  mediaUploadGrants             MediaUploadGrant[]
   avatarUpdatedAt              DateTime?
   bannerKey                    String?
   bannerUpdatedAt              DateTime?
@@ -2160,6 +2161,28 @@ model PostMedia {
   @@index([deletedAt])
   // User media newest grid: source/kind/deleted filter + createdAt/id pagination.
   @@index([source, kind, deletedAt, createdAt(sort: Desc), id(sort: Desc)])
+}
+
+// Per-user upload commitment and bounded retention for unfinished composers.
+model MediaUploadGrant {
+  userId String
+  r2Key String
+  committedAt DateTime?
+  expiresAt DateTime
+  contentType String
+  kind PostMediaKind
+  bytes Int?
+  etag String?
+  width Int?
+  height Int?
+  durationSeconds Int?
+  thumbnailR2Key String?
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, r2Key])
+  @@index([expiresAt])
+  @@index([r2Key])
+  @@index([thumbnailR2Key])
 }
 
 // Dedupe: one row per unique file content (by SHA-256). Reuse existing R2 key when same file uploaded again.

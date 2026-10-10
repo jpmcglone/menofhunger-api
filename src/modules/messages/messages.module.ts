@@ -13,9 +13,15 @@ import { MessagesSupportService } from "./messages-support.service";
 import { MessagesQueryService } from "./messages-query.service";
 import { MessagesBotDmService } from "./messages-bot-dm.service";
 import { MessagesWriteService } from "./messages-write.service";
+import { UploadGrantsModule } from "../uploads/upload-grants.module";
 
 @Module({
-  imports: [AuthModule, RealtimeModule, CallSessionStoreModule],
+  imports: [
+    AuthModule,
+    RealtimeModule,
+    CallSessionStoreModule,
+    UploadGrantsModule,
+  ],
   controllers: [MessagesController],
   providers: [
     MessagesBotDmService,

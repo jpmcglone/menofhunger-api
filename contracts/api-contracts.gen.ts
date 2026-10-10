@@ -4641,7 +4641,12 @@ export type MessageReactionSummaryDto = {
   emoji: string;
   count: number;
   reactedByMe: boolean;
-  reactors: { id: string; username: string | null; avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null }[];
+  reactors: {
+    id: string;
+    username: string | null;
+    avatarUrl: string | null;
+    avatarVideo?: AvatarVideoDto | null;
+  }[];
 };
 
 export type MessageReplySnippetDto = {
@@ -4663,13 +4668,17 @@ export type MessageMediaDto = {
   height: number | null;
   durationSeconds: number | null;
   alt: string | null;
+  /** Authoritative storage tombstone. Deleted uploads have no usable URLs. */
+  deletedAt: string | null;
   /** Audio only: `pending` until the transcript is ready. Null when never requested. */
-  transcriptStatus: 'pending' | 'ready' | 'failed' | null;
+  transcriptStatus: "pending" | "ready" | "failed" | null;
   transcript: string | null;
 };
 
 export type MessageDto = {
   id: string;
+  /** Echoed only to the sender, for matching pending sends with HTTP/socket results. */
+  clientRequestId: string | null;
   createdAt: string;
   body: string;
   conversationId: string;
@@ -4698,12 +4707,13 @@ export type MessageConversationCrewSummaryDto = {
   slug: string;
   /** Display name; null when the crew hasn't been named yet. */
   name: string | null;
-  avatarUrl: string | null; avatarVideo?: AvatarVideoDto | null;
+  avatarUrl: string | null;
+  avatarVideo?: AvatarVideoDto | null;
 };
 
 export type MessageConversationDto = {
   id: string;
-  type: 'direct' | 'group' | 'crew_wall';
+  type: "direct" | "group" | "crew_wall";
   title: string | null;
   createdAt: string;
   updatedAt: string;
@@ -4713,7 +4723,12 @@ export type MessageConversationDto = {
    * otherwise Voice message / Photo / GIF / Video. Null when the conversation
    * has no messages — clients show "No chats yet." only in that case.
    */
-  lastMessage: { id: string; body: string; createdAt: string; senderId: string } | null;
+  lastMessage: {
+    id: string;
+    body: string;
+    createdAt: string;
+    senderId: string;
+  } | null;
   participants: MessageParticipantDto[];
   viewerStatus: MessageParticipantStatus;
   unreadCount: number;

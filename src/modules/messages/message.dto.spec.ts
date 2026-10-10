@@ -1,80 +1,250 @@
-import { messagePreviewText, messagePushPreview, toLastMessagePreviewDto, toMessageDto } from './message.dto';
+import {
+  messagePreviewText,
+  messagePushPreview,
+  toLastMessagePreviewDto,
+  toMessageDto,
+} from "./message.dto";
 
 const message = (extra: Record<string, unknown> = {}): any => ({
-  id: 'original', createdAt: new Date(), body: 'private text', conversationId: 'conversation',
-  sender: { id: 'sender', username: 'sender' }, kind: 'text', deletedForAll: false,
-  media: [{ id: 'media', source: 'upload', kind: 'image', r2Key: 'private-image' }],
+  id: "original",
+  createdAt: new Date(),
+  body: "private text",
+  conversationId: "conversation",
+  sender: { id: "sender", username: "sender" },
+  kind: "text",
+  deletedForAll: false,
+  media: [
+    { id: "media", source: "upload", kind: "image", r2Key: "private-image" },
+  ],
   ...extra,
 });
-const dto = (m: any) => toMessageDto({ message: m, publicBaseUrl: 'https://assets.example.com' });
+const dto = (m: any) =>
+  toMessageDto({ message: m, publicBaseUrl: "https://assets.example.com" });
 
-describe('deleted message redaction', () => {
-  it('preserves a reactor video and its profile poster for avatar playback', () => {
-    const result = dto(message({ reactions: [{ id: 'reaction', reactionId: 'like', emoji: '👍', userId: 'viewer',
-      user: { id: 'viewer', username: 'viewer', avatarKey: 'avatars/poster.jpg', avatarVideoKey: 'avatars/clip.mp4', avatarVideoDurationMs: 7000 } }] }));
-    expect(result.reactions[0].reactors[0]).toEqual({ id: 'viewer', username: 'viewer', avatarUrl: 'https://assets.example.com/avatars/poster.jpg',
-      avatarVideo: { id: 'avatars/clip.mp4', url: 'https://assets.example.com/avatars/clip.mp4', durationMs: 7000, width: 320, height: 320 } });
+describe("deleted message redaction", () => {
+  it("echoes a request identity only to its sender", () => {
+    const row = message({ senderId: "sender", clientRequestId: "request" });
+    expect(
+      toMessageDto({
+        message: row,
+        publicBaseUrl: null,
+        viewerUserId: "sender",
+      }).clientRequestId,
+    ).toBe("request");
+    expect(
+      toMessageDto({ message: row, publicBaseUrl: null, viewerUserId: "peer" })
+        .clientRequestId,
+    ).toBeNull();
   });
-  it('removes content and media from a message deleted for everyone', () => {
+  it("redacts authoritative asset tombstones while retaining media identity", () => {
+    const at = new Date("2026-10-10T15:00:00Z");
+    const result = toMessageDto({
+      message: message({
+        replyTo: message(),
+        media: [
+          {
+            id: "media",
+            source: "upload",
+            kind: "image",
+            r2Key: "private-image",
+            alt: "private description",
+            transcriptStatus: "ready",
+            transcript: "private recording",
+          },
+        ],
+      }),
+      publicBaseUrl: "https://assets.example.com",
+      mediaDeletedAt: new Map([["private-image", at]]),
+    });
+    expect(result.media[0]).toMatchObject({
+      id: "media",
+      deletedAt: at.toISOString(),
+      url: "",
+      thumbnailUrl: null,
+      mp4Url: null,
+      alt: null,
+      transcriptStatus: null,
+      transcript: null,
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /private description|private recording/,
+    );
+    expect(result.replyTo?.mediaThumbnailUrl).toBeNull();
+  });
+  it("redacts only a removed thumbnail when the original remains usable", () => {
+    const result = toMessageDto({
+      message: message({
+        media: [
+          {
+            id: "video",
+            source: "upload",
+            kind: "video",
+            r2Key: "video",
+            thumbnailR2Key: "poster",
+          },
+        ],
+      }),
+      publicBaseUrl: "https://assets.example.com",
+      mediaDeletedAt: new Map([["poster", new Date()]]),
+    });
+    expect(result.media[0]).toMatchObject({
+      deletedAt: null,
+      thumbnailUrl: null,
+      url: "https://assets.example.com/video",
+    });
+  });
+  it("preserves a reactor video and its profile poster for avatar playback", () => {
+    const result = dto(
+      message({
+        reactions: [
+          {
+            id: "reaction",
+            reactionId: "like",
+            emoji: "👍",
+            userId: "viewer",
+            user: {
+              id: "viewer",
+              username: "viewer",
+              avatarKey: "avatars/poster.jpg",
+              avatarVideoKey: "avatars/clip.mp4",
+              avatarVideoDurationMs: 7000,
+            },
+          },
+        ],
+      }),
+    );
+    expect(result.reactions[0].reactors[0]).toEqual({
+      id: "viewer",
+      username: "viewer",
+      avatarUrl: "https://assets.example.com/avatars/poster.jpg",
+      avatarVideo: {
+        id: "avatars/clip.mp4",
+        url: "https://assets.example.com/avatars/clip.mp4",
+        durationMs: 7000,
+        width: 320,
+        height: 320,
+      },
+    });
+  });
+  it("removes content and media from a message deleted for everyone", () => {
     const result = dto(message({ deletedForAll: true, replyTo: message() }));
     expect(result.deletedForAll).toBe(true);
-    expect(result.body).toBe('');
+    expect(result.body).toBe("");
     expect(result.media).toEqual([]);
     expect(result.replyTo).toBeNull();
     expect(result.call).toBeNull();
     expect(result.reactions).toEqual([]);
   });
-  it('redacts a deleted reply target while preserving the reply itself', () => {
-    const result = dto(message({ id: 'reply', body: 'my reply', replyTo: message({ deletedForAll: true }) }));
-    expect(result.body).toBe('my reply');
-    expect(result.replyTo).toEqual({ id: 'original', senderUsername: 'sender', bodyPreview: 'Message deleted', mediaThumbnailUrl: null });
+  it("redacts a deleted reply target while preserving the reply itself", () => {
+    const result = dto(
+      message({
+        id: "reply",
+        body: "my reply",
+        replyTo: message({ deletedForAll: true }),
+      }),
+    );
+    expect(result.body).toBe("my reply");
+    expect(result.replyTo).toEqual({
+      id: "original",
+      senderUsername: "sender",
+      bodyPreview: "Message deleted",
+      mediaThumbnailUrl: null,
+    });
   });
-  it('preserves content for ordinary messages and reply targets', () => {
+  it("preserves content for ordinary messages and reply targets", () => {
     const result = dto(message({ replyTo: message() }));
-    expect(result.body).toBe('private text');
-    expect(result.media[0].url).toContain('private-image');
-    expect(result.replyTo?.bodyPreview).toBe('private text');
-    expect(result.replyTo?.mediaThumbnailUrl).toContain('private-image');
+    expect(result.body).toBe("private text");
+    expect(result.media[0].url).toContain("private-image");
+    expect(result.replyTo?.bodyPreview).toBe("private text");
+    expect(result.replyTo?.mediaThumbnailUrl).toContain("private-image");
   });
-  it('labels a media-only reply preview by kind', () => {
-    const audio = dto(message({ body: 'caption', replyTo: message({ body: '', media: [{ id: 'a', source: 'upload', kind: 'audio', r2Key: 'voice' }] }) }));
-    expect(audio.replyTo?.bodyPreview).toBe('Voice message');
-    const gif = dto(message({ replyTo: message({ body: '', media: [{ id: 'g', source: 'giphy', kind: 'gif', url: 'https://giphy.example/x.gif' }] }) }));
-    expect(gif.replyTo?.bodyPreview).toBe('GIF');
+  it("labels a media-only reply preview by kind", () => {
+    const audio = dto(
+      message({
+        body: "caption",
+        replyTo: message({
+          body: "",
+          media: [{ id: "a", source: "upload", kind: "audio", r2Key: "voice" }],
+        }),
+      }),
+    );
+    expect(audio.replyTo?.bodyPreview).toBe("Voice message");
+    const gif = dto(
+      message({
+        replyTo: message({
+          body: "",
+          media: [
+            {
+              id: "g",
+              source: "giphy",
+              kind: "gif",
+              url: "https://giphy.example/x.gif",
+            },
+          ],
+        }),
+      }),
+    );
+    expect(gif.replyTo?.bodyPreview).toBe("GIF");
   });
 });
 
-describe('conversation last-message preview', () => {
-  it('keeps captions and only labels empty-body media', () => {
-    expect(messagePreviewText({ body: 'hello', media: [{ kind: 'audio' }] })).toBe('hello');
-    expect(messagePreviewText({ body: '  ', media: [{ kind: 'audio' }] })).toBe('Voice message');
-    expect(messagePreviewText({ body: '', media: [{ kind: 'video' }] })).toBe('Video');
-    expect(messagePreviewText({ body: '', media: [{ kind: 'gif' }] })).toBe('GIF');
-    expect(messagePreviewText({ body: '', media: [{ kind: 'image' }] })).toBe('Photo');
-    expect(messagePreviewText({ body: '', deletedForAll: true, media: [{ kind: 'audio' }] })).toBe('Message deleted');
-    expect(messagePreviewText({ body: '' })).toBe('');
+describe("conversation last-message preview", () => {
+  it("keeps captions and only labels empty-body media", () => {
+    expect(
+      messagePreviewText({ body: "hello", media: [{ kind: "audio" }] }),
+    ).toBe("hello");
+    expect(messagePreviewText({ body: "  ", media: [{ kind: "audio" }] })).toBe(
+      "Voice message",
+    );
+    expect(messagePreviewText({ body: "", media: [{ kind: "video" }] })).toBe(
+      "Video",
+    );
+    expect(messagePreviewText({ body: "", media: [{ kind: "gif" }] })).toBe(
+      "GIF",
+    );
+    expect(messagePreviewText({ body: "", media: [{ kind: "image" }] })).toBe(
+      "Photo",
+    );
+    expect(
+      messagePreviewText({
+        body: "",
+        deletedForAll: true,
+        media: [{ kind: "audio" }],
+      }),
+    ).toBe("Message deleted");
+    expect(messagePreviewText({ body: "" })).toBe("");
   });
-  it('uses verbs on lock-screen copy', () => {
-    expect(messagePushPreview({ body: '', media: [{ kind: 'audio' }] })).toBe('🎙️ Sent a voice message');
-    expect(messagePushPreview({ body: '', media: [{ kind: 'video' }] })).toBe('📹 Sent a video');
-    expect(messagePushPreview({ body: '', media: [{ kind: 'gif' }] })).toBe('Sent a GIF');
-    expect(messagePushPreview({ body: '', media: [{ kind: 'image' }] })).toBe('📷 Sent a photo');
-    expect(messagePushPreview({ body: 'hello', media: [{ kind: 'audio' }] })).toBe('hello');
+  it("uses verbs on lock-screen copy", () => {
+    expect(messagePushPreview({ body: "", media: [{ kind: "audio" }] })).toBe(
+      "🎙️ Sent a voice message",
+    );
+    expect(messagePushPreview({ body: "", media: [{ kind: "video" }] })).toBe(
+      "📹 Sent a video",
+    );
+    expect(messagePushPreview({ body: "", media: [{ kind: "gif" }] })).toBe(
+      "Sent a GIF",
+    );
+    expect(messagePushPreview({ body: "", media: [{ kind: "image" }] })).toBe(
+      "📷 Sent a photo",
+    );
+    expect(
+      messagePushPreview({ body: "hello", media: [{ kind: "audio" }] }),
+    ).toBe("hello");
   });
-  it('fills lastMessage.body with the inbox preview', () => {
+  it("fills lastMessage.body with the inbox preview", () => {
     expect(
       toLastMessagePreviewDto({
-        id: 'm1',
-        body: '',
-        createdAt: new Date('2026-01-02T00:00:00.000Z'),
-        senderId: 'u2',
-        media: [{ kind: 'audio' }],
+        id: "m1",
+        body: "",
+        createdAt: new Date("2026-01-02T00:00:00.000Z"),
+        senderId: "u2",
+        media: [{ kind: "audio" }],
       }),
     ).toEqual({
-      id: 'm1',
-      body: 'Voice message',
-      createdAt: '2026-01-02T00:00:00.000Z',
-      senderId: 'u2',
+      id: "m1",
+      body: "Voice message",
+      createdAt: "2026-01-02T00:00:00.000Z",
+      senderId: "u2",
     });
     expect(toLastMessagePreviewDto(null)).toBeNull();
   });

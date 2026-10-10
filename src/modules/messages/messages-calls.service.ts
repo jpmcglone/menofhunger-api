@@ -1,3 +1,4 @@
+import { messageMediaDeletedAt } from "./message-media-state";
 import { Injectable, NotFoundException } from "@nestjs/common";
 
 import { PrismaService } from "../prisma/prisma.service";
@@ -185,8 +186,10 @@ export class MessagesCallsService {
       return created;
     });
 
+    const mediaDeletedAt = await messageMediaDeletedAt(this.prisma, [message]);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     const dto = toMessageDto({
+      mediaDeletedAt,
       message,
       publicBaseUrl,
       viewerUserId: senderId,
@@ -237,9 +240,11 @@ export class MessagesCallsService {
       where: { conversationId: existing.conversationId },
       select: { userId: true },
     });
+    const mediaDeletedAt = await messageMediaDeletedAt(this.prisma, [updated]);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     for (const p of participants) {
       const dto = toMessageDto({
+        mediaDeletedAt,
         message: updated,
         publicBaseUrl,
         viewerUserId: p.userId,

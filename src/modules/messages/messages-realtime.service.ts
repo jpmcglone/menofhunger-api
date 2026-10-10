@@ -1,3 +1,4 @@
+import { messageMediaDeletedAt } from "./message-media-state";
 import { Injectable } from "@nestjs/common";
 
 import { PrismaService } from "../prisma/prisma.service";
@@ -31,9 +32,35 @@ export class MessagesRealtimeService {
       where: { conversationId: message.conversationId },
       select: { userId: true },
     });
+    const mediaDeletedAt = await messageMediaDeletedAt(this.prisma, [message]);
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
     for (const p of participants) {
+      // Recheck current membership and both block directions before exposing a full
+      // snapshot. Unlike an interactive read, fan-out must never restore a removed
+      // direct-chat participant as a side effect.
+      const blocks = await this.prisma.userBlock.findMany({
+        where: { OR: [{ blockerId: p.userId }, { blockedId: p.userId }] },
+        select: { blockerId: true, blockedId: true },
+      });
+      const blockedIds = blocks.map((block) =>
+        block.blockerId === p.userId ? block.blockedId : block.blockerId,
+      );
+      const visible = await this.prisma.messageConversation.findFirst({
+        where: {
+          id: message.conversationId,
+          type: { not: "channel" },
+          participants: {
+            some: { userId: p.userId },
+            ...(blockedIds.length
+              ? { none: { userId: { in: blockedIds } } }
+              : {}),
+          },
+        },
+        select: { id: true },
+      });
+      if (!visible) continue;
       const dto = toMessageDto({
+        mediaDeletedAt,
         message,
         publicBaseUrl,
         viewerUserId: p.userId,

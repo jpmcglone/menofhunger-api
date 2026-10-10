@@ -1,3 +1,5 @@
+import { UploadGrantsService } from "../uploads/upload-grants.service";
+import { UploadsStorageService } from "../uploads/uploads-storage.service";
 import { ViewerBlockSetsService } from "../viewer/viewer-block-sets.service";
 import { MessagesSupportService } from "./messages-support.service";
 import { MessagesQueryService } from "./messages-query.service";
@@ -32,6 +34,8 @@ function makeService(overrides?: {
       $queryRaw: jest.fn(async () => []),
     } as any);
 
+  prisma.mediaAsset ??= { findMany: jest.fn(async () => []) };
+  prisma.mediaAsset.findMany ??= jest.fn(async () => []);
   prisma.$transaction ??= jest.fn(async (run: (tx: any) => Promise<unknown>) =>
     run(prisma),
   );
@@ -85,6 +89,7 @@ function makeService(overrides?: {
     marvIdentity,
     sideEffects,
     support,
+    new UploadGrantsService(prisma, new UploadsStorageService(appConfig)),
   );
   const svc = makeMessagesTestApi(
     support,

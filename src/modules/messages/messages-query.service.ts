@@ -1,3 +1,4 @@
+import { messageMediaDeletedAt } from "./message-media-state";
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { clampLimit } from "../../common/pagination/page";
 import { PrismaService } from "../prisma/prisma.service";
@@ -562,9 +563,15 @@ export class MessagesQueryService {
       (r) => r.id,
     );
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const mediaDeletedAt = await messageMediaDeletedAt(this.prisma, slice);
     return {
       messages: slice.map((message) =>
-        toMessageDto({ message, publicBaseUrl, viewerUserId: userId }),
+        toMessageDto({
+          message,
+          publicBaseUrl,
+          viewerUserId: userId,
+          mediaDeletedAt,
+        }),
       ),
       nextCursor,
     };
@@ -632,9 +639,18 @@ export class MessagesQueryService {
       : null;
 
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const mediaDeletedAt = await messageMediaDeletedAt(
+      this.prisma,
+      allMessages,
+    );
     return {
       messages: allMessages.map((m) =>
-        toMessageDto({ message: m, publicBaseUrl, viewerUserId: userId }),
+        toMessageDto({
+          message: m,
+          publicBaseUrl,
+          viewerUserId: userId,
+          mediaDeletedAt,
+        }),
       ),
       olderCursor,
       newerCursor,
@@ -684,9 +700,15 @@ export class MessagesQueryService {
       (r) => r.id,
     );
     const publicBaseUrl = this.appConfig.r2()?.publicBaseUrl ?? null;
+    const mediaDeletedAt = await messageMediaDeletedAt(this.prisma, slice);
     return {
       messages: slice.map((m) =>
-        toMessageDto({ message: m, publicBaseUrl, viewerUserId: userId }),
+        toMessageDto({
+          message: m,
+          publicBaseUrl,
+          viewerUserId: userId,
+          mediaDeletedAt,
+        }),
       ),
       newerCursor,
     };
